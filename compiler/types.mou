@@ -1,0 +1,675 @@
+// The types of Mou as the checker sees them, and the functions that
+// compare and combine them. It follows the first part of `src/check.rs`.
+
+import std.text
+import parser
+
+pub enum Ty {
+    Int(str)
+    Float(str)
+    // A whole number that is written out and has no type yet.
+    IntLit
+    FloatLit
+    Bool
+    Char
+    Str
+    Unit
+    // The type of what gives no value: `return`, `break`.
+    Never
+    // What the checker does not model. It goes with everything.
+    Unknown
+    // A struct or an enum, by its number, with its type arguments.
+    Struct(int, [Ty])
+    Enum(int, [Ty])
+    Tuple([Ty])
+    Slice(Ty)
+    // An array of fixed length. The length is not followed.
+    Array(Ty)
+    Range(Ty)
+    Optional(Ty)
+    Result(Ty, Ty)
+    Fn(Sig)
+    // A type a module of the compiler gives, as `io.Error`.
+    Builtin(str)
+    // A type parameter, inside what declares it.
+    Param(str)
+    // `dyn Trait`: the number of the trait and its type arguments.
+    Dyn(int, [Ty])
+}
+
+pub struct ParamSig { name: str, mode: parser.Mode, ty: Ty, optional: bool }
+
+// The result already holds the error when the function declares one.
+pub struct Sig { params: [ParamSig], ret: Ty }
+
+// What a type parameter stands for.
+pub struct Binding { name: str, ty: Ty }
+
+let INT_KINDS: [str] = ["i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize"]
+
+pub fn prim(name: str) -> Ty? {
+    if name == "int" { return Some(Ty.Int("i64")) }
+    if name == "float" || name == "f64" { return Some(Ty.Float("f64")) }
+    if name == "f32" { return Some(Ty.Float("f32")) }
+    if name == "bool" { return Some(Ty.Bool) }
+    if name == "char" { return Some(Ty.Char) }
+    if name == "str" { return Some(Ty.Str) }
+    for k in INT_KINDS {
+        if k == name { return Some(Ty.Int(k)) }
+    }
+    None
+}
+
+pub fn is_int(t: Ty) -> bool {
+    match t {
+        Ty.Int(_) => true
+        Ty.IntLit => true
+        Ty.Unknown => true
+        _ => false
+    }
+}
+
+pub fn is_num(t: Ty) -> bool {
+    match t {
+        Ty.Float(_) => true
+        Ty.FloatLit => true
+        _ => is_int(t)
+    }
+}
+
+fn is_size(kind: str) -> bool { kind == "isize" || kind == "usize" }
+
+fn is_signed(kind: str) -> bool { text.starts_with(kind, "i") }
+
+// How many bits of value an integer type has. The compiler keeps a
+// `u128` in 128 bits with a sign, so it has one less.
+fn value_bits(kind: str) -> int {
+    if kind == "i8" { return 7 }
+    if kind == "u8" { return 8 }
+    if kind == "i16" { return 15 }
+    if kind == "u16" { return 16 }
+    if kind == "i32" { return 31 }
+    if kind == "u32" { return 32 }
+    if kind == "i64" || kind == "isize" { return 63 }
+    if kind == "u64" || kind == "usize" { return 64 }
+    127
+}
+
+// Whether every value of one integer type is a value of another, so
+// that it converts without `as`: `u8` to `int`, but not `int` to `u8`.
+pub fn widens(source: str, target: str) -> bool {
+    if source == target { return true }
+    // What a `usize` holds depends on the machine: it only converts to itself.
+    if is_size(source) || is_size(target) { return false }
+    if is_signed(source) && !is_signed(target) { return false }
+    value_bits(source) <= value_bits(target)
+}
+
+fn optional_of(t: Ty?) -> Ty? {
+    match t {
+        Some(x) => Some(Ty.Optional(x))
+        None => None
+    }
+}
+
+// The joins of two lists of the same length, or nothing when one fails.
+fn join_all(xs: [Ty], ys: [Ty]) -> [Ty]? {
+    var out: [Ty] = []
+    for k in 0..xs.len {
+        match join(xs[k], ys[k]) {
+            Some(t) => out.push(t)
+            None => return None
+        }
+    }
+    Some(out)
+}
+
+// The common type of two expressions that must agree: the branches of an
+// `if`, the operands of an operator.
+pub fn join(a: Ty, b: Ty) -> Ty? {
+    match (a, b) {
+        (Ty.Unknown, _) => Some(Ty.Unknown)
+        (_, Ty.Unknown) => Some(Ty.Unknown)
+        (Ty.Never, _) => Some(b)
+        (_, Ty.Never) => Some(a)
+        (Ty.IntLit, Ty.IntLit) => Some(Ty.IntLit)
+        (Ty.IntLit, Ty.Int(k)) => Some(Ty.Int(k))
+        (Ty.Int(k), Ty.IntLit) => Some(Ty.Int(k))
+        (Ty.Int(x), Ty.Int(y)) if widens(x, y) => Some(Ty.Int(y))
+        (Ty.Int(x), Ty.Int(y)) if widens(y, x) => Some(Ty.Int(x))
+        (Ty.IntLit, Ty.Float(k)) => Some(Ty.Float(k))
+        (Ty.Float(k), Ty.IntLit) => Some(Ty.Float(k))
+        (Ty.FloatLit, Ty.Float(k)) => Some(Ty.Float(k))
+        (Ty.Float(k), Ty.FloatLit) => Some(Ty.Float(k))
+        (Ty.IntLit, Ty.FloatLit) => Some(Ty.FloatLit)
+        (Ty.FloatLit, Ty.IntLit) => Some(Ty.FloatLit)
+        (Ty.FloatLit, Ty.FloatLit) => Some(Ty.FloatLit)
+        (Ty.Optional(x), Ty.Optional(y)) => optional_of(join(x, y))
+        (Ty.Optional(x), _) => optional_of(join(x, b))
+        (_, Ty.Optional(y)) => optional_of(join(y, a))
+        (Ty.Tuple(xs), Ty.Tuple(ys)) if xs.len == ys.len => {
+            match join_all(xs, ys) {
+                Some(ts) => Some(Ty.Tuple(ts))
+                None => None
+            }
+        }
+        (Ty.Slice(x), Ty.Slice(y)) => slice_of(join(x, y))
+        (Ty.Array(x), Ty.Slice(y)) => slice_of(join(x, y))
+        (Ty.Slice(x), Ty.Array(y)) => slice_of(join(x, y))
+        (Ty.Array(x), Ty.Array(y)) => {
+            match join(x, y) {
+                Some(t) => Some(Ty.Array(t))
+                None => None
+            }
+        }
+        (Ty.Range(x), Ty.Range(y)) => {
+            match join(x, y) {
+                Some(t) => Some(Ty.Range(t))
+                None => None
+            }
+        }
+        (Ty.Result(x, e), Ty.Result(y, f)) => {
+            match (join(x, y), join(e, f)) {
+                (Some(t), Some(u)) => Some(Ty.Result(t, u))
+                _ => None
+            }
+        }
+        (Ty.Fn(x), Ty.Fn(y)) if fn_compatible(x, y) => Some(a)
+        (Ty.Struct(i, x), Ty.Struct(j, y)) if i == j && same_args(x, y) => Some(Ty.Struct(i, fill(x, y)))
+        (Ty.Enum(i, x), Ty.Enum(j, y)) if i == j && same_args(x, y) => Some(Ty.Enum(i, fill(x, y)))
+        _ => if a == b { Some(a) } else { None }
+    }
+}
+
+fn slice_of(t: Ty?) -> Ty? {
+    match t {
+        Some(x) => Some(Ty.Slice(x))
+        None => None
+    }
+}
+
+fn all_assignable(e: [Ty], a: [Ty]) -> bool {
+    if e.len != a.len { return false }
+    for k in 0..e.len {
+        if !assignable(e[k], a[k]) { return false }
+    }
+    true
+}
+
+// Whether a value of type `act` can be used where `exp` is required.
+pub fn assignable(exp: Ty, act: Ty) -> bool {
+    match (exp, act) {
+        (_, Ty.Never) => true
+        (_, Ty.Unknown) => true
+        (Ty.Unknown, _) => true
+        (Ty.Int(_), Ty.IntLit) => true
+        (Ty.Float(_), Ty.IntLit) => true
+        (Ty.Float(_), Ty.FloatLit) => true
+        (Ty.Int(target), Ty.Int(source)) => widens(source, target)
+        (Ty.IntLit, _) => is_some(join(exp, act))
+        (Ty.FloatLit, _) => is_some(join(exp, act))
+        (Ty.Optional(e), Ty.Optional(a)) => assignable(e, a)
+        (Ty.Optional(e), _) => assignable(e, act)
+        (Ty.Tuple(e), Ty.Tuple(a)) => all_assignable(e, a)
+        (Ty.Slice(e), Ty.Slice(a)) => assignable(e, a)
+        (Ty.Slice(e), Ty.Array(a)) => assignable(e, a)
+        (Ty.Array(e), Ty.Array(a)) => assignable(e, a)
+        (Ty.Range(e), Ty.Range(a)) => assignable(e, a)
+        (Ty.Result(e, x), Ty.Result(a, y)) => assignable(e, a) && assignable(x, y)
+        (Ty.Fn(e), Ty.Fn(a)) => fn_compatible(e, a)
+        (Ty.Struct(i, e), Ty.Struct(j, a)) => i == j && same_args(e, a)
+        (Ty.Enum(i, e), Ty.Enum(j, a)) => i == j && same_args(e, a)
+        _ => exp == act
+    }
+}
+
+fn is_some(t: Ty?) -> bool {
+    match t {
+        Some(_) => true
+        None => false
+    }
+}
+
+// Whether two types are the same once the parts nothing has decided yet
+// (the item of `[]`, the argument of `Tree.Leaf`) are filled in. Unlike
+// `assignable` it allows no conversion: the values are not touched.
+pub fn same(a: Ty, b: Ty) -> bool {
+    match (a, b) {
+        (Ty.Never, _) => true
+        (Ty.Unknown, _) => true
+        (_, Ty.Never) => true
+        (_, Ty.Unknown) => true
+        (Ty.Struct(i, x), Ty.Struct(j, y)) => i == j && same_args(x, y)
+        (Ty.Enum(i, x), Ty.Enum(j, y)) => i == j && same_args(x, y)
+        (Ty.Tuple(x), Ty.Tuple(y)) => same_args(x, y)
+        (Ty.Slice(x), Ty.Slice(y)) => same(x, y)
+        (Ty.Array(x), Ty.Array(y)) => same(x, y)
+        (Ty.Range(x), Ty.Range(y)) => same(x, y)
+        (Ty.Optional(x), Ty.Optional(y)) => same(x, y)
+        (Ty.Result(x, e), Ty.Result(y, f)) => same(x, y) && same(e, f)
+        _ => a == b
+    }
+}
+
+pub fn same_args(a: [Ty], b: [Ty]) -> bool {
+    if a.len != b.len { return false }
+    for k in 0..a.len {
+        if !same(a[k], b[k]) { return false }
+    }
+    true
+}
+
+// The more decided of two types that are `same`.
+pub fn fill_one(a: Ty, b: Ty) -> Ty {
+    match (a, b) {
+        (Ty.Never, _) => b
+        (Ty.Unknown, _) => b
+        (_, Ty.Never) => a
+        (_, Ty.Unknown) => a
+        (Ty.Struct(i, x), Ty.Struct(_, y)) => Ty.Struct(i, fill(x, y))
+        (Ty.Enum(i, x), Ty.Enum(_, y)) => Ty.Enum(i, fill(x, y))
+        (Ty.Tuple(x), Ty.Tuple(y)) => Ty.Tuple(fill(x, y))
+        (Ty.Slice(x), Ty.Slice(y)) => Ty.Slice(fill_one(x, y))
+        (Ty.Array(x), Ty.Array(y)) => Ty.Array(fill_one(x, y))
+        (Ty.Range(x), Ty.Range(y)) => Ty.Range(fill_one(x, y))
+        (Ty.Optional(x), Ty.Optional(y)) => Ty.Optional(fill_one(x, y))
+        (Ty.Result(x, e), Ty.Result(y, f)) => Ty.Result(fill_one(x, y), fill_one(e, f))
+        _ => a
+    }
+}
+
+pub fn fill(a: [Ty], b: [Ty]) -> [Ty] {
+    var out: [Ty] = []
+    for k in 0..a.len {
+        if k < b.len { out.push(fill_one(a[k], b[k])) }
+    }
+    out
+}
+
+fn any_open(ts: [Ty]) -> bool {
+    for t in ts {
+        if open(t) { return true }
+    }
+    false
+}
+
+// Whether a type still has a part nothing has decided.
+pub fn open(t: Ty) -> bool {
+    match t {
+        Ty.Never => true
+        Ty.Unknown => true
+        Ty.Struct(_, ts) => any_open(ts)
+        Ty.Enum(_, ts) => any_open(ts)
+        Ty.Tuple(ts) => any_open(ts)
+        Ty.Slice(x) => open(x)
+        Ty.Array(x) => open(x)
+        Ty.Range(x) => open(x)
+        Ty.Optional(x) => open(x)
+        Ty.Result(x, e) => open(x) || open(e)
+        _ => false
+    }
+}
+
+pub fn fn_compatible(a: Sig, b: Sig) -> bool {
+    if a.params.len != b.params.len { return false }
+    for k in 0..a.params.len {
+        let p = a.params[k]
+        let q = b.params[k]
+        if !(p.mode == q.mode && assignable(p.ty, q.ty) && assignable(q.ty, p.ty)) { return false }
+    }
+    assignable(a.ret, b.ret)
+}
+
+fn concretize_all(ts: [Ty]) -> [Ty] {
+    var out: [Ty] = []
+    for t in ts { out.push(concretize(t)) }
+    out
+}
+
+// Gives the types of literals the type they have when nothing else
+// says: `int` and `f64`.
+pub fn concretize(t: Ty) -> Ty {
+    match t {
+        Ty.IntLit => Ty.Int("i64")
+        Ty.FloatLit => Ty.Float("f64")
+        Ty.Tuple(ts) => Ty.Tuple(concretize_all(ts))
+        Ty.Slice(x) => Ty.Slice(concretize(x))
+        Ty.Array(x) => Ty.Array(concretize(x))
+        Ty.Range(x) => Ty.Range(concretize(x))
+        Ty.Optional(x) => Ty.Optional(concretize(x))
+        Ty.Struct(i, ts) => Ty.Struct(i, concretize_all(ts))
+        Ty.Enum(i, ts) => Ty.Enum(i, concretize_all(ts))
+        _ => t
+    }
+}
+
+pub fn lookup(env: [Binding], name: str) -> Ty? {
+    for b in env {
+        if b.name == name { return Some(b.ty) }
+    }
+    None
+}
+
+// Gives a name a type, in place of the one it had.
+pub fn define(env: mut [Binding], name: str, ty: Ty) {
+    for k in 0..env.len {
+        if env[k].name == name {
+            env[k] = Binding(name, ty)
+            return
+        }
+    }
+    env.push(Binding(name, ty))
+}
+
+fn subst_all(ts: [Ty], env: [Binding]) -> [Ty] {
+    var out: [Ty] = []
+    for t in ts { out.push(subst(t, env)) }
+    out
+}
+
+// Puts, in place of the type parameters, the types they stand for.
+pub fn subst(t: Ty, env: [Binding]) -> Ty {
+    match t {
+        Ty.Param(n) => {
+            match lookup(env, n) {
+                Some(x) => x
+                None => t
+            }
+        }
+        Ty.Tuple(ts) => Ty.Tuple(subst_all(ts, env))
+        Ty.Slice(x) => Ty.Slice(subst(x, env))
+        Ty.Array(x) => Ty.Array(subst(x, env))
+        Ty.Range(x) => Ty.Range(subst(x, env))
+        Ty.Optional(x) => Ty.Optional(subst(x, env))
+        Ty.Result(x, e) => Ty.Result(subst(x, env), subst(e, env))
+        Ty.Fn(sig) => Ty.Fn(subst_sig(sig, env))
+        Ty.Struct(i, ts) => Ty.Struct(i, subst_all(ts, env))
+        Ty.Enum(i, ts) => Ty.Enum(i, subst_all(ts, env))
+        Ty.Dyn(i, ts) => Ty.Dyn(i, subst_all(ts, env))
+        _ => t
+    }
+}
+
+// What gives the type parameters `names` the types `args`.
+pub fn targ_env(names: [str], args: [Ty]) -> [Binding] {
+    var env: [Binding] = []
+    for k in 0..names.len {
+        if k < args.len { define(mut env, names[k], args[k]) }
+    }
+    env
+}
+
+pub fn subst_sig(sig: Sig, env: [Binding]) -> Sig {
+    var params: [ParamSig] = []
+    for p in sig.params { params.push(ParamSig(p.name, p.mode, subst(p.ty, env), p.optional)) }
+    Sig(params, subst(sig.ret, env))
+}
+
+fn bind_all(ps: [Ty], ts: [Ty], env: mut [Binding]) {
+    for k in 0..ps.len {
+        if k < ts.len { bind(ps[k], ts[k], mut env) }
+    }
+}
+
+// Finds what the type parameters of `pat` must be for `actual` to fit.
+pub fn bind(pat: Ty, actual: Ty, env: mut [Binding]) {
+    match (pat, actual) {
+        (_, Ty.Unknown) => {}
+        (_, Ty.Never) => {}
+        (Ty.Param(n), _) => {
+            var t = actual
+            match lookup(env, n) {
+                Some(seen) => {
+                    t = match join(seen, actual) {
+                        Some(j) => j
+                        None => seen
+                    }
+                }
+                None => {}
+            }
+            define(mut env, n, t)
+        }
+        (Ty.Tuple(ps), Ty.Tuple(ts)) => bind_all(ps, ts, mut env)
+        (Ty.Struct(i, ps), Ty.Struct(j, ts)) if i == j => bind_all(ps, ts, mut env)
+        (Ty.Enum(i, ps), Ty.Enum(j, ts)) if i == j => bind_all(ps, ts, mut env)
+        (Ty.Dyn(i, ps), Ty.Dyn(j, ts)) if i == j => bind_all(ps, ts, mut env)
+        (Ty.Slice(p), Ty.Slice(t)) => bind(p, t, mut env)
+        (Ty.Slice(p), Ty.Array(t)) => bind(p, t, mut env)
+        (Ty.Array(p), Ty.Slice(t)) => bind(p, t, mut env)
+        (Ty.Array(p), Ty.Array(t)) => bind(p, t, mut env)
+        (Ty.Range(p), Ty.Range(t)) => bind(p, t, mut env)
+        (Ty.Optional(p), Ty.Optional(t)) => bind(p, t, mut env)
+        (Ty.Optional(p), _) => bind(p, actual, mut env)
+        (Ty.Result(p, pe), Ty.Result(t, te)) => {
+            bind(p, t, mut env)
+            bind(pe, te, mut env)
+        }
+        (Ty.Fn(p), Ty.Fn(t)) => {
+            for k in 0..p.params.len {
+                if k < t.params.len { bind(p.params[k].ty, t.params[k].ty, mut env) }
+            }
+            bind(p.ret, t.ret, mut env)
+        }
+        _ => {}
+    }
+}
+
+fn is_result(t: Ty) -> bool {
+    match t {
+        Ty.Result(_, _) => true
+        _ => false
+    }
+}
+
+fn is_optional_or_param(t: Ty) -> bool {
+    match t {
+        Ty.Optional(_) => true
+        Ty.Param(_) => true
+        _ => false
+    }
+}
+
+// Binds type parameters from the type a call is expected to produce.
+fn bind_hint(pat: Ty, hint: Ty, env: mut [Binding]) {
+    match (pat, hint) {
+        (Ty.Result(ok, _), _) if !is_result(hint) => bind_hint(ok, hint, mut env)
+        (_, Ty.Optional(h)) if !is_optional_or_param(pat) => bind_hint(pat, h, mut env)
+        _ => bind(pat, hint, mut env)
+    }
+}
+
+// Completes what the arguments of a call decided with the type the call
+// is expected to produce. The arguments win: the expected type only says
+// what the result must be assignable to. It decides the parameters no
+// argument mentions and the type of the literals.
+pub fn hinted(pat: Ty, hint: Ty, env: mut [Binding]) {
+    var wanted: [Binding] = []
+    bind_hint(pat, hint, mut wanted)
+    for w in wanted {
+        match lookup(env, w.name) {
+            None => define(mut env, w.name, w.ty)
+            Some(got) => {
+                if concretize(got) != got && assignable(w.ty, got) {
+                    define(mut env, w.name, w.ty)
+                } else if open(got) && same(got, w.ty) {
+                    define(mut env, w.name, fill_one(got, w.ty))
+                }
+            }
+        }
+    }
+}
+
+fn any_undecided(ts: [Ty]) -> bool {
+    for t in ts {
+        if undecided(t) { return true }
+    }
+    false
+}
+
+// Whether a struct or enum inside the type has a type argument nothing decided.
+pub fn undecided(t: Ty) -> bool {
+    match t {
+        Ty.Struct(_, ts) => any_open(ts)
+        Ty.Enum(_, ts) => any_open(ts)
+        Ty.Tuple(ts) => any_undecided(ts)
+        Ty.Slice(x) => undecided(x)
+        Ty.Array(x) => undecided(x)
+        Ty.Range(x) => undecided(x)
+        Ty.Optional(x) => undecided(x)
+        Ty.Result(x, e) => undecided(x) || undecided(e)
+        _ => false
+    }
+}
+
+fn all_concrete(ts: [Ty]) -> bool {
+    for t in ts {
+        if !concrete(t) { return false }
+    }
+    true
+}
+
+// Whether a type has no parameters or unknown parts left.
+pub fn concrete(t: Ty) -> bool {
+    match t {
+        Ty.Param(_) => false
+        Ty.Unknown => false
+        Ty.Tuple(ts) => all_concrete(ts)
+        Ty.Struct(_, ts) => all_concrete(ts)
+        Ty.Enum(_, ts) => all_concrete(ts)
+        Ty.Dyn(_, ts) => all_concrete(ts)
+        Ty.Slice(x) => concrete(x)
+        Ty.Array(x) => concrete(x)
+        Ty.Range(x) => concrete(x)
+        Ty.Optional(x) => concrete(x)
+        Ty.Result(x, e) => concrete(x) && concrete(e)
+        Ty.Fn(sig) => {
+            for p in sig.params {
+                if !concrete(p.ty) { return false }
+            }
+            concrete(sig.ret)
+        }
+        _ => true
+    }
+}
+
+// ---- the check of this file against the compiler written in Rust ----
+
+fn texts(ts: [Ty]) -> str {
+    var out: [str] = []
+    for t in ts { out.push(plain(t)) }
+    text.join(out, ", ")
+}
+
+// A type as text, without the names of the program.
+fn plain(t: Ty) -> str {
+    match t {
+        Ty.Int(k) => k
+        Ty.Float(k) => k
+        Ty.Builtin(k) => k
+        Ty.IntLit => "intlit"
+        Ty.FloatLit => "floatlit"
+        Ty.Bool => "bool"
+        Ty.Char => "char"
+        Ty.Str => "str"
+        Ty.Unit => "()"
+        Ty.Never => "never"
+        Ty.Unknown => "_"
+        Ty.Struct(i, ts) => "S{i}[{texts(ts)}]"
+        Ty.Enum(i, ts) => "E{i}[{texts(ts)}]"
+        Ty.Dyn(i, ts) => "dyn{i}[{texts(ts)}]"
+        Ty.Tuple(ts) => "({texts(ts)})"
+        Ty.Slice(x) => "[{plain(x)}]"
+        Ty.Array(x) => "[{plain(x)}; _]"
+        Ty.Range(x) => "range {plain(x)}"
+        Ty.Optional(x) => "{plain(x)}?"
+        Ty.Result(x, e) => "{plain(x)} ! {plain(e)}"
+        Ty.Param(n) => "'{n}"
+        Ty.Fn(sig) => {
+            var ps: [str] = []
+            for p in sig.params {
+                let mode = match p.mode {
+                    parser.Mode.Let => "let"
+                    parser.Mode.Mut => "mut"
+                    parser.Mode.Own => "own"
+                }
+                ps.push("{mode} {plain(p.ty)}")
+            }
+            "fn({text.join(ps, ", ")}) -> {plain(sig.ret)}"
+        }
+    }
+}
+
+fn fun(modes: [parser.Mode], tys: [Ty], ret: Ty) -> Ty {
+    var params: [ParamSig] = []
+    for k in 0..tys.len { params.push(ParamSig("x", modes[k], tys[k], false)) }
+    Ty.Fn(Sig(params, ret))
+}
+
+fn samples() -> [Ty] {
+    let int = Ty.Int("i64")
+    let t = Ty.Param("T")
+    let u = Ty.Param("U")
+    let two = [parser.Mode.Let, parser.Mode.Mut]
+    [
+        int, Ty.Int("u8"), Ty.Int("i32"), Ty.Int("u64"), Ty.Int("usize"), Ty.Int("i128"), Ty.Int("u128"),
+        Ty.IntLit, Ty.FloatLit, Ty.Float("f64"), Ty.Float("f32"), Ty.Bool, Ty.Char, Ty.Str, Ty.Unit,
+        Ty.Never, Ty.Unknown, Ty.Struct(0, []), Ty.Struct(1, [int]), Ty.Struct(1, [Ty.Unknown]),
+        Ty.Struct(1, [Ty.IntLit]), Ty.Enum(0, [t]), Ty.Enum(0, [Ty.Str]), Ty.Tuple([Ty.IntLit, Ty.Str]),
+        Ty.Tuple([Ty.Int("u8"), Ty.Str]), Ty.Slice(int), Ty.Slice(Ty.IntLit), Ty.Array(Ty.IntLit),
+        Ty.Array(Ty.Never), Ty.Range(Ty.IntLit), Ty.Range(Ty.Int("i32")), Ty.Optional(int),
+        Ty.Optional(Ty.Never), Ty.Optional(Ty.Optional(Ty.IntLit)), Ty.Result(int, Ty.Str),
+        Ty.Result(Ty.IntLit, Ty.Unknown), fun(two, [int, Ty.Slice(Ty.Str)], Ty.Bool),
+        fun(two, [Ty.IntLit, Ty.Slice(Ty.Str)], Ty.Bool), Ty.Builtin("io.Error"), t, u, Ty.Dyn(0, []),
+        Ty.Dyn(1, [t]), Ty.Slice(t), Ty.Result(t, u), fun([parser.Mode.Let], [t], Ty.Optional(u))
+    ]
+}
+
+// The bindings as text, in the order of their names.
+fn env_text(env: [Binding]) -> str {
+    var items: [str] = []
+    for b in env { items.push("{b.name}={plain(b.ty)}") }
+    // Few items: an insertion sort is enough.
+    for i in 1..items.len {
+        var k = i
+        while k > 0 && items[k] < items[k - 1] {
+            let moved = items[k]
+            items[k] = items[k - 1]
+            items[k - 1] = moved
+            k -= 1
+        }
+    }
+    text.join(items, ",")
+}
+
+// Runs the functions of this file over a fixed list of types. `mou
+// typetest` prints what the ones of the compiler in Rust give.
+pub fn selftest() -> [str] {
+    var out: [str] = []
+    let all = samples()
+    let fixed = [Binding("T", Ty.Int("i64")), Binding("U", Ty.Slice(Ty.Str))]
+    for i in 0..all.len {
+        let t = all[i]
+        out.push("one {i} {plain(t)} | {plain(concretize(t))} | {open(t)} {undecided(t)} {concrete(t)} | {plain(subst(t, fixed))}")
+    }
+    for i in 0..all.len {
+        for j in 0..all.len {
+            let x = all[i]
+            let y = all[j]
+            let joined = match join(x, y) {
+                Some(t) => plain(t)
+                None => "none"
+            }
+            let filled = if same(x, y) { plain(fill_one(x, y)) } else { "-" }
+            out.push("pair {i} {j} {joined} | {assignable(x, y)} {same(x, y)} | {filled}")
+            var env: [Binding] = []
+            bind(x, y, mut env)
+            var hint = [Binding("T", Ty.IntLit)]
+            hinted(x, y, mut hint)
+            if env.len > 0 || hint.len != 1 || hint[0].ty != Ty.IntLit { out.push("bind {i} {j} {env_text(env)} | {env_text(hint)}") }
+        }
+    }
+    for a in INT_KINDS {
+        for c in INT_KINDS { out.push("widens {a} {c} {widens(a, c)}") }
+    }
+    out
+}

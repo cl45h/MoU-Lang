@@ -43,6 +43,10 @@ fn main() -> ExitCode {
         repl::repl();
         return ExitCode::SUCCESS;
     }
+    if args.get(1).is_some_and(|c| c == "typetest") {
+        print!("{}", check::types_selftest());
+        return ExitCode::SUCCESS;
+    }
     if args.get(1).is_some_and(|c| c == "fuzz") {
         // `mou fuzz <count> [seed] [--sanitize]`
         let sanitize = args.iter().any(|a| a == "--sanitize");
@@ -429,6 +433,11 @@ mod selfhost {
             }
         }
         assert!(files.len() > 50);
+        // The functions on types, over the same list of types.
+        interp::ARGS.with(|a| *a.borrow_mut() = vec!["typetest".to_string()]);
+        let mut out = Vec::new();
+        interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("typetest: {}", p.msg));
+        assert_eq!(String::from_utf8_lossy(&out), check::types_selftest());
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
             let shown = path.display().to_string();

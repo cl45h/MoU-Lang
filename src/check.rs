@@ -612,6 +612,138 @@ fn concrete(t: &Ty) -> bool {
     }
 }
 
+/// Runs the functions on types over a fixed list of types and prints what
+/// they give. The same list goes through the ones written in Mou
+/// (`compiler/types.mou`), and the two texts have to be equal.
+pub fn types_selftest() -> String {
+    use std::fmt::Write;
+    use Ty::*;
+    fn text(t: &Ty) -> String {
+        let list = |ts: &[Ty]| ts.iter().map(text).collect::<Vec<_>>().join(", ");
+        match t {
+            Int(k) | Float(k) | Builtin(k) => k.to_string(),
+            IntLit => "intlit".into(),
+            FloatLit => "floatlit".into(),
+            Bool => "bool".into(),
+            Char => "char".into(),
+            Str => "str".into(),
+            Unit => "()".into(),
+            Never => "never".into(),
+            Unknown => "_".into(),
+            Struct(i, ts) => format!("S{i}[{}]", list(ts)),
+            Enum(i, ts) => format!("E{i}[{}]", list(ts)),
+            Dyn(i, ts) => format!("dyn{i}[{}]", list(ts)),
+            Tuple(ts) => format!("({})", list(ts)),
+            Slice(t) => format!("[{}]", text(t)),
+            Array(t) => format!("[{}; _]", text(t)),
+            Range(t) => format!("range {}", text(t)),
+            Optional(t) => format!("{}?", text(t)),
+            Result(t, e) => format!("{} ! {}", text(t), text(e)),
+            Param(n) => format!("'{n}"),
+            Fn(sig) => {
+                let ps: Vec<String> = sig
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let mode = match p.mode {
+                            Mode::Let => "let",
+                            Mode::Mut => "mut",
+                            Mode::Own => "own",
+                        };
+                        format!("{mode} {}", text(&p.ty))
+                    })
+                    .collect();
+                format!("fn({}) -> {}", ps.join(", "), text(&sig.ret))
+            }
+        }
+    }
+    let b = |t: Ty| Box::new(t);
+    let p = |n: &str| Param(n.to_string());
+    let f = |params: Vec<(Mode, Ty)>, ret: Ty| {
+        let params = params.into_iter().map(|(mode, ty)| ParamSig { name: "x".into(), mode, ty, optional: false }).collect();
+        Fn(Box::new(Sig { params, ret }))
+    };
+    let int = Int("i64");
+    let samples: Vec<Ty> = vec![
+        int.clone(),
+        Int("u8"),
+        Int("i32"),
+        Int("u64"),
+        Int("usize"),
+        Int("i128"),
+        Int("u128"),
+        IntLit,
+        FloatLit,
+        Float("f64"),
+        Float("f32"),
+        Bool,
+        Char,
+        Str,
+        Unit,
+        Never,
+        Unknown,
+        Struct(0, vec![]),
+        Struct(1, vec![int.clone()]),
+        Struct(1, vec![Unknown]),
+        Struct(1, vec![IntLit]),
+        Enum(0, vec![p("T")]),
+        Enum(0, vec![Str]),
+        Tuple(vec![IntLit, Str]),
+        Tuple(vec![Int("u8"), Str]),
+        Slice(b(int.clone())),
+        Slice(b(IntLit)),
+        Array(b(IntLit)),
+        Array(b(Never)),
+        Range(b(IntLit)),
+        Range(b(Int("i32"))),
+        Optional(b(int.clone())),
+        Optional(b(Never)),
+        Optional(b(Optional(b(IntLit)))),
+        Result(b(int.clone()), b(Str)),
+        Result(b(IntLit), b(Unknown)),
+        f(vec![(Mode::Let, int.clone()), (Mode::Mut, Slice(b(Str)))], Bool),
+        f(vec![(Mode::Let, IntLit), (Mode::Mut, Slice(b(Str)))], Bool),
+        Builtin("io.Error"),
+        p("T"),
+        p("U"),
+        Dyn(0, vec![]),
+        Dyn(1, vec![p("T")]),
+        Slice(b(p("T"))),
+        Result(b(p("T")), b(p("U"))),
+        f(vec![(Mode::Let, p("T"))], Optional(b(p("U")))),
+    ];
+    let env_text = |env: &HashMap<String, Ty>| {
+        let mut items: Vec<String> = env.iter().map(|(n, t)| format!("{n}={}", text(t))).collect();
+        items.sort();
+        items.join(",")
+    };
+    let mut out = String::new();
+    let fixed: HashMap<String, Ty> = [("T".to_string(), int.clone()), ("U".to_string(), Slice(b(Str)))].into();
+    for (i, t) in samples.iter().enumerate() {
+        let _ = writeln!(out, "one {i} {} | {} | {} {} {} | {}", text(t), text(&concretize(t)), open(t), undecided(t), concrete(t), text(&subst(t, &fixed)));
+    }
+    for (i, x) in samples.iter().enumerate() {
+        for (j, y) in samples.iter().enumerate() {
+            let joined = join(x, y).map_or("none".to_string(), |t| text(&t));
+            let filled = if same(x, y) { text(&fill_one(x, y)) } else { "-".to_string() };
+            let _ = writeln!(out, "pair {i} {j} {joined} | {} {} | {filled}", assignable(x, y), same(x, y));
+            let mut env = HashMap::new();
+            bind(x, y, &mut env);
+            let mut hint: HashMap<String, Ty> = [("T".to_string(), IntLit)].into();
+            hinted(x, y, &mut hint);
+            if !env.is_empty() || hint.len() != 1 || hint["T"] != IntLit {
+                let _ = writeln!(out, "bind {i} {j} {} | {}", env_text(&env), env_text(&hint));
+            }
+        }
+    }
+    for a in INT_KINDS {
+        for c in INT_KINDS {
+            let _ = writeln!(out, "widens {a} {c} {}", widens(a, c));
+        }
+    }
+    out
+}
+
 pub fn int_value(s: &str) -> Option<u128> {
     let s = s.replace('_', "");
     let (digits, radix) = match s.get(..2) {
