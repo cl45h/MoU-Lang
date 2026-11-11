@@ -55,3 +55,7 @@ cargo test --release
 ## Nombre
 
 Mou, o mou-lang para buscarlo. El comando es `mou` y los archivos terminan en `.mou`.
+
+## Licencia
+
+Mou se distribuye bajo dos licencias, a elección de quien lo use: [MIT](LICENSE-MIT) o [Apache 2.0](LICENSE-APACHE).
