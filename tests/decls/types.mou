@@ -1,0 +1,31 @@
+import other
+import std.io
+import std.list
+import c "math.h" as m {
+    fn sqrt(x: f64) -> f64
+    fn bad(x: str) -> i128
+    fn worse(x: mut int) -> int { 1 }
+    struct No { a: int }
+}
+struct A { x: int, x: str, y: Missing, z: other.Hidden, w: other.Nope, v: other.Open, u: io.Error, t: io.Other, s: nope.Thing }
+struct A { q: int }
+struct int { q: int }
+enum E { One, One, Two(A, [int]?, (int, str)), Three(k: fn(int, mut str) -> bool ! str) }
+type Loop = Loop
+type L2 = [L3]
+type L3 = (L2, int)
+type Gen[T] = [T]
+type Use = Gen[int]
+type Bad = Gen[int, str]
+type Bad2 = Use[int]
+type Rec[T] = Rec[[T]]
+type UseRec = Rec[int]
+struct G[T: other.Shown] { item: T, more: G[T], wrong: G[int, int], none: G }
+struct R[region a] { x: int }
+struct UsesR { r: R, d: dyn other.Shown, d2: dyn other.Secret, d3: dyn A, d4: dyn other.Shown + other.Shown, s: Self, t: other.Shown, arr: [int; 4], p: other.Pair[int], b: other.Box[str], bb: other.Box, c: other.Color }
+fn f(a: int, b: T, self) -> Self { }
+fn noty(a, b: int) { }
+fn g[T: Nope, U: other.Shown + other.Secret](a: T, b: U, c: int[str]) -> T ! U { }
+fn g() { }
+fn h[region r](a: int) { }
+fn main() { }

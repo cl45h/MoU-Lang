@@ -250,8 +250,9 @@ pub fn check(file: &File) -> Result<Report, Vec<Error>> {
     analyze(file).map(|(report, _)| report)
 }
 
-pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
-    let mut c = Checker {
+fn checker(file: &File) -> Checker<'_> {
+    Checker {
+        decls_only: false,
         types: HashMap::new(),
         wants: HashMap::new(),
         res: HashMap::new(),
@@ -304,7 +305,11 @@ pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
         ctx: Vec::new(),
         self_ty: None,
         cur: Span::default(),
-    };
+    }
+}
+
+pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
+    let mut c = checker(file);
     c.run();
     if c.errors.is_empty() {
         let impl_key = c.impl_ty.iter().map(|(i, t)| (*i, c.key(t))).collect();
@@ -332,6 +337,192 @@ pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
         // A generic body is checked once per instance: report each mistake once.
         c.errors.dedup_by(|a, b| a.span.line == b.span.line && a.span.col == b.span.col && a.msg == b.msg);
         Err(c.errors)
+    }
+}
+
+/// What the declarations of a program say, without looking into any
+/// expression: the names of each module, the fields of the types, the
+/// signatures of functions and methods, and what implements each trait.
+/// The checker written in Mou (`compiler/check.mou`) prints the same.
+pub fn decls_dump(file: &File) -> String {
+    use std::fmt::Write;
+    let mut c = checker(file);
+    c.decls_only = true;
+    c.run();
+    c.errors.sort_by_key(|e| (e.span.line, e.span.col));
+    c.errors.dedup_by(|a, b| a.span.line == b.span.line && a.span.col == b.span.col && a.msg == b.msg);
+    let text = |t: &Ty| plain_text(t);
+    let list = |ts: &[Ty]| ts.iter().map(plain_text).collect::<Vec<_>>().join(", ");
+    let mode = |m: Mode| match m {
+        Mode::Let => "let",
+        Mode::Mut => "mut",
+        Mode::Own => "own",
+    };
+    let self_mode = |m: Option<Mode>| m.map_or("_", mode);
+    let sig = |s: &Sig| {
+        let ps: Vec<String> = s.params.iter().map(|p| format!("{} {}: {} {}", mode(p.mode), p.name, text(&p.ty), p.optional)).collect();
+        format!("({}) -> {}", ps.join(", "), text(&s.ret))
+    };
+    let bound = |b: &Bound| format!("T{}[{}]", b.0, list(&b.1));
+    let bounds = |bs: &[Bound]| bs.iter().map(bound).collect::<Vec<_>>().join(" + ");
+    let tparams = |ts: &TParams| ts.iter().map(|(n, bs)| format!("{n}: {}", bounds(bs))).collect::<Vec<_>>().join(", ");
+    let mut out = String::new();
+    for e in &c.errors {
+        let _ = writeln!(out, "error {}:{} {}", e.span.line, e.span.col, e.msg);
+    }
+    for (m, name) in c.mods.iter().enumerate() {
+        let _ = writeln!(out, "module {m} {}", if name.is_empty() { "-" } else { name });
+    }
+    let mut globals: Vec<_> = c.globals.iter().collect();
+    globals.sort_by(|a, b| a.0.cmp(b.0));
+    for ((m, name), g) in globals {
+        let what = match g {
+            Global::Struct(i) => format!("struct {i}"),
+            Global::Enum(i) => format!("enum {i}"),
+            Global::Fn(i) => format!("fn {i}"),
+            Global::Const(i) => format!("const {i}"),
+            Global::Alias => "alias".to_string(),
+            Global::Trait(i) => format!("trait {i}"),
+            Global::Import => "import".to_string(),
+            Global::Module(i) => format!("module {i}"),
+        };
+        let vis = if c.public.contains(&(*m, name.clone())) { "pub" } else { "priv" };
+        let _ = writeln!(out, "global {m} {name} {vis} {what}");
+    }
+    let mut imports: Vec<_> = c.imports.iter().collect();
+    imports.sort();
+    for ((m, name), path) in imports {
+        let _ = writeln!(out, "import {m} {name} {path}");
+    }
+    let mut ids: Vec<_> = c.extern_ids.iter().collect();
+    ids.sort();
+    for ((m, alias, name), i) in ids {
+        let _ = writeln!(out, "externid {m} {alias} {name} {i}");
+    }
+    for x in &c.externs {
+        let _ = writeln!(out, "extern {} {} {}", x.name, x.header, sig(&x.sig));
+    }
+    for (i, s) in c.structs.iter().enumerate() {
+        let _ = writeln!(out, "struct {i} {} {} {} [{}]", s.name, s.module, s.generic, s.tparams.join(", "));
+        for f in &s.fields {
+            let _ = writeln!(out, "  field {} {} {}", f.name, text(&f.ty), f.optional);
+        }
+    }
+    for (i, e) in c.enums.iter().enumerate() {
+        let _ = writeln!(out, "enum {i} {} {} {} [{}]", e.name, e.module, e.generic, e.tparams.join(", "));
+        for v in &e.variants {
+            let fields: Vec<String> = v.fields.iter().map(|(n, t)| format!("{}: {}", n.as_deref().unwrap_or("_"), text(t))).collect();
+            let _ = writeln!(out, "  variant {} ({})", v.name, fields.join(", "));
+        }
+    }
+    for (i, f) in c.fns.iter().enumerate() {
+        let _ = writeln!(out, "fn {i} {} {} [{}] {}", c.decl_of_fn[i], f.generic, tparams(&f.tparams), sig(&f.sig));
+    }
+    for (i, t) in c.traits.iter().enumerate() {
+        let _ = writeln!(out, "trait {i} {} [{}] {}", t.name, t.tparams.join(", "), bounds(&t.supers));
+        for m in &t.methods {
+            let _ = writeln!(out, "  method {} {} {}", m.0, self_mode(m.2), sig(&m.1));
+        }
+        for d in &t.defaults {
+            let _ = writeln!(out, "  default {} {} {}", d.0, d.1, d.2);
+        }
+        for r in &t.refs {
+            let _ = writeln!(out, "  ref {} {}", r.0, r.1);
+        }
+        for o in &t.own {
+            let _ = writeln!(out, "  own {} [{}]", o.0, tparams(&o.1));
+        }
+    }
+    let mut methods: Vec<_> = c.methods.iter().collect();
+    methods.sort_by(|a, b| a.0.cmp(b.0));
+    for ((key, name), m) in methods {
+        let at = if m.at.1 == usize::MAX { "-1".to_string() } else { m.at.1.to_string() };
+        let default = m.default.map_or("_".to_string(), |d| format!("{}.{}", d.0, d.1));
+        let env: Vec<String> = m.trait_env.iter().map(|(n, t)| format!("{n}={}", text(t))).collect();
+        let of = m.of_trait.as_ref().map_or("_".to_string(), bound);
+        let _ = writeln!(out, "method {key} {name} {} [{}] {} at={}.{at} self={} default={default} env={} of={of}", self_mode(m.self_mode), tparams(&m.tparams), sig(&m.sig), m.at.0, text(&m.self_ty), env.join(","));
+    }
+    let mut impls: Vec<_> = c.impl_ty.iter().collect();
+    impls.sort_by_key(|x| *x.0);
+    for (di, t) in impls {
+        let _ = writeln!(out, "impl {di} {} {}", c.key(t), text(t));
+    }
+    let mut suffixes: Vec<_> = c.impl_suffix.iter().collect();
+    suffixes.sort();
+    for (di, s) in suffixes {
+        let _ = writeln!(out, "suffix {di} {}", if s.is_empty() { "-" } else { s });
+    }
+    let mut impls: Vec<_> = c.trait_impls.iter().collect();
+    impls.sort_by(|a, b| a.0.cmp(b.0));
+    for ((t, key), infos) in impls {
+        for info in infos {
+            let _ = writeln!(out, "implements {t} {key} [{}] {} [{}]", list(&info.targs), text(&info.self_ty), tparams(&info.tparams));
+        }
+    }
+    let mut overloads: Vec<_> = c.overloads.iter().collect();
+    overloads.sort_by(|a, b| a.0.cmp(b.0));
+    for ((key, name), all) in overloads {
+        for (mangled, b) in all {
+            let _ = writeln!(out, "overload {key} {name} {mangled} {}", bound(b));
+        }
+    }
+    let mut aliases: Vec<_> = c.aliases.iter().collect();
+    aliases.sort_by(|a, b| a.0.cmp(b.0));
+    for ((m, name), a) in aliases {
+        let state = match a {
+            Alias::Todo(i) => format!("todo {i}"),
+            Alias::Busy => "busy".to_string(),
+            Alias::Done(t) => format!("done {}", text(t)),
+        };
+        let _ = writeln!(out, "alias {m} {name} {state}");
+    }
+    for s in &c.report.skipped_decls {
+        let _ = writeln!(out, "skipped {s}");
+    }
+    let _ = writeln!(out, "skipped_exprs {}", c.report.skipped_exprs);
+    out
+}
+
+/// A type as text, without the names of the program.
+fn plain_text(t: &Ty) -> String {
+    use Ty::*;
+    let text = plain_text;
+    let list = |ts: &[Ty]| ts.iter().map(text).collect::<Vec<_>>().join(", ");
+    match t {
+        Int(k) | Float(k) | Builtin(k) => k.to_string(),
+        IntLit => "intlit".into(),
+        FloatLit => "floatlit".into(),
+        Bool => "bool".into(),
+        Char => "char".into(),
+        Str => "str".into(),
+        Unit => "()".into(),
+        Never => "never".into(),
+        Unknown => "_".into(),
+        Struct(i, ts) => format!("S{i}[{}]", list(ts)),
+        Enum(i, ts) => format!("E{i}[{}]", list(ts)),
+        Dyn(i, ts) => format!("dyn{i}[{}]", list(ts)),
+        Tuple(ts) => format!("({})", list(ts)),
+        Slice(t) => format!("[{}]", text(t)),
+        Array(t) => format!("[{}; _]", text(t)),
+        Range(t) => format!("range {}", text(t)),
+        Optional(t) => format!("{}?", text(t)),
+        Result(t, e) => format!("{} ! {}", text(t), text(e)),
+        Param(n) => format!("'{n}"),
+        Fn(sig) => {
+            let ps: Vec<String> = sig
+                .params
+                .iter()
+                .map(|p| {
+                    let mode = match p.mode {
+                        Mode::Let => "let",
+                        Mode::Mut => "mut",
+                        Mode::Own => "own",
+                    };
+                    format!("{mode} {}", text(&p.ty))
+                })
+                .collect();
+            format!("fn({}) -> {}", ps.join(", "), text(&sig.ret))
+        }
     }
 }
 
@@ -618,45 +809,7 @@ fn concrete(t: &Ty) -> bool {
 pub fn types_selftest() -> String {
     use std::fmt::Write;
     use Ty::*;
-    fn text(t: &Ty) -> String {
-        let list = |ts: &[Ty]| ts.iter().map(text).collect::<Vec<_>>().join(", ");
-        match t {
-            Int(k) | Float(k) | Builtin(k) => k.to_string(),
-            IntLit => "intlit".into(),
-            FloatLit => "floatlit".into(),
-            Bool => "bool".into(),
-            Char => "char".into(),
-            Str => "str".into(),
-            Unit => "()".into(),
-            Never => "never".into(),
-            Unknown => "_".into(),
-            Struct(i, ts) => format!("S{i}[{}]", list(ts)),
-            Enum(i, ts) => format!("E{i}[{}]", list(ts)),
-            Dyn(i, ts) => format!("dyn{i}[{}]", list(ts)),
-            Tuple(ts) => format!("({})", list(ts)),
-            Slice(t) => format!("[{}]", text(t)),
-            Array(t) => format!("[{}; _]", text(t)),
-            Range(t) => format!("range {}", text(t)),
-            Optional(t) => format!("{}?", text(t)),
-            Result(t, e) => format!("{} ! {}", text(t), text(e)),
-            Param(n) => format!("'{n}"),
-            Fn(sig) => {
-                let ps: Vec<String> = sig
-                    .params
-                    .iter()
-                    .map(|p| {
-                        let mode = match p.mode {
-                            Mode::Let => "let",
-                            Mode::Mut => "mut",
-                            Mode::Own => "own",
-                        };
-                        format!("{mode} {}", text(&p.ty))
-                    })
-                    .collect();
-                format!("fn({}) -> {}", ps.join(", "), text(&sig.ret))
-            }
-        }
-    }
+    let text = plain_text;
     let b = |t: Ty| Box::new(t);
     let p = |n: &str| Param(n.to_string());
     let f = |params: Vec<(Mode, Ty)>, ret: Ty| {
@@ -944,6 +1097,9 @@ struct FnCtx {
 }
 
 struct Checker<'a> {
+    /// Stop after the declarations, without looking into any expression:
+    /// what `mou decls` prints.
+    decls_only: bool,
     types: HashMap<(usize, usize), Ty>,
     wants: HashMap<(usize, usize), Ty>,
     res: HashMap<(usize, usize), Res>,
@@ -1448,7 +1604,7 @@ impl<'a> Checker<'a> {
                             self.err(d.span, format!("field `{}` is defined twice in `{}`", f.name, s.name));
                         }
                         let ty = self.resolve(&f.ty, d.span);
-                        if let Some(default) = &f.default {
+                        if let (Some(default), false) = (&f.default, self.decls_only) {
                             self.expect(default, &ty, "field default");
                         }
                         fields.push(FieldInfo { name: f.name.clone(), ty, optional: f.default.is_some() });
@@ -1469,7 +1625,7 @@ impl<'a> Checker<'a> {
                             self.err(d.span, format!("variant `{}` is defined twice in `{}`", v.name, e.name));
                         }
                         let fields = v.fields.iter().map(|(n, t)| (n.clone(), self.resolve(t, d.span))).collect();
-                        if let Some(value) = &v.value {
+                        if let (Some(value), false) = (&v.value, self.decls_only) {
                             let t = self.expr(value);
                             if !is_int(&t) {
                                 self.err(value.span, "an enum value must be an integer");
@@ -1638,6 +1794,9 @@ impl<'a> Checker<'a> {
                 let (tname, sname) = (self.traits[t].name.clone(), self.show_bound(&sup));
                 self.err(span, format!("`{tname}` requires `{sname}`, which `{key}` does not implement: add `impl {sname} for {key}`"));
             }
+        }
+        if self.decls_only {
+            return;
         }
         // Pass 4: constants, in order.
         for (di, d) in file.decls.iter().enumerate() {
@@ -2575,7 +2734,7 @@ impl<'a> Checker<'a> {
                     Ty::Unknown
                 }
             };
-            if let Some(default) = &p.default {
+            if let (Some(default), false) = (&p.default, self.decls_only) {
                 self.expect(default, &ty, "parameter default");
             }
             params.push(ParamSig { name: p.name.clone(), mode: p.mode, ty, optional: p.default.is_some() });

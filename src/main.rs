@@ -35,7 +35,8 @@ commands:
   tokens   print the token stream
   lex      print the tokens in the form the lexer written in Mou prints them
   tree     print the syntax tree in the form the parser written in Mou prints it
-  modules  print the program with all it imports, as the loader written in Mou does";
+  modules  print the program with all it imports, as the loader written in Mou does
+  decls    print what the declarations say, as the checker written in Mou does";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -128,6 +129,10 @@ fn main() -> ExitCode {
         }
         "modules" => {
             print!("{}", load::dump(path, &src));
+            Ok(())
+        }
+        "decls" => {
+            print!("{}", decls_text(path, &src));
             Ok(())
         }
         "tree" => {
@@ -234,6 +239,14 @@ fn lower(file: &ast::File) -> Result<mir::Program, Vec<lexer::Error>> {
     }
 }
 
+/// What the declarations of a program say, or why it could not be loaded.
+fn decls_text(path: &str, src: &str) -> String {
+    match load::load(path, src).1 {
+        Ok(file) => check::decls_dump(&file),
+        Err(es) => es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect(),
+    }
+}
+
 fn fail(sources: &load::Sources, errors: &[lexer::Error]) -> ExitCode {
     for e in errors {
         report_in(sources, e);
@@ -267,7 +280,9 @@ fn build_file(path: &str, src: &str, print: bool, output: Option<String>, libs: 
         return ExitCode::FAILURE;
     }
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    match std::process::Command::new(&cc).args(["-O2", "-o", &output, &c_path, "-lm"]).args(libs).status() {
+    // `CFLAGS` replaces the default `-O2`: `-O1` builds a large program much faster.
+    let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O2".to_string());
+    match std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-o", &output, &c_path, "-lm"]).args(libs).status() {
         Ok(status) if status.success() => {
             println!("built {output} (C source in {c_path})");
             ExitCode::SUCCESS
@@ -411,8 +426,10 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
 mod selfhost {
     use crate::{check, comptime, interp, lexer, load, mir, own};
 
-    /// The lexer, the parser and the loader written in Mou give, for every
-    /// file of the project, what the ones of this compiler give.
+    /// The lexer, the parser, the loader and the check of declarations
+    /// written in Mou give, for every file of the project, what the ones of
+    /// this compiler give. `tests/decls` holds programs with mistakes in
+    /// their declarations, which both must report in the same words.
     #[test]
     fn the_compiler_in_mou_agrees_with_this_one() {
         let root = env!("CARGO_MANIFEST_DIR");
@@ -424,7 +441,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {
@@ -445,6 +462,7 @@ mod selfhost {
                 ("lex", lexer::dump(&text)),
                 ("tree", crate::ast::dump(&crate::parser::parse_file(&text))),
                 ("modules", load::dump(&shown, &text)),
+                ("decls", crate::decls_text(&shown, &text)),
             ];
             for (stage, expected) in stages {
                 interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), shown.clone(), format!("{root}/std")]);

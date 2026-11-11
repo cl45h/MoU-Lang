@@ -1,0 +1,44 @@
+import other
+trait Into[T] { fn into(self) -> T
+    fn twice(self) -> (T, T) { (self.into(), self.into()) } }
+trait Named: Into[str] + Nope + Named { fn name(self) -> str
+    fn name(self) -> int
+    fn conv[T](self, x: T) -> T
+    fn conv2[U: Into[U]](self, x: U) -> U
+    fn first(mut self) -> ref mut int
+    fn peek(self) -> ref int }
+trait Wide[region a] { fn w(self) }
+trait Self2: Self2 { }
+struct P { x: int }
+struct Q[T] { item: T }
+enum Opt[T] { Nothing, Just(T) }
+impl Into[str] for P { fn into(self) -> str { "p" } }
+impl Into[str] for P { fn into(self) -> str { "p" } }
+impl Into[int] for P { fn into(self) -> int { 1 } }
+impl[T] Into[T] for Q[T] { fn into(self) -> T { self.item } }
+impl[T] Into[int] for Q[T] { fn into(self) -> int { 1 } }
+impl Named for P { fn name(self) -> int { 1 }
+    fn conv[V](self, x: V) -> V { x }
+    fn conv2[W: Into[W]](self, x: W) -> W { x }
+    fn first(mut self) -> ref int { self.x }
+    fn peek(self) -> ref int { self.x } }
+impl Named for Q[int] { fn name(self) -> str { "" } }
+impl[T] Named for Opt[T] { fn name(self) -> str { "" } 
+    fn conv[T](self, x: T) -> T { x }
+    fn name(self) -> str { "" } }
+impl Nope for P { fn z(self) { } }
+impl other.Shown for P { fn show(mut self) -> str { "" } }
+impl other.Secret for P { }
+impl other.Shown for int { fn show(self) -> str { "" } }
+impl other.Shown for [int] { fn show(self, extra: int) -> str { "" } }
+impl[T: other.Shown] Q[T] { fn get(self) -> T { self.item }
+    fn make(item: T) -> Self { Q(item) }
+    fn map[U](self, f: fn(T) -> U) -> Q[U] { Q(f(self.item)) } }
+impl P { fn get(self) -> int { self.x }
+    fn get(self) -> int { self.x }
+    fn noself(a: Missing) -> other.Color { other.Color.Red } }
+impl Missing { fn a(self) { } }
+impl[region r] P { fn b(self) { } }
+impl Into[int, str] for Opt[int] { }
+impl Into for other.Open { fn into(self) -> int { 1 } }
+fn main() { }

@@ -1,5 +1,5 @@
 // The compiler of Mou written in Mou. So far: the lexer, the parser, the
-// loader of modules and the functions on types.
+// loader of modules, the functions on types and the check of declarations.
 //
 //     mou build compiler/main.mou -o mouc
 //     ./mouc lex file.mou        prints the tokens of the file, as `mou lex` does
@@ -7,10 +7,13 @@
 //     ./mouc modules file.mou    prints the program with all it imports, as
 //                                `mou modules` does; a third argument says
 //                                where the standard library is (`std`)
+//     ./mouc decls file.mou      prints what its declarations say, as
+//                                `mou decls` does
 //     ./mouc typetest            runs the functions on types over a fixed list,
 //                                as `mou typetest` does
 
 import std.io
+import check
 import lexer
 import load
 import parser
@@ -22,14 +25,24 @@ fn main() -> int ! io.Error {
         for line in types.selftest() { io.print(line)? }
         return 0
     }
-    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules") {
-        io.eprint("usage: mouc lex|tree|modules <file.mou>")?
+    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules" || args[0] == "decls") {
+        io.eprint("usage: mouc lex|tree|modules|decls <file.mou>")?
         return 2
     }
     let src = io.read_file(args[1])?
     if args[0] == "modules" {
         let std_dir = if args.len > 2 { args[2] } else { "std" }
         for line in load.dump(load.load(args[1], src, std_dir)) { io.print(line)? }
+        return 0
+    }
+    if args[0] == "decls" {
+        let std_dir = if args.len > 2 { args[2] } else { "std" }
+        let program = load.load(args[1], src, std_dir)
+        if program.errors.len > 0 {
+            for e in program.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 0
+        }
+        for line in check.dump(check.declarations(program)) { io.print(line)? }
         return 0
     }
     if args[0] == "lex" {

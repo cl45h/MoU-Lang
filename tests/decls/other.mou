@@ -1,0 +1,7 @@
+pub struct Open { x: int }
+struct Hidden { y: int }
+pub trait Shown { fn show(self) -> str }
+trait Secret { fn s(self) -> int }
+pub enum Color { Red, Green(int), Blue(r: int, g: int) }
+pub type Pair[T] = (T, T)
+pub struct Box[T] { item: T }

@@ -554,14 +554,14 @@ pub fn concrete(t: Ty) -> bool {
 
 // ---- the check of this file against the compiler written in Rust ----
 
-fn texts(ts: [Ty]) -> str {
+pub fn texts(ts: [Ty]) -> str {
     var out: [str] = []
     for t in ts { out.push(plain(t)) }
     text.join(out, ", ")
 }
 
 // A type as text, without the names of the program.
-fn plain(t: Ty) -> str {
+pub fn plain(t: Ty) -> str {
     match t {
         Ty.Int(k) => k
         Ty.Float(k) => k

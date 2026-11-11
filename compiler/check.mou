@@ -1,0 +1,1859 @@
+// The checker of Mou, written in Mou. So far: what the declarations of a
+// program say, without looking into any expression. It follows the
+// passes over declarations of `src/check.rs`, and `mou decls` prints
+// what that one gives in the form `dump` prints here.
+
+import std.text
+import lexer
+import load
+import parser
+import types
+
+pub struct Span { line: int, col: int }
+
+// A trait with its type arguments: `Into[str]`.
+pub struct Bound { tr: int, args: [types.Ty] }
+
+// A type parameter with the traits it must implement.
+pub struct TParam { name: str, bounds: [Bound] }
+
+pub struct TraitMethod { name: str, sig: types.Sig, self_mode: parser.Mode? }
+
+// A method a trait gives a body to: where it is declared.
+pub struct Default { name: str, decl: int, method: int }
+
+pub struct RefKind { name: str, mutable: bool }
+
+// A method with type parameters of its own.
+pub struct OwnParams { name: str, tparams: [TParam] }
+
+pub struct TraitInfo {
+    name: str
+    methods: [TraitMethod]
+    defaults: [Default]
+    supers: [Bound]
+    tparams: [str]
+    refs: [RefKind]
+    own_params: [OwnParams]
+}
+
+// One `impl Trait for Type`.
+pub struct ImplInfo { targs: [types.Ty], self_ty: types.Ty, tparams: [TParam] }
+
+pub struct FieldInfo { name: str, ty: types.Ty, optional: bool }
+
+pub struct StructInfo { name: str, module: int, generic: bool, tparams: [str], fields: [FieldInfo] }
+
+pub struct VariantField { label: str?, ty: types.Ty }
+
+pub struct VariantInfo { name: str, fields: [VariantField] }
+
+pub struct EnumInfo { name: str, module: int, generic: bool, tparams: [str], variants: [VariantInfo] }
+
+pub struct FnInfo { sig: types.Sig, generic: bool, tparams: [TParam] }
+
+pub struct Place { decl: int, method: int }
+
+pub struct Method {
+    sig: types.Sig
+    // Nothing for a function of the type that takes no `self`.
+    self_mode: parser.Mode?
+    // The type parameters of the `impl`, then those of the method.
+    tparams: [TParam]
+    // The `impl` among the declarations, and the method inside it.
+    at_decl: int
+    at_method: int
+    self_ty: types.Ty
+    // For a method the `impl` takes from its trait: where the trait has it.
+    default: Place?
+    trait_env: [types.Binding]
+    of_trait: Bound?
+}
+
+pub enum Global {
+    Struct(int)
+    Enum(int)
+    Fn(int)
+    Const(int)
+    Alias
+    Trait(int)
+    // A module the compiler provides, or one it cannot see into.
+    Import
+    // A module of the program, by number.
+    Module(int)
+}
+
+pub enum AliasState { Todo(int), Busy, Done(types.Ty) }
+
+pub struct Extern { name: str, header: str, sig: types.Sig }
+
+struct GlobalEntry { module: int, name: str, what: Global }
+
+struct PubEntry { module: int, name: str }
+
+struct AliasEntry { module: int, name: str, state: AliasState }
+
+struct ImportEntry { module: int, name: str, path: str }
+
+struct ExternId { module: int, alias: str, name: str, id: int }
+
+struct MethodEntry { key: str, name: str, m: Method }
+
+struct ImplsEntry { tr: int, key: str, infos: [ImplInfo] }
+
+struct Overload { mangled: str, bound: Bound }
+
+struct OverloadEntry { key: str, name: str, all: [Overload] }
+
+struct ImplTy { decl: int, ty: types.Ty }
+
+struct Suffix { decl: int, suffix: str }
+
+struct Required { tr: int, sup: Bound, ty: types.Ty, at: Span }
+
+struct Signed { sig: types.Sig, self_mode: parser.Mode? }
+
+pub struct Checker {
+    decls: [parser.Decl]
+    modules: [load.Module]
+    // The type parameters in sight, and the traits that bound each.
+    tenv: [types.Binding]
+    bounds: [TParam]
+    traits: [TraitInfo]
+    trait_impls: [ImplsEntry]
+    overloads: [OverloadEntry]
+    suffixes: [Suffix]
+    alias_depth: int
+    externs: [Extern]
+    extern_ids: [ExternId]
+    imports: [ImportEntry]
+    structs: [StructInfo]
+    enums: [EnumInfo]
+    fns: [FnInfo]
+    consts: [types.Ty?]
+    aliases: [AliasEntry]
+    // The module of the declaration being checked.
+    module: int
+    module_of: [int]
+    mods: [str]
+    public: [PubEntry]
+    globals: [GlobalEntry]
+    methods: [MethodEntry]
+    decl_of_fn: [int]
+    fn_of_decl: [int]
+    impl_tys: [ImplTy]
+    errors: [lexer.Error]
+    skipped_decls: [str]
+    skipped_exprs: int
+    self_ty: types.Ty?
+}
+
+fn has_expr(o: parser.Expr?) -> bool {
+    match o {
+        Some(_) => true
+        None => false
+    }
+}
+
+fn has_type(o: parser.Type?) -> bool {
+    match o {
+        Some(_) => true
+        None => false
+    }
+}
+
+// The names of the type parameters, or nothing when there are region or
+// value parameters, which are not checked yet.
+fn param_names(generics: [parser.GenParam]) -> [str]? {
+    var out: [str] = []
+    for g in generics {
+        match g {
+            parser.GenParam.OfType(name, _) => out.push(name)
+            _ => return None
+        }
+    }
+    Some(out)
+}
+
+// How a function gives its result by reference: `true` for
+// `-> ref mut T`, `false` for `-> ref T`.
+fn ref_kind(f: parser.FnDecl) -> bool? {
+    match f.ret {
+        Some(parser.Type.Ref(reg, mutable, _)) => {
+            match reg {
+                Some(_) => {}
+                None => {
+                    if mutable { return Some(true) }
+                }
+            }
+        }
+        _ => {}
+    }
+    if f.by_ref { return Some(false) }
+    None
+}
+
+fn same_flag(a: bool?, b: bool?) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x == y
+        (None, None) => true
+        _ => false
+    }
+}
+
+fn same_mode(a: parser.Mode?, b: parser.Mode?) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x == y
+        (None, None) => true
+        _ => false
+    }
+}
+
+fn same_tys(a: [types.Ty], b: [types.Ty]) -> bool {
+    if a.len != b.len { return false }
+    for k in 0..a.len {
+        if a[k] != b[k] { return false }
+    }
+    true
+}
+
+fn same_bound(a: Bound, b: Bound) -> bool { a.tr == b.tr && same_tys(a.args, b.args) }
+
+fn same_bounds(a: [Bound], b: [Bound]) -> bool {
+    if a.len != b.len { return false }
+    for k in 0..a.len {
+        if !same_bound(a[k], b[k]) { return false }
+    }
+    true
+}
+
+fn has_bound(all: [Bound], b: Bound) -> bool {
+    for x in all {
+        if same_bound(x, b) { return true }
+    }
+    false
+}
+
+fn all_concrete(ts: [types.Ty]) -> bool {
+    for t in ts {
+        if !types.concrete(t) { return false }
+    }
+    true
+}
+
+fn subst_all(ts: [types.Ty], env: [types.Binding]) -> [types.Ty] {
+    var out: [types.Ty] = []
+    for t in ts { out.push(types.subst(t, env)) }
+    out
+}
+
+fn forget(env: [types.Binding], name: str) -> [types.Binding] {
+    var out: [types.Binding] = []
+    for b in env {
+        if b.name != name { out.push(b) }
+    }
+    out
+}
+
+fn forget_bounds(all: [TParam], name: str) -> [TParam] {
+    var out: [TParam] = []
+    for b in all {
+        if b.name != name { out.push(b) }
+    }
+    out
+}
+
+fn has_tparam(all: [TParam], name: str) -> bool {
+    for p in all {
+        if p.name == name { return true }
+    }
+    false
+}
+
+// What a C function can take and give for now.
+fn c_plain(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Float(_) => true
+        types.Ty.Bool => true
+        types.Ty.Int(k) => !text.ends_with(k, "128")
+        _ => false
+    }
+}
+
+fn is_unit(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Unit => true
+        _ => false
+    }
+}
+
+fn is_unknown(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Unknown => true
+        _ => false
+    }
+}
+
+fn is_never(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Never => true
+        _ => false
+    }
+}
+
+impl Checker {
+    fn err(mut self, at: Span, msg: str) { self.errors.push(lexer.Error(msg, at.line, at.col)) }
+
+    // Marks something as not checked and gives it the unknown type.
+    fn skip(mut self) -> types.Ty {
+        self.skipped_exprs += 1
+        types.Ty.Unknown
+    }
+
+    // ---- names ----
+
+    fn global_in(self, module: int, name: str) -> Global? {
+        for g in self.globals {
+            if g.module == module && g.name == name { return Some(g.what) }
+        }
+        None
+    }
+
+    // What a name means at the top of the module being checked.
+    fn global(self, name: str) -> Global? { self.global_in(self.module, name) }
+
+    fn set_global(mut self, module: int, name: str, what: Global) {
+        for k in 0..self.globals.len {
+            if self.globals[k].module == module && self.globals[k].name == name {
+                self.globals[k] = GlobalEntry(module, name, what)
+                return
+            }
+        }
+        self.globals.push(GlobalEntry(module, name, what))
+    }
+
+    fn is_public(self, module: int, name: str) -> bool {
+        for p in self.public {
+            if p.module == module && p.name == name { return true }
+        }
+        false
+    }
+
+    fn set_import(mut self, module: int, name: str, path: str) {
+        for k in 0..self.imports.len {
+            if self.imports[k].module == module && self.imports[k].name == name {
+                self.imports[k] = ImportEntry(module, name, path)
+                return
+            }
+        }
+        self.imports.push(ImportEntry(module, name, path))
+    }
+
+    fn is_io(self, name: str) -> bool {
+        for i in self.imports {
+            if i.module == self.module && i.name == name { return i.path == "std.io" }
+        }
+        false
+    }
+
+    // Whether the module being checked may use a name of another module.
+    // Reports it when it may not.
+    fn visible(mut self, module: int, name: str, at: Span) -> bool {
+        if module == self.module || self.is_public(module, name) { return true }
+        let shown = self.mods[module]
+        match self.global_in(module, name) {
+            Some(_) => self.err(at, "`{name}` is private to the module `{shown}`: it is not declared `pub`")
+            None => self.err(at, "the module `{shown}` has no `{name}`")
+        }
+        false
+    }
+
+    // ---- types as text ----
+
+    // A name as other modules see it: `std.list.List`.
+    fn qualified(self, module: int, name: str) -> str {
+        if module >= 0 && module < (self.mods.len as int) {
+            let m = self.mods[module]
+            if m != "" { return "{m}.{name}" }
+        }
+        name
+    }
+
+    // The name the methods of a type are filed under: a generic type has
+    // one set for all of its type arguments.
+    fn key(self, t: types.Ty) -> str {
+        match t {
+            types.Ty.Struct(i, _) => self.qualified(self.structs[i].module, self.structs[i].name)
+            types.Ty.Enum(i, _) => self.qualified(self.enums[i].module, self.enums[i].name)
+            _ => self.show(t)
+        }
+    }
+
+    fn show_all(self, ts: [types.Ty]) -> str {
+        var out: [str] = []
+        for t in ts { out.push(self.show(t)) }
+        text.join(out, ", ")
+    }
+
+    fn with_args(self, name: str, args: [types.Ty]) -> str {
+        if args.len == 0 { return name }
+        "{name}[{self.show_all(args)}]"
+    }
+
+    // A bound as it is written: `Into[str]`.
+    fn show_bound(self, b: Bound) -> str { self.with_args(self.traits[b.tr].name, b.args) }
+
+    fn show(self, t: types.Ty) -> str {
+        match t {
+            types.Ty.Int(k) => k
+            types.Ty.Float(k) => k
+            types.Ty.IntLit => "integer literal"
+            types.Ty.FloatLit => "float literal"
+            types.Ty.Bool => "bool"
+            types.Ty.Char => "char"
+            types.Ty.Str => "str"
+            types.Ty.Unit => "()"
+            types.Ty.Never => "never"
+            types.Ty.Unknown => "_"
+            types.Ty.Builtin(name) => name
+            types.Ty.Param(name) => name
+            types.Ty.Dyn(i, targs) => "dyn {self.show_bound(Bound(i, targs))}"
+            types.Ty.Struct(_, args) => self.with_args(self.key(t), args)
+            types.Ty.Enum(_, args) => self.with_args(self.key(t), args)
+            types.Ty.Tuple(ts) => "({self.show_all(ts)})"
+            types.Ty.Slice(x) => "[{self.show(x)}]"
+            types.Ty.Array(x) => "[{self.show(x)}; _]"
+            types.Ty.Range(x) => "range of {self.show(x)}"
+            types.Ty.Optional(x) => {
+                if is_never(x) { return "None" }
+                "{self.show(x)}?"
+            }
+            types.Ty.Result(x, e) => "{self.show(x)} ! {self.show(e)}"
+            types.Ty.Fn(sig) => {
+                var ps: [str] = []
+                for p in sig.params {
+                    let mode = match p.mode {
+                        parser.Mode.Let => ""
+                        parser.Mode.Mut => "mut "
+                        parser.Mode.Own => "own "
+                    }
+                    ps.push("{mode}{self.show(p.ty)}")
+                }
+                "fn({text.join(ps, ", ")}) -> {self.show(sig.ret)}"
+            }
+        }
+    }
+
+    // ---- traits ----
+
+    // What the name of a method becomes when an `impl` of a generic trait
+    // gives it: a type can implement `Into[str]` and `Into[int]`, each
+    // with its own `into`.
+    fn suffix_of(self, shown: str, b: Bound) -> str {
+        if self.traits[b.tr].tparams.len == 0 { return "" }
+        "@{shown}"
+    }
+
+    fn trait_env(self, b: Bound) -> [types.Binding] { types.targ_env(self.traits[b.tr].tparams, b.args) }
+
+    // A trait and all it requires, directly or not.
+    fn with_supers(self, b: Bound) -> [Bound] {
+        var all: [Bound] = []
+        all.push(b)
+        var k = 0
+        while k < (all.len as int) {
+            let env = self.trait_env(all[k])
+            let supers = self.traits[all[k].tr].supers
+            for s in supers {
+                let x = Bound(s.tr, subst_all(s.args, env))
+                if !has_bound(all, x) { all.push(x) }
+            }
+            k += 1
+        }
+        all
+    }
+
+    // The trait a bound or an `impl` names, with its type arguments.
+    fn trait_of(mut self, t: parser.Type, at: Span) -> Bound? {
+        var path: [str] = []
+        var args: [parser.GenArg] = []
+        match t {
+            parser.Type.Path(p, a) => {
+                path = p
+                args = a
+            }
+            _ => return None
+        }
+        var found: Global? = None
+        if path.len == 1 { found = self.global(path[0]) }
+        if path.len == 2 {
+            match self.global(path[0]) {
+                Some(Global.Module(m)) => {
+                    if self.visible(m, path[1], at) { found = self.global_in(m, path[1]) }
+                }
+                _ => {}
+            }
+        }
+        var ti = -1
+        match found {
+            Some(Global.Trait(i)) => {
+                ti = i
+            }
+            _ => return None
+        }
+        var targs: [types.Ty] = []
+        for a in args {
+            match a {
+                parser.GenArg.OfType(x) => targs.push(self.resolve(x, at))
+                parser.GenArg.OfExpr(_) => return None
+            }
+        }
+        let want = self.traits[ti].tparams.len as int
+        let got = targs.len as int
+        if got != want {
+            let name = self.traits[ti].name
+            self.err(at, "trait `{name}` takes {want} type arguments, found {got}")
+            var fixed: [types.Ty] = []
+            for k in 0..want {
+                if k < got { fixed.push(targs[k]) } else { fixed.push(types.Ty.Unknown) }
+            }
+            targs = fixed
+        }
+        Some(Bound(ti, targs))
+    }
+
+    fn impls_index(self, tr: int, key: str) -> int {
+        for k in 0..self.trait_impls.len {
+            if self.trait_impls[k].tr == tr && self.trait_impls[k].key == key { return k as int }
+        }
+        -1
+    }
+
+    // What a type implements of a trait: for each `impl`, the trait with
+    // the arguments the `impl` gives it.
+    fn implementations(self, t: types.Ty, tr: int) -> [Bound] {
+        var out: [Bound] = []
+        let at = self.impls_index(tr, self.key(t))
+        if at < 0 { return out }
+        for info in self.trait_impls[at].infos {
+            var env: [types.Binding] = []
+            types.bind(info.self_ty, t, mut env)
+            out.push(Bound(tr, subst_all(info.targs, env)))
+        }
+        out
+    }
+
+    // ---- methods ----
+
+    fn method_index(self, key: str, name: str) -> int {
+        for k in 0..self.methods.len {
+            if self.methods[k].name == name && self.methods[k].key == key { return k as int }
+        }
+        -1
+    }
+
+    fn set_method(mut self, key: str, name: str, m: Method) {
+        let at = self.method_index(key, name)
+        if at >= 0 {
+            self.methods[at] = MethodEntry(key, name, m)
+            return
+        }
+        self.methods.push(MethodEntry(key, name, m))
+    }
+
+    fn add_overload(mut self, key: str, name: str, mangled: str, bound: Bound) {
+        for k in 0..self.overloads.len {
+            if self.overloads[k].key == key && self.overloads[k].name == name {
+                self.overloads[k].all.push(Overload(mangled, bound))
+                return
+            }
+        }
+        var all: [Overload] = []
+        all.push(Overload(mangled, bound))
+        self.overloads.push(OverloadEntry(key, name, all))
+    }
+
+    // The declaration a method is checked from.
+    fn method_decl(self, m: Method) -> parser.Decl? {
+        match m.default {
+            Some(d) => {
+                match self.decls[d.decl].kind {
+                    parser.DeclKind.Trait(t) => {
+                        if d.method >= 0 && d.method < (t.methods.len as int) { return Some(t.methods[d.method]) }
+                    }
+                    _ => {}
+                }
+            }
+            None => {
+                match self.decls[m.at_decl].kind {
+                    parser.DeclKind.Impl(im) => {
+                        if m.at_method >= 0 && m.at_method < (im.decls.len as int) { return Some(im.decls[m.at_method]) }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    fn method_ref(self, m: Method) -> bool? {
+        match self.method_decl(m) {
+            Some(d) => {
+                match d.kind {
+                    parser.DeclKind.Fn(f) => ref_kind(f)
+                    _ => None
+                }
+            }
+            None => None
+        }
+    }
+
+    // ---- type parameters ----
+
+    fn set_bounds(mut self, name: str, bounds: [Bound]) {
+        for k in 0..self.bounds.len {
+            if self.bounds[k].name == name {
+                self.bounds[k] = TParam(name, bounds)
+                return
+            }
+        }
+        self.bounds.push(TParam(name, bounds))
+    }
+
+    fn in_tenv(self, name: str) -> bool {
+        match types.lookup(self.tenv, name) {
+            Some(_) => true
+            None => false
+        }
+    }
+
+    // The type parameters of a declaration, or nothing when it also has
+    // region or value parameters, which are not checked yet.
+    fn type_params(mut self, generics: [parser.GenParam], at: Span) -> [TParam]? {
+        // A bound may name the other parameters: `[T: Into[U], U]`.
+        var added: [str] = []
+        for g in generics {
+            match g {
+                parser.GenParam.OfType(name, _) => {
+                    if !self.in_tenv(name) {
+                        types.define(mut self.tenv, name, types.Ty.Param(name))
+                        added.push(name)
+                    }
+                }
+                _ => {}
+            }
+        }
+        let out = self.type_params_in(generics, at)
+        for name in added { self.tenv = forget(self.tenv, name) }
+        out
+    }
+
+    fn type_params_in(mut self, generics: [parser.GenParam], at: Span) -> [TParam]? {
+        var out: [TParam] = []
+        for g in generics {
+            match g {
+                parser.GenParam.OfType(name, bounds) => {
+                    var traits: [Bound] = []
+                    for b in bounds {
+                        match self.trait_of(b, at) {
+                            Some(t) => traits.push(t)
+                            None => self.err(at, "the bound of `{name}` must be a trait")
+                        }
+                    }
+                    out.push(TParam(name, traits))
+                }
+                _ => return None
+            }
+        }
+        Some(out)
+    }
+
+    fn enter_definition(mut self, tparams: [TParam]) {
+        for p in tparams {
+            types.define(mut self.tenv, p.name, types.Ty.Param(p.name))
+            self.set_bounds(p.name, p.bounds)
+        }
+    }
+
+    // Starts checking the fields of a generic struct or enum.
+    fn enter_type(mut self, generics: [parser.GenParam], at: Span) {
+        for g in generics {
+            match g {
+                parser.GenParam.OfType(name, bounds) => {
+                    if bounds.len > 0 { self.err(at, "bounds on the type parameter `{name}` of a type are not supported: put them on the `impl`") }
+                    types.define(mut self.tenv, name, types.Ty.Param(name))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn leave_generic(mut self) {
+        self.tenv = []
+        self.bounds = []
+    }
+
+    // ---- types ----
+
+    // A type of another module, named from the module being checked.
+    fn named_in(mut self, module: int, name: str, args: [types.Ty], at: Span) -> types.Ty {
+        if module == self.module { return self.named(name, args, at) }
+        if !self.visible(module, name, at) { return types.Ty.Unknown }
+        // The name is looked up in its own module, where the type
+        // parameters of the code being checked mean nothing.
+        let saved_module = self.module
+        let saved_tenv = self.tenv
+        self.tenv = []
+        self.module = module
+        let t = self.named(name, args, at)
+        self.module = saved_module
+        self.tenv = saved_tenv
+        t
+    }
+
+    // A type named with its type arguments already resolved: `List[int]`.
+    fn named(mut self, name: str, args: [types.Ty], at: Span) -> types.Ty {
+        if let Some(t) = types.lookup(self.tenv, name) {
+            if args.len > 0 { self.err(at, "`{name}` takes no type arguments") }
+            return t
+        }
+        if let Some(p) = types.prim(name) {
+            if args.len > 0 { self.err(at, "`{name}` takes no type arguments") }
+            return p
+        }
+        var generic = false
+        var want = 0
+        let found = self.global(name)
+        match found {
+            Some(Global.Struct(i)) => {
+                generic = self.structs[i].generic
+                want = self.structs[i].tparams.len as int
+            }
+            Some(Global.Enum(i)) => {
+                generic = self.enums[i].generic
+                want = self.enums[i].tparams.len as int
+            }
+            Some(Global.Alias) => return self.alias_with(name, args, at)
+            Some(Global.Trait(_)) => {
+                self.err(at, "`{name}` is a trait, not a type (use `dyn {name}`)")
+                return types.Ty.Unknown
+            }
+            _ => {
+                self.err(at, "unknown type `{name}`")
+                return types.Ty.Unknown
+            }
+        }
+        if generic { return self.skip() }
+        let got = args.len as int
+        if got != want {
+            if want == 0 {
+                self.err(at, "`{name}` takes no type arguments")
+            } else {
+                self.err(at, "`{name}` takes {want} type arguments, found {got}: write `{name}[...]`")
+            }
+            return types.Ty.Unknown
+        }
+        match found {
+            Some(Global.Struct(i)) => types.Ty.Struct(i, args)
+            Some(Global.Enum(i)) => types.Ty.Enum(i, args)
+            _ => types.Ty.Unknown
+        }
+    }
+
+    fn alias_index(self, name: str) -> int {
+        for k in 0..self.aliases.len {
+            if self.aliases[k].module == self.module && self.aliases[k].name == name { return k as int }
+        }
+        -1
+    }
+
+    // A generic alias with its arguments: `Pair[int]` for `type Pair[T] = (T, T)`.
+    fn alias_with(mut self, name: str, args: [types.Ty], at: Span) -> types.Ty {
+        var decl = -1
+        let ai = self.alias_index(name)
+        if ai >= 0 {
+            match self.aliases[ai].state {
+                AliasState.Todo(i) => {
+                    decl = i
+                }
+                _ => {}
+            }
+        }
+        var generics: [parser.GenParam] = []
+        var target = parser.Type.SelfType
+        if decl >= 0 {
+            match self.decls[decl].kind {
+                parser.DeclKind.Alias(_, gs, ty) => {
+                    generics = gs
+                    target = ty
+                }
+                _ => {}
+            }
+        }
+        if generics.len == 0 {
+            if args.len > 0 { self.err(at, "`{name}` takes no type arguments") }
+            return self.resolve_alias(name, at)
+        }
+        var names: [str] = []
+        match param_names(generics) {
+            Some(ns) => {
+                names = ns
+            }
+            None => return self.skip()
+        }
+        if names.len != args.len {
+            self.err(at, "`{name}` takes {names.len} type arguments, found {args.len}")
+            return types.Ty.Unknown
+        }
+        if self.alias_depth >= 32 {
+            self.err(at, "type alias `{name}` refers to itself")
+            return types.Ty.Unknown
+        }
+        let saved = self.tenv
+        self.tenv = types.targ_env(names, args)
+        self.alias_depth += 1
+        let t = self.resolve(target, Span(self.decls[decl].line, self.decls[decl].col))
+        self.alias_depth -= 1
+        self.tenv = saved
+        t
+    }
+
+    fn resolve_alias(mut self, name: str, at: Span) -> types.Ty {
+        let ai = self.alias_index(name)
+        if ai < 0 { return types.Ty.Unknown }
+        let module = self.module
+        match self.aliases[ai].state {
+            AliasState.Done(t) => t
+            AliasState.Busy => {
+                self.err(at, "type alias `{name}` refers to itself")
+                types.Ty.Unknown
+            }
+            AliasState.Todo(i) => {
+                var generics: [parser.GenParam] = []
+                var target = parser.Type.SelfType
+                match self.decls[i].kind {
+                    parser.DeclKind.Alias(_, gs, ty) => {
+                        generics = gs
+                        target = ty
+                    }
+                    _ => return types.Ty.Unknown
+                }
+                if generics.len > 0 { return self.skip() }
+                self.aliases[ai] = AliasEntry(module, name, AliasState.Busy)
+                let t = self.resolve(target, Span(self.decls[i].line, self.decls[i].col))
+                self.aliases[ai] = AliasEntry(module, name, AliasState.Done(t))
+                t
+            }
+        }
+    }
+
+    // The type arguments written in a type, or nothing when one of them
+    // is a value, which is not checked yet.
+    fn type_args(mut self, args: [parser.GenArg], at: Span) -> [types.Ty]? {
+        var targs: [types.Ty] = []
+        for a in args {
+            match a {
+                parser.GenArg.OfType(x) => targs.push(self.resolve(x, at))
+                parser.GenArg.OfExpr(_) => return None
+            }
+        }
+        Some(targs)
+    }
+
+    fn resolve(mut self, t: parser.Type, at: Span) -> types.Ty {
+        match t {
+            parser.Type.Path(path, args) => {
+                let name = path[0]
+                if path.len == 2 {
+                    match self.global(name) {
+                        Some(Global.Module(m)) => {
+                            match self.type_args(args, at) {
+                                Some(targs) => return self.named_in(m, path[1], targs, at)
+                                None => return self.skip()
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if path.len > 1 {
+                    match self.global(name) {
+                        Some(Global.Import) => {
+                            if self.is_io(name) && path.len == 2 && path[1] == "Error" { return types.Ty.Builtin("io.Error") }
+                            return self.skip()
+                        }
+                        _ => {}
+                    }
+                    self.err(at, "unknown type `{text.join(path, ".")}`")
+                    return types.Ty.Unknown
+                }
+                match self.type_args(args, at) {
+                    Some(targs) => self.named(name, targs, at)
+                    None => self.skip()
+                }
+            }
+            parser.Type.Slice(x) => types.Ty.Slice(self.resolve(x, at))
+            parser.Type.Soa(x) => types.Ty.Slice(self.resolve(x, at))
+            parser.Type.Array(x, _) => {
+                // The length is a value known when compiling; it is not worked out yet.
+                self.skipped_exprs += 1
+                types.Ty.Array(self.resolve(x, at))
+            }
+            parser.Type.Tuple(ts) => {
+                if ts.len == 0 { return types.Ty.Unit }
+                var out: [types.Ty] = []
+                for x in ts { out.push(self.resolve(x, at)) }
+                types.Ty.Tuple(out)
+            }
+            parser.Type.Fn(params, ret, fails) => {
+                var out: [types.ParamSig] = []
+                for p in params { out.push(types.ParamSig("", p.mode, self.resolve(p.ty, at), false)) }
+                let result = self.ret_type(ret, fails, at)
+                types.Ty.Fn(types.Sig(out, result))
+            }
+            // References are second class: the checker sees what they refer to.
+            parser.Type.Ref(_, _, x) => self.resolve(x, at)
+            parser.Type.Optional(x) => types.Ty.Optional(self.resolve(x, at))
+            parser.Type.SelfType => {
+                match self.self_ty {
+                    Some(me) => me
+                    None => {
+                        self.err(at, "`Self` can only be used inside an `impl`")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Type.Dyn(bounds) => {
+                if bounds.len != 1 {
+                    self.err(at, "`dyn` takes one trait: declare a trait that requires the others")
+                    return types.Ty.Unknown
+                }
+                match self.trait_of(bounds[0], at) {
+                    Some(b) => types.Ty.Dyn(b.tr, b.args)
+                    None => {
+                        self.err(at, "`dyn` must be followed by a trait")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Type.TypeType => self.skip()
+        }
+    }
+
+    fn ret_type(mut self, ret: parser.Type?, fails: parser.Type?, at: Span) -> types.Ty {
+        var out = types.Ty.Unit
+        if let Some(t) = ret { out = self.resolve(t, at) }
+        match fails {
+            Some(e) => types.Ty.Result(out, self.resolve(e, at))
+            None => out
+        }
+    }
+
+    fn signature(mut self, f: parser.FnDecl, at: Span) -> Signed {
+        var params: [types.ParamSig] = []
+        var self_mode: parser.Mode? = None
+        for p in f.params {
+            if p.name == "self" {
+                match self.self_ty {
+                    Some(_) => {}
+                    None => self.err(at, "`self` can only be used inside an `impl`")
+                }
+                self_mode = Some(p.mode)
+                continue
+            }
+            var ty = types.Ty.Unknown
+            match p.ty {
+                Some(t) => {
+                    ty = self.resolve(t, at)
+                }
+                None => self.err(at, "parameter `{p.name}` of `{f.name}` needs a type")
+            }
+            params.push(types.ParamSig(p.name, p.mode, ty, has_expr(p.default)))
+        }
+        let ret = self.ret_type(f.ret, f.err, at)
+        Signed(types.Sig(params, ret), self_mode)
+    }
+
+    // ---- declarations ----
+
+    // Takes in the functions a module declares of a C header.
+    fn foreign(mut self, module: int, alias: str, header: str, decls: [parser.Decl]) {
+        let only = "a C function can only take and return numbers of up to 64 bits and `bool` for now"
+        self.module = module
+        for d in decls {
+            let at = Span(d.line, d.col)
+            match d.kind {
+                parser.DeclKind.Fn(f) => {
+                    if has_expr(f.body) || f.generics.len > 0 || has_type(f.err) || f.conds.len > 0 || f.by_ref {
+                        self.err(at, "`{f.name}` is a C function: it is declared with its parameters and its result, and nothing else")
+                        continue
+                    }
+                    var params: [types.ParamSig] = []
+                    for p in f.params {
+                        var ty = types.Ty.Unknown
+                        if let Some(t) = p.ty { ty = self.resolve(t, at) }
+                        let by_value = match p.mode {
+                            parser.Mode.Let => true
+                            _ => false
+                        }
+                        if !c_plain(ty) || !by_value { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
+                        params.push(types.ParamSig(p.name, parser.Mode.Let, ty, false))
+                    }
+                    var ret = types.Ty.Unit
+                    if let Some(t) = f.ret { ret = self.resolve(t, at) }
+                    if !c_plain(ret) && !is_unit(ret) { self.err(at, "the result of `{f.name}`: {only}") }
+                    self.set_extern_id(module, alias, f.name, self.externs.len as int)
+                    self.externs.push(Extern(f.name, header, types.Sig(params, ret)))
+                }
+                _ => self.err(at, "only functions can be declared for a C header")
+            }
+        }
+        self.module = 0
+    }
+
+    fn set_extern_id(mut self, module: int, alias: str, name: str, id: int) {
+        for k in 0..self.extern_ids.len {
+            let x = self.extern_ids[k]
+            if x.module == module && x.alias == alias && x.name == name {
+                self.extern_ids[k] = ExternId(module, alias, name, id)
+                return
+            }
+        }
+        self.extern_ids.push(ExternId(module, alias, name, id))
+    }
+
+    // The modules of the program and what each one imports.
+    fn pass_modules(mut self) {
+        let count = self.modules.len as int
+        for m in 0..count {
+            let module = self.modules[m]
+            self.mods.push(module.name)
+            for i in module.first..module.last { self.module_of[i] = m }
+            for imp in module.imports {
+                var what = Global.Import
+                match imp.module {
+                    Some(target) => {
+                        what = Global.Module(target)
+                    }
+                    None => self.set_import(m, imp.alias, imp.path)
+                }
+                self.set_global(m, imp.alias, what)
+                let foreign = match imp.origin {
+                    Some(o) => o == "c"
+                    None => false
+                }
+                if foreign { self.foreign(m, imp.alias, imp.path, imp.decls) }
+            }
+        }
+    }
+
+    // Pass 1: the names each module declares.
+    fn pass_names(mut self) {
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            var name = ""
+            var what = Global.Alias
+            match d.kind {
+                parser.DeclKind.Struct(s) => {
+                    var generic = true
+                    var tparams: [str] = []
+                    if let Some(ns) = param_names(s.generics) {
+                        generic = false
+                        tparams = ns
+                    }
+                    self.structs.push(StructInfo(s.name, self.module, generic, tparams, []))
+                    name = s.name
+                    what = Global.Struct(self.structs.len as int - 1)
+                }
+                parser.DeclKind.Enum(e) => {
+                    var generic = true
+                    var tparams: [str] = []
+                    if let Some(ns) = param_names(e.generics) {
+                        generic = false
+                        tparams = ns
+                    }
+                    self.enums.push(EnumInfo(e.name, self.module, generic, tparams, []))
+                    name = e.name
+                    what = Global.Enum(self.enums.len as int - 1)
+                }
+                parser.DeclKind.Fn(f) => {
+                    name = f.name
+                    what = Global.Fn(-1)
+                }
+                parser.DeclKind.Const(n, _, _) => {
+                    self.consts.push(None)
+                    name = n
+                    what = Global.Const(self.consts.len as int - 1)
+                }
+                parser.DeclKind.Alias(n, _, _) => {
+                    name = n
+                }
+                parser.DeclKind.Trait(t) => {
+                    var tparams: [str] = []
+                    if let Some(ns) = param_names(t.generics) { tparams = ns }
+                    self.traits.push(TraitInfo(t.name, [], [], [], tparams, [], []))
+                    name = t.name
+                    what = Global.Trait(self.traits.len as int - 1)
+                }
+                parser.DeclKind.Impl(_) => continue
+            }
+            var taken = false
+            if let Some(_) = self.global(name) { taken = true }
+            if let Some(_) = types.prim(name) { taken = true }
+            if taken {
+                self.err(Span(d.line, d.col), "`{name}` is already defined")
+                continue
+            }
+            var final = what
+            match what {
+                Global.Fn(_) => {
+                    self.fns.push(FnInfo(types.Sig([], types.Ty.Unit), false, []))
+                    self.decl_of_fn.push(di)
+                    self.fn_of_decl[di] = self.fns.len as int - 1
+                    final = Global.Fn(self.fns.len as int - 1)
+                }
+                Global.Alias => self.aliases.push(AliasEntry(self.module, name, AliasState.Todo(di)))
+                _ => {}
+            }
+            if d.public { self.public.push(PubEntry(self.module, name)) }
+            self.set_global(self.module, name, final)
+        }
+    }
+
+    // Pass 2: the fields of structs and enums, and what aliases stand for.
+    fn pass_fields(mut self) {
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            let at = Span(d.line, d.col)
+            match d.kind {
+                parser.DeclKind.Struct(s) => {
+                    var i = -1
+                    match self.global(s.name) {
+                        Some(Global.Struct(k)) => {
+                            i = k
+                        }
+                        _ => continue
+                    }
+                    if self.structs[i].generic {
+                        self.skipped_decls.push("struct {s.name}")
+                        continue
+                    }
+                    self.enter_type(s.generics, at)
+                    var fields: [FieldInfo] = []
+                    for f in s.fields {
+                        var twice = false
+                        for x in fields {
+                            if x.name == f.name { twice = true }
+                        }
+                        if twice { self.err(at, "field `{f.name}` is defined twice in `{s.name}`") }
+                        let ty = self.resolve(f.ty, at)
+                        fields.push(FieldInfo(f.name, ty, has_expr(f.default)))
+                    }
+                    self.structs[i].fields = fields
+                    self.leave_generic()
+                }
+                parser.DeclKind.Enum(e) => {
+                    var i = -1
+                    match self.global(e.name) {
+                        Some(Global.Enum(k)) => {
+                            i = k
+                        }
+                        _ => continue
+                    }
+                    if self.enums[i].generic {
+                        self.skipped_decls.push("enum {e.name}")
+                        continue
+                    }
+                    self.enter_type(e.generics, at)
+                    var variants: [VariantInfo] = []
+                    for v in e.variants {
+                        var twice = false
+                        for x in variants {
+                            if x.name == v.name { twice = true }
+                        }
+                        if twice { self.err(at, "variant `{v.name}` is defined twice in `{e.name}`") }
+                        var fields: [VariantField] = []
+                        for f in v.fields { fields.push(VariantField(f.label, self.resolve(f.ty, at))) }
+                        variants.push(VariantInfo(v.name, fields))
+                    }
+                    self.enums[i].variants = variants
+                    self.leave_generic()
+                }
+                parser.DeclKind.Alias(name, generics, _) => {
+                    if generics.len == 0 {
+                        let _ = self.resolve_alias(name, at)
+                    } else {
+                        match param_names(generics) {
+                            Some(_) => {}
+                            None => self.skipped_decls.push("type {name}")
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 3, first half: what each trait asks for.
+    fn pass_traits(mut self) {
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            let at = Span(d.line, d.col)
+            match d.kind {
+                parser.DeclKind.Trait(t) => self.trait_decl(di, t, at)
+                _ => {}
+            }
+        }
+    }
+
+    fn trait_decl(mut self, di: int, t: parser.TraitDecl, at: Span) {
+        var ti = -1
+        match self.global(t.name) {
+            Some(Global.Trait(k)) => {
+                ti = k
+            }
+            _ => return
+        }
+        var tparams: [TParam] = []
+        match self.type_params(t.generics, at) {
+            Some(ps) => {
+                tparams = ps
+            }
+            None => {
+                self.skipped_decls.push("trait {t.name} (region and value parameters)")
+                return
+            }
+        }
+        self.enter_definition(tparams)
+        for sup in t.supers {
+            match self.trait_of(sup, at) {
+                Some(st) => {
+                    if st.tr == ti {
+                        self.err(at, "trait `{t.name}` cannot require itself")
+                    } else {
+                        self.traits[ti].supers.push(st)
+                    }
+                }
+                None => self.err(at, "what `{t.name}` requires must be a trait")
+            }
+        }
+        self.self_ty = Some(types.Ty.Param("Self"))
+        let methods = t.methods.len as int
+        for mi in 0..methods {
+            let m = t.methods[mi]
+            let mat = Span(m.line, m.col)
+            match m.kind {
+                parser.DeclKind.Fn(f) => {
+                    var extra: [TParam] = []
+                    match self.type_params(f.generics, mat) {
+                        Some(ps) => {
+                            extra = ps
+                        }
+                        None => {
+                            self.skipped_decls.push("fn {t.name}.{f.name} (region and value parameters)")
+                            continue
+                        }
+                    }
+                    for p in extra {
+                        if self.in_tenv(p.name) {
+                            self.err(mat, "type parameter `{p.name}` is already a parameter of the trait")
+                            break
+                        }
+                    }
+                    for p in extra {
+                        types.define(mut self.tenv, p.name, types.Ty.Param(p.name))
+                        self.set_bounds(p.name, p.bounds)
+                    }
+                    let signed = self.signature(f, mat)
+                    for p in extra {
+                        self.tenv = forget(self.tenv, p.name)
+                        self.bounds = forget_bounds(self.bounds, p.name)
+                    }
+                    var declared = false
+                    for x in self.traits[ti].methods {
+                        if x.name == f.name { declared = true }
+                    }
+                    if declared {
+                        self.err(mat, "method `{f.name}` is already declared by `{t.name}`")
+                        continue
+                    }
+                    if extra.len > 0 { self.traits[ti].own_params.push(OwnParams(f.name, extra)) }
+                    if let Some(mutable) = ref_kind(f) { self.traits[ti].refs.push(RefKind(f.name, mutable)) }
+                    self.traits[ti].methods.push(TraitMethod(f.name, signed.sig, signed.self_mode))
+                    if has_expr(f.body) { self.traits[ti].defaults.push(Default(f.name, di, mi)) }
+                }
+                _ => {}
+            }
+        }
+        self.self_ty = None
+        self.leave_generic()
+    }
+
+    // Pass 3, second half: the signatures of functions and methods, and
+    // what each `impl` gives its trait.
+    fn pass_signatures(mut self) {
+        var required: [Required] = []
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            let at = Span(d.line, d.col)
+            match d.kind {
+                parser.DeclKind.Fn(f) => {
+                    let idx = self.fn_of_decl[di]
+                    if idx < 0 { continue }
+                    if f.generics.len == 0 {
+                        let signed = self.signature(f, at)
+                        self.fns[idx].sig = signed.sig
+                        continue
+                    }
+                    match self.type_params(f.generics, at) {
+                        Some(tparams) => {
+                            self.enter_definition(tparams)
+                            let signed = self.signature(f, at)
+                            self.fns[idx].sig = signed.sig
+                            self.fns[idx].tparams = tparams
+                            self.leave_generic()
+                        }
+                        None => {
+                            self.fns[idx].generic = true
+                            self.skipped_decls.push("fn {f.name}")
+                        }
+                    }
+                }
+                parser.DeclKind.Impl(im) => {
+                    for r in self.impl_decl(di, im, at) { required.push(r) }
+                }
+                _ => {}
+            }
+        }
+        // A type that implements a trait implements what the trait requires.
+        for r in required {
+            let key = self.key(r.ty)
+            if !has_args(self.implementations(r.ty, r.sup.tr), r.sup.args) {
+                let tname = self.traits[r.tr].name
+                let sname = self.show_bound(r.sup)
+                self.err(r.at, "`{tname}` requires `{sname}`, which `{key}` does not implement: add `impl {sname} for {key}`")
+            }
+        }
+    }
+
+    // The methods of one `impl`. Gives back what its trait requires the
+    // type to implement as well.
+    fn impl_decl(mut self, di: int, im: parser.ImplDecl, at: Span) -> [Required] {
+        var required: [Required] = []
+        var tparams: [TParam] = []
+        match self.type_params(im.generics, at) {
+            Some(ps) => {
+                tparams = ps
+            }
+            None => {
+                self.skipped_decls.push("generic impl")
+                return required
+            }
+        }
+        self.enter_definition(tparams)
+        let ty = self.resolve(im.ty, at)
+        if is_unknown(ty) {
+            self.leave_generic()
+            return required
+        }
+        // A generic type has one `impl` for all of its type arguments.
+        var targs: [types.Ty] = []
+        match ty {
+            types.Ty.Struct(_, a) => {
+                targs = a
+            }
+            types.Ty.Enum(_, a) => {
+                targs = a
+            }
+            _ => {}
+        }
+        var plain = targs.len == tparams.len
+        if plain {
+            for k in 0..targs.len {
+                if targs[k] != types.Ty.Param(tparams[k].name) { plain = false }
+            }
+        }
+        if !plain {
+            let shown = self.show(ty)
+            self.err(at, "an `impl` for `{shown}` is not supported: a generic `impl` must be for a generic struct or enum and name all of its parameters, as in `impl[T] List[T]`")
+            self.leave_generic()
+            return required
+        }
+        let key = self.key(ty)
+        var bound: Bound? = None
+        if let Some(tr) = im.of_trait { bound = self.trait_of(tr, at) }
+        var suffix = ""
+        if let Some(b) = bound { suffix = self.suffix_of(self.show_bound(b), b) }
+        self.set_suffix(di, suffix)
+        let count = im.decls.len as int
+        for mi in 0..count {
+            let m = im.decls[mi]
+            let mat = Span(m.line, m.col)
+            match m.kind {
+                parser.DeclKind.Fn(f) => {
+                    var extra: [TParam] = []
+                    match self.type_params(f.generics, mat) {
+                        Some(ps) => {
+                            extra = ps
+                        }
+                        None => {
+                            self.skipped_decls.push("fn {key}.{f.name}")
+                            continue
+                        }
+                    }
+                    for p in extra {
+                        if has_tparam(tparams, p.name) {
+                            self.err(mat, "type parameter `{p.name}` is already a parameter of the `impl`")
+                            break
+                        }
+                    }
+                    self.enter_definition(extra)
+                    self.self_ty = Some(ty)
+                    let signed = self.signature(f, mat)
+                    self.self_ty = None
+                    self.leave_generic()
+                    self.enter_definition(tparams)
+                    let mangled = "{f.name}{suffix}"
+                    if self.method_index(key, mangled) >= 0 {
+                        self.err(mat, "method `{f.name}` is already defined for `{key}`")
+                    } else {
+                        if suffix != "" {
+                            if let Some(b) = bound { self.add_overload(key, f.name, mangled, b) }
+                        }
+                    }
+                    var all: [TParam] = []
+                    for p in tparams { all.push(p) }
+                    for p in extra { all.push(p) }
+                    self.set_method(key, mangled, Method(signed.sig, signed.self_mode, all, di, mi, ty, None, [], None))
+                }
+                _ => {}
+            }
+        }
+        if has_type(im.of_trait) {
+            if let Some(b) = self.conformance(bound, ty, key, tparams, di, at) {
+                let sups = self.with_supers(b)
+                for k in 1..sups.len { required.push(Required(b.tr, sups[k], ty, at)) }
+            }
+        }
+        self.leave_generic()
+        self.impl_tys.push(ImplTy(di, ty))
+        required
+    }
+
+    fn set_suffix(mut self, decl: int, suffix: str) {
+        for k in 0..self.suffixes.len {
+            if self.suffixes[k].decl == decl {
+                self.suffixes[k] = Suffix(decl, suffix)
+                return
+            }
+        }
+        self.suffixes.push(Suffix(decl, suffix))
+    }
+
+    // Checks that an `impl Trait for Type` gives what the trait asks for.
+    fn conformance(mut self, given: Bound?, ty: types.Ty, key: str, tparams: [TParam], at_decl: int, at: Span) -> Bound? {
+        var bound = Bound(0, [])
+        match given {
+            Some(b) => {
+                bound = b
+            }
+            None => {
+                self.skipped_decls.push("conformance of `{key}` to a trait that is not checked")
+                return None
+            }
+        }
+        let t = bound.tr
+        let shown = self.show_bound(bound)
+        let suffix = self.suffix_of(shown, bound)
+        // A type implements a trait once for each choice of type arguments.
+        let ei = self.impls_index(t, key)
+        if ei >= 0 {
+            var again = false
+            var loose = !all_concrete(bound.args)
+            for o in self.trait_impls[ei].infos {
+                if same_tys(o.targs, bound.args) { again = true }
+                if !all_concrete(o.targs) { loose = true }
+            }
+            if again {
+                self.err(at, "`{key}` already implements `{shown}`")
+                return None
+            }
+            if loose {
+                let tname = self.traits[t].name
+                self.err(at, "`{key}` already implements `{tname}`: to implement it again, every `impl` must give the trait type arguments without type parameters")
+                return None
+            }
+        }
+        var trait_env: [types.Binding] = []
+        var env: [types.Binding] = []
+        let names = self.traits[t].tparams
+        for k in 0..names.len {
+            if k < bound.args.len {
+                trait_env.push(types.Binding(names[k], bound.args[k]))
+                types.define(mut env, names[k], bound.args[k])
+            }
+        }
+        types.define(mut env, "Self", ty)
+        let wanted_methods = self.traits[t].methods
+        for tm in wanted_methods {
+            let name = tm.name
+            var extra: [TParam] = []
+            for o in self.traits[t].own_params {
+                if o.name == name && extra.len == 0 { extra = o.tparams }
+            }
+            var want = types.subst_sig(tm.sig, env)
+            var default: Place? = None
+            for d in self.traits[t].defaults {
+                if d.name == name {
+                    default = Some(Place(d.decl, d.method))
+                    break
+                }
+            }
+            let mangled = "{name}{suffix}"
+            let mi = self.method_index(key, mangled)
+            if mi < 0 {
+                match default {
+                    Some(d) => {
+                        var all: [TParam] = []
+                        for p in tparams { all.push(p) }
+                        for p in extra { all.push(p) }
+                        let m = Method(want, tm.self_mode, all, at_decl, -1, ty, Some(d), trait_env, Some(bound))
+                        if suffix != "" { self.add_overload(key, name, mangled, bound) }
+                        self.set_method(key, mangled, m)
+                    }
+                    None => self.err(at, "`impl {shown} for {key}` is missing the method `{name}`")
+                }
+                continue
+            }
+            let m = self.methods[mi].m
+            // The method may name its own type parameters differently.
+            var mine: [TParam] = []
+            for k in tparams.len..m.tparams.len { mine.push(m.tparams[k]) }
+            var rename: [types.Binding] = []
+            for k in 0..extra.len {
+                if k < mine.len { types.define(mut rename, extra[k].name, types.Ty.Param(mine[k].name)) }
+            }
+            want = types.subst_sig(want, rename)
+            var generics = mine.len == extra.len
+            if generics {
+                for k in 0..extra.len {
+                    var moved: [Bound] = []
+                    for b in extra[k].bounds { moved.push(Bound(b.tr, subst_all(subst_all(b.args, env), rename))) }
+                    if !same_bounds(moved, mine[k].bounds) { generics = false }
+                }
+            }
+            var same = generics && same_mode(m.self_mode, tm.self_mode) && m.sig.ret == want.ret && m.sig.params.len == want.params.len
+            if same {
+                for k in 0..want.params.len {
+                    if m.sig.params[k].mode != want.params[k].mode || m.sig.params[k].ty != want.params[k].ty { same = false }
+                }
+            }
+            var wanted: bool? = None
+            for r in self.traits[t].refs {
+                if r.name == name {
+                    wanted = Some(r.mutable)
+                    break
+                }
+            }
+            if !same || !same_flag(self.method_ref(m), wanted) { self.err(at, "method `{name}` of `{key}` does not have the signature `{shown}` declares") }
+        }
+        let info = ImplInfo(bound.args, ty, tparams)
+        let at_impls = self.impls_index(t, key)
+        if at_impls >= 0 {
+            self.trait_impls[at_impls].infos.push(info)
+        } else {
+            var infos: [ImplInfo] = []
+            infos.push(info)
+            self.trait_impls.push(ImplsEntry(t, key, infos))
+        }
+        Some(bound)
+    }
+}
+
+fn has_args(all: [Bound], args: [types.Ty]) -> bool {
+    for b in all {
+        if same_tys(b.args, args) { return true }
+    }
+    false
+}
+
+// Checks the declarations of a loaded program.
+pub fn declarations(p: load.Program) -> Checker {
+    var module_of: [int] = []
+    var fn_of_decl: [int] = []
+    for d in p.file.decls {
+        module_of.push(0)
+        fn_of_decl.push(-1)
+    }
+    var c = Checker(
+        decls: p.file.decls,
+        modules: p.modules,
+        tenv: [],
+        bounds: [],
+        traits: [],
+        trait_impls: [],
+        overloads: [],
+        suffixes: [],
+        alias_depth: 0,
+        externs: [],
+        extern_ids: [],
+        imports: [],
+        structs: [],
+        enums: [],
+        fns: [],
+        consts: [],
+        aliases: [],
+        module: 0,
+        module_of: module_of,
+        mods: [],
+        public: [],
+        globals: [],
+        methods: [],
+        decl_of_fn: [],
+        fn_of_decl: fn_of_decl,
+        impl_tys: [],
+        errors: [],
+        skipped_decls: [],
+        skipped_exprs: 0,
+        self_ty: None
+    )
+    c.pass_modules()
+    c.pass_names()
+    c.pass_fields()
+    c.pass_traits()
+    c.pass_signatures()
+    c
+}
+
+// ---- the declarations as text ----
+
+// What a line of the text is put in order by.
+struct SortKey { n: int, a: str, b: str, c: str }
+
+fn before(x: SortKey, y: SortKey) -> bool {
+    if x.n != y.n { return x.n < y.n }
+    if x.a != y.a { return x.a < y.a }
+    if x.b != y.b { return x.b < y.b }
+    x.c < y.c
+}
+
+// The positions of the keys, from the smallest key to the largest. Keys
+// that are equal stay in the order they came.
+fn order(keys: [SortKey]) -> [int] {
+    var at: [int] = []
+    for k in 0..keys.len { at.push(k as int) }
+    for i in 1..at.len {
+        var k = i
+        while k > 0 && before(keys[at[k]], keys[at[k - 1]]) {
+            let moved = at[k]
+            at[k] = at[k - 1]
+            at[k - 1] = moved
+            k -= 1
+        }
+    }
+    at
+}
+
+fn mode_text(m: parser.Mode) -> str {
+    match m {
+        parser.Mode.Let => "let"
+        parser.Mode.Mut => "mut"
+        parser.Mode.Own => "own"
+    }
+}
+
+fn self_text(m: parser.Mode?) -> str {
+    match m {
+        Some(x) => mode_text(x)
+        None => "_"
+    }
+}
+
+fn sig_text(s: types.Sig) -> str {
+    var ps: [str] = []
+    for p in s.params { ps.push("{mode_text(p.mode)} {p.name}: {types.plain(p.ty)} {p.optional}") }
+    "({text.join(ps, ", ")}) -> {types.plain(s.ret)}"
+}
+
+fn bound_text(b: Bound) -> str { "T{b.tr}[{types.texts(b.args)}]" }
+
+fn bounds_text(bs: [Bound]) -> str {
+    var out: [str] = []
+    for b in bs { out.push(bound_text(b)) }
+    text.join(out, " + ")
+}
+
+fn tparams_text(ts: [TParam]) -> str {
+    var out: [str] = []
+    for t in ts { out.push("{t.name}: {bounds_text(t.bounds)}") }
+    text.join(out, ", ")
+}
+
+fn dash(s: str) -> str { if s == "" { "-" } else { s } }
+
+// What the checker found in the declarations, as lines of text, in the
+// form `mou decls` prints it.
+pub fn dump(c: Checker) -> [str] {
+    var out: [str] = []
+    var keys: [SortKey] = []
+    var last = lexer.Error("", -1, -1)
+    // A mistake found twice is told once.
+    for e in sorted_errors(c.errors) {
+        if e.line == last.line && e.col == last.col && e.msg == last.msg { continue }
+        out.push("error {e.line}:{e.col} {e.msg}")
+        last = e
+    }
+    for m in 0..c.mods.len { out.push("module {m} {dash(c.mods[m])}") }
+    keys = []
+    for g in c.globals { keys.push(SortKey(g.module, g.name, "", "")) }
+    for k in order(keys) {
+        let g = c.globals[k]
+        let what = match g.what {
+            Global.Struct(i) => "struct {i}"
+            Global.Enum(i) => "enum {i}"
+            Global.Fn(i) => "fn {i}"
+            Global.Const(i) => "const {i}"
+            Global.Alias => "alias"
+            Global.Trait(i) => "trait {i}"
+            Global.Import => "import"
+            Global.Module(i) => "module {i}"
+        }
+        let vis = if c.is_public(g.module, g.name) { "pub" } else { "priv" }
+        out.push("global {g.module} {g.name} {vis} {what}")
+    }
+    keys = []
+    for i in c.imports { keys.push(SortKey(i.module, i.name, "", "")) }
+    for k in order(keys) {
+        let i = c.imports[k]
+        out.push("import {i.module} {i.name} {i.path}")
+    }
+    keys = []
+    for x in c.extern_ids { keys.push(SortKey(x.module, x.alias, x.name, "")) }
+    for k in order(keys) {
+        let x = c.extern_ids[k]
+        out.push("externid {x.module} {x.alias} {x.name} {x.id}")
+    }
+    for x in c.externs { out.push("extern {x.name} {x.header} {sig_text(x.sig)}") }
+    for i in 0..c.structs.len {
+        let s = c.structs[i]
+        out.push("struct {i} {s.name} {s.module} {s.generic} [{text.join(s.tparams, ", ")}]")
+        for f in s.fields { out.push("  field {f.name} {types.plain(f.ty)} {f.optional}") }
+    }
+    for i in 0..c.enums.len {
+        let e = c.enums[i]
+        out.push("enum {i} {e.name} {e.module} {e.generic} [{text.join(e.tparams, ", ")}]")
+        for v in e.variants {
+            var fields: [str] = []
+            for f in v.fields {
+                let label = match f.label {
+                    Some(n) => n
+                    None => "_"
+                }
+                fields.push("{label}: {types.plain(f.ty)}")
+            }
+            out.push("  variant {v.name} ({text.join(fields, ", ")})")
+        }
+    }
+    for i in 0..c.fns.len {
+        let f = c.fns[i]
+        out.push("fn {i} {c.decl_of_fn[i]} {f.generic} [{tparams_text(f.tparams)}] {sig_text(f.sig)}")
+    }
+    for i in 0..c.traits.len {
+        let t = c.traits[i]
+        out.push("trait {i} {t.name} [{text.join(t.tparams, ", ")}] {bounds_text(t.supers)}")
+        for m in t.methods { out.push("  method {m.name} {self_text(m.self_mode)} {sig_text(m.sig)}") }
+        for d in t.defaults { out.push("  default {d.name} {d.decl} {d.method}") }
+        for r in t.refs { out.push("  ref {r.name} {r.mutable}") }
+        for o in t.own_params { out.push("  own {o.name} [{tparams_text(o.tparams)}]") }
+    }
+    keys = []
+    for e in c.methods { keys.push(SortKey(0, e.key, e.name, "")) }
+    for k in order(keys) {
+        let e = c.methods[k]
+        let m = e.m
+        let default = match m.default {
+            Some(d) => "{d.decl}.{d.method}"
+            None => "_"
+        }
+        var env: [str] = []
+        for b in m.trait_env { env.push("{b.name}={types.plain(b.ty)}") }
+        let of = match m.of_trait {
+            Some(b) => bound_text(b)
+            None => "_"
+        }
+        out.push("method {e.key} {e.name} {self_text(m.self_mode)} [{tparams_text(m.tparams)}] {sig_text(m.sig)} at={m.at_decl}.{m.at_method} self={types.plain(m.self_ty)} default={default} env={text.join(env, ",")} of={of}")
+    }
+    keys = []
+    for i in c.impl_tys { keys.push(SortKey(i.decl, "", "", "")) }
+    for k in order(keys) {
+        let i = c.impl_tys[k]
+        out.push("impl {i.decl} {c.key(i.ty)} {types.plain(i.ty)}")
+    }
+    keys = []
+    for s in c.suffixes { keys.push(SortKey(s.decl, "", "", "")) }
+    for k in order(keys) {
+        let s = c.suffixes[k]
+        out.push("suffix {s.decl} {dash(s.suffix)}")
+    }
+    keys = []
+    for e in c.trait_impls { keys.push(SortKey(e.tr, e.key, "", "")) }
+    for k in order(keys) {
+        let e = c.trait_impls[k]
+        for info in e.infos { out.push("implements {e.tr} {e.key} [{types.texts(info.targs)}] {types.plain(info.self_ty)} [{tparams_text(info.tparams)}]") }
+    }
+    keys = []
+    for e in c.overloads { keys.push(SortKey(0, e.key, e.name, "")) }
+    for k in order(keys) {
+        let e = c.overloads[k]
+        for o in e.all { out.push("overload {e.key} {e.name} {o.mangled} {bound_text(o.bound)}") }
+    }
+    keys = []
+    for a in c.aliases { keys.push(SortKey(a.module, a.name, "", "")) }
+    for k in order(keys) {
+        let a = c.aliases[k]
+        let state = match a.state {
+            AliasState.Todo(i) => "todo {i}"
+            AliasState.Busy => "busy"
+            AliasState.Done(t) => "done {types.plain(t)}"
+        }
+        out.push("alias {a.module} {a.name} {state}")
+    }
+    for s in c.skipped_decls { out.push("skipped {s}") }
+    out.push("skipped_exprs {c.skipped_exprs}")
+    out
+}
+
+// The errors by line and column. Those of one place stay in the order
+// they were found.
+fn sorted_errors(errors: [lexer.Error]) -> [lexer.Error] {
+    var out: [lexer.Error] = []
+    for k in order_by_place(errors) { out.push(errors[k]) }
+    out
+}
+
+fn order_by_place(errors: [lexer.Error]) -> [int] {
+    var at: [int] = []
+    for k in 0..errors.len { at.push(k as int) }
+    for i in 1..at.len {
+        var k = i
+        while k > 0 && earlier(errors[at[k]], errors[at[k - 1]]) {
+            let moved = at[k]
+            at[k] = at[k - 1]
+            at[k - 1] = moved
+            k -= 1
+        }
+    }
+    at
+}
+
+fn earlier(x: lexer.Error, y: lexer.Error) -> bool {
+    if x.line != y.line { return x.line < y.line }
+    x.col < y.col
+}

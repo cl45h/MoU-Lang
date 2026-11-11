@@ -1,0 +1,14 @@
+trait Base { fn base(self) -> int }
+trait Mid: Base { fn mid(self) -> int { self.base() } }
+trait Top[T]: Mid { fn top(self) -> T }
+struct S { x: int }
+struct W[T] { x: T }
+impl Top[str] for S { fn top(self) -> str { "" } }
+impl Mid for S { }
+impl[T] Top[T] for W[T] { fn top(self) -> T { self.x } }
+impl[T] Mid for W[T] { fn mid(self) -> int { 1 } }
+impl[T] Base for W[T] { fn base(self) -> int { 1 } }
+impl Base for str { fn base(self) -> int { 1 } }
+impl Mid for str { }
+fn use_it[T: Top[int] + Base](x: T, d: dyn Top[int], e: dyn Top) -> int { 1 }
+fn main() { }
