@@ -1,0 +1,1248 @@
+//! C backend: turns the MIR into one self-contained C file.
+//!
+//! Compound values keep the tagged representation the interpreter uses,
+//! through the runtime in `runtime.c`, so native programs behave exactly
+//! like `mou run`. Locals that hold integers of 64 bits or less, booleans
+//! or `f64` are plain C variables, and arrays of those are read and written
+//! inline.
+
+use std::fmt::Write;
+
+use crate::mir::*;
+
+const RUNTIME: &str = include_str!("runtime.c");
+
+const KINDS: &[&str] = &["lit", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize"];
+
+fn kind(k: &str) -> usize {
+    KINDS.iter().position(|x| *x == k).unwrap_or(4)
+}
+
+fn num(n: Num) -> String {
+    match n {
+        Num::Int(k) => kind(k).to_string(),
+        _ => "-1".into(),
+    }
+}
+
+/// A C string literal holding the bytes of `s`.
+fn quote(s: &str) -> String {
+    let mut out = String::from("\"");
+    for b in s.bytes() {
+        match b {
+            b'"' | b'\\' | b'?' => write!(out, "\\{}", b as char).unwrap(),
+            0x20..=0x7E => out.push(b as char),
+            _ => write!(out, "\\{b:03o}").unwrap(),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn conv_code(c: &Conv) -> String {
+    let opt = |c: &Option<Box<Conv>>| c.as_ref().map_or("_".to_string(), |c| conv_code(c));
+    match c {
+        Conv::Fit(k) => format!("F{}", (b'a' + kind(k) as u8) as char),
+        Conv::ToFloat(single) => if *single { "s" } else { "d" }.to_string(),
+        Conv::Wrap(inner) => format!("W{}", opt(inner)),
+        Conv::Inside(c) => format!("I{}", conv_code(c)),
+        Conv::Elems(c) => format!("E{}", conv_code(c)),
+        Conv::Tuple(cs) => {
+            let parts: String = cs.iter().map(|c| c.as_ref().map_or("_".to_string(), conv_code)).collect();
+            format!("T{}{parts}", (b'a' + cs.len() as u8) as char)
+        }
+        Conv::Res(ok, err) => format!("R{}{}", opt(ok), opt(err)),
+    }
+}
+
+fn constant(v: &Value) -> Result<String, String> {
+    Ok(match v {
+        Value::Int(i) => match i64::try_from(*i) {
+            Ok(i64::MIN) => "kint(INT64_MIN)".into(),
+            Ok(small) => format!("kint({small}LL)"),
+            Err(_) => format!("kint2(0x{:x}ULL, 0x{:x}ULL)", (*i as u128 >> 64) as u64, *i as u128 as u64),
+        },
+        Value::Float(f) => format!("kf64_bits(0x{:016x}ULL)", f.to_bits()),
+        Value::F32(f) => format!("kf32((float)kf64_bits(0x{:016x}ULL).u.f)", (*f as f64).to_bits()),
+        Value::Bool(b) => format!("kbool({})", *b as u8),
+        Value::Char(c) => format!("kchar({}u)", *c as u32),
+        Value::Str(s) => format!("kstr({}, {})", quote(s), s.len()),
+        Value::Unit => "KUNIT".into(),
+        Value::None => "KNONE".into(),
+        Value::Enum(e, variant, fields) if fields.is_empty() => format!("kagg(T_ENUM, {e}, {variant}, 0, NULL)"),
+        Value::Fn(f) => format!("kfn({f})"),
+        Value::Tuple(vs) => format!("kagg(T_TUPLE, 0, 0, {})", constants(vs)?),
+        Value::Struct(i, vs) => format!("kagg(T_STRUCT, {i}, 0, {})", constants(vs)?),
+        Value::Enum(e, variant, vs) => format!("kagg(T_ENUM, {e}, {variant}, {})", constants(vs)?),
+        Value::Array(vs) => format!("kagg(T_ARRAY, 0, 0, {})", constants(vs)?),
+        Value::Some(v) => format!("kbox(T_SOME, {})", constant(v)?),
+        Value::Ok(v) => format!("kbox(T_OK, {})", constant(v)?),
+        Value::Err(v) => format!("kbox(T_ERR, {})", constant(v)?),
+        other => return Err(format!("the C backend cannot write the constant {other:?}")),
+    })
+}
+
+/// The C type of an integer type of the language.
+fn c_int(kind: &str) -> String {
+    match kind {
+        "isize" => "ptrdiff_t".into(),
+        "usize" => "size_t".into(),
+        k if k.starts_with('u') => format!("uint{}_t", &k[1..]),
+        k => format!("int{}_t", &k[1..]),
+    }
+}
+
+/// The items of a constant, as the last arguments of `kagg`.
+fn constants(vs: &[Value]) -> Result<String, String> {
+    if vs.is_empty() {
+        return Ok("0, NULL".into());
+    }
+    let parts: Result<Vec<String>, String> = vs.iter().map(constant).collect();
+    Ok(format!("{}, (kv[]){{{}}}", vs.len(), parts?.join(", ")))
+}
+
+/// The projections of a place as a C array, and how many there are.
+fn steps(cx: &Cx, p: &Place) -> Result<(usize, String), String> {
+    let mut parts = Vec::new();
+    for pr in &p.proj {
+        parts.push(match pr {
+            Proj::Field(k) => format!("{{0, {k}}}"),
+            Proj::Index(Operand::Const(Value::Int(i))) => format!("{{1, kidxc({i})}}"),
+            Proj::Index(Operand::Place(i)) if matches!(cx.rep(i), Rep::Int(_)) => format!("{{1, kidxc((i128)s{})}}", i.local),
+            Proj::Index(Operand::Place(i)) if i.proj.is_empty() => format!("{{1, kidx(&L[{}])}}", i.local),
+            Proj::Index(_) => return Err("the C backend needs an index to be a local or a constant".into()),
+            Proj::Path(_) => return Err("the C backend cannot follow the result of a `ref mut` function here".into()),
+        });
+    }
+    Ok((parts.len(), format!("(kstep[]){{{}}}", parts.join(", "))))
+}
+
+/// The arguments that tell the runtime where a place is.
+fn target(cx: &Cx, p: &Place) -> Result<String, String> {
+    if p.proj.is_empty() {
+        return Ok(format!("&L[{}], 0, NULL", p.local));
+    }
+    let (n, s) = steps(cx, p)?;
+    Ok(format!("&L[{}], {n}, {s}", p.local))
+}
+
+/// An expression that yields a new reference to the operand's value.
+fn operand(cx: &Cx, op: &Operand) -> Result<String, String> {
+    match op {
+        Operand::Const(v) => constant(v),
+        Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] != Rep::Boxed => Ok(cx.boxed(p.local)),
+        Operand::Place(p) if p.proj.is_empty() => Ok(format!("kretain(L[{}])", p.local)),
+        Operand::Place(p) => {
+            if let Some((base, i)) = cx.item(p, false)? {
+                return Ok(format!("kitem({base}, {i})"));
+            }
+            if let Some((base, i, f)) = cx.field_item(p, false)? {
+                return Ok(format!("kitem_field({base}, {i}, {f})"));
+            }
+            if let Some(ptr) = cx.ptr(p.local, &p.proj, false) {
+                return Ok(format!("kretain(*{ptr})"));
+            }
+            if let Some((Proj::Path(l), before)) = p.proj.split_last() {
+                if let Some(base) = cx.walk(p.local, before, false) {
+                    return Ok(format!("kpath_get({base}, &L[{l}])"));
+                }
+            }
+            let (n, s) = steps(cx, p)?;
+            Ok(format!("kread(&L[{}], {n}, {s})", p.local))
+        }
+    }
+}
+
+fn list(cx: &Cx, ops: &[Operand]) -> Result<String, String> {
+    if ops.is_empty() {
+        return Ok("0, NULL".into());
+    }
+    let parts: Result<Vec<String>, String> = ops.iter().map(|o| operand(cx, o)).collect();
+    Ok(format!("{}, (kv[]){{{}}}", ops.len(), parts?.join(", ")))
+}
+
+fn store(cx: &Cx, p: &Place, value: &str) -> Result<String, String> {
+    if p.proj.is_empty() {
+        return Ok(format!("kset(&L[{}], {value});", p.local));
+    }
+    // The value is computed first: it may read what the place is part of.
+    if let Some((base, i)) = cx.item(p, true)? {
+        return Ok(format!("{{ kv v_ = {value}; kitem_set({base}, {i}, v_); }}"));
+    }
+    if let Some((base, i, f)) = cx.field_item(p, true)? {
+        return Ok(format!("{{ kv v_ = {value}; kitem_field_set({base}, {i}, {f}, v_); }}"));
+    }
+    if let Some((Proj::Path(l), before)) = p.proj.split_last() {
+        if let Some(base) = cx.walk(p.local, before, true) {
+            return Ok(format!("{{ kv v_ = {value}; kpath_set({base}, &L[{l}], v_); }}"));
+        }
+    }
+    if let Some(ptr) = cx.ptr(p.local, &p.proj, true) {
+        return Ok(format!("{{ kv v_ = {value}; kset({ptr}, v_); }}"));
+    }
+    let (n, s) = steps(cx, p)?;
+    Ok(format!("kwrite(&L[{}], {n}, {s}, {value});", p.local))
+}
+
+fn binop(op: BinOp) -> &'static str {
+    use BinOp::*;
+    match op {
+        Add => "O_ADD",
+        Sub => "O_SUB",
+        Mul => "O_MUL",
+        Div => "O_DIV",
+        Rem => "O_REM",
+        AddWrap => "O_ADDW",
+        SubWrap => "O_SUBW",
+        MulWrap => "O_MULW",
+        AddSat => "O_ADDS",
+        SubSat => "O_SUBS",
+        MulSat => "O_MULS",
+        Shl => "O_SHL",
+        Shr => "O_SHR",
+        BitAnd => "O_AND",
+        BitOr => "O_OR",
+        BitXor => "O_XOR",
+        Eq => "O_EQ",
+        Ne => "O_NE",
+        Lt => "O_LT",
+        Le => "O_LE",
+        Gt => "O_GT",
+        Ge => "O_GE",
+    }
+}
+
+fn rvalue(cx: &Cx, rv: &Rvalue) -> Result<String, String> {
+    let o = |op: &Operand| operand(cx, op);
+    Ok(match rv {
+        Rvalue::Use(a) => o(a)?,
+        Rvalue::Unary(op, n, a) => {
+            let op = match op {
+                UnOp::Neg => "U_NEG",
+                UnOp::Not => "U_NOT",
+                UnOp::BitNot => "U_BITNOT",
+            };
+            format!("kun({op}, {}, {})", num(*n), o(a)?)
+        }
+        Rvalue::Binary(op, n, a, b) => format!("kbin({}, {}, {}, {})", binop(*op), num(*n), o(a)?, o(b)?),
+        Rvalue::CastInt(a, k) => format!("kcast_int({}, {})", o(a)?, kind(k)),
+        Rvalue::CastFloat(a, single) => format!("kcast_float({}, {})", o(a)?, *single as u8),
+        Rvalue::Convert(a, c) => format!("kconv({}, {})", o(a)?, quote(&conv_code(c))),
+        Rvalue::Tuple(ops) => format!("kagg(T_TUPLE, 0, 0, {})", list(cx, ops)?),
+        Rvalue::Struct(i, ops) => format!("kagg(T_STRUCT, {i}, 0, {})", list(cx, ops)?),
+        Rvalue::Enum(e, v, ops) => format!("kagg(T_ENUM, {e}, {v}, {})", list(cx, ops)?),
+        Rvalue::Array(ops) => format!("kagg(T_ARRAY, 0, 0, {})", list(cx, ops)?),
+        Rvalue::Repeat(v, n) => format!("krepeat({}, {})", o(v)?, o(n)?),
+        Rvalue::Some(a) => format!("kbox(T_SOME, {})", o(a)?),
+        Rvalue::Ok(a) => format!("kbox(T_OK, {})", o(a)?),
+        Rvalue::Err(a) => format!("kbox(T_ERR, {})", o(a)?),
+        Rvalue::Is(a, tag) => format!("kis({}, {tag})", o(a)?),
+        Rvalue::Len(a) => format!("klength({})", o(a)?),
+        Rvalue::Push(p, a) => match (cx.ptr(p.local, &p.proj, true), cx.known_bool(a), cx.known_int(a)) {
+            (Some(ptr), Some(t), _) => format!("kpush_bool({ptr}, {t})"),
+            (Some(ptr), _, Some(x)) => format!("kpush_int({ptr}, (i128)({x}))"),
+            (Some(ptr), _, _) if cx.known_f64(a).is_some() => format!("kpush_f64({ptr}, {})", cx.known_f64(a).unwrap_or_default()),
+            (Some(ptr), _, _) if p.proj.iter().any(|pr| matches!(pr, Proj::Path(_))) => format!("kpush({ptr}, 0, NULL, {})", o(a)?),
+            _ => format!("kpush({}, {})", target(cx, p)?, o(a)?),
+        },
+        Rvalue::Pop(p) => match cx.ptr(p.local, &p.proj, true) {
+            Some(ptr) if p.proj.iter().any(|pr| matches!(pr, Proj::Path(_))) => format!("kpop({ptr}, 0, NULL)"),
+            _ => format!("kpop({})", target(cx, p)?),
+        },
+        Rvalue::Get(a, i) => format!("kget({}, {})", o(a)?, o(i)?),
+        Rvalue::Slice(b, r) => format!("kslice({}, {})", o(b)?, o(r)?),
+        Rvalue::Chars(a) => format!("kchars({})", o(a)?),
+        Rvalue::Const(i) => format!("kretain(KC[{i}])"),
+        Rvalue::RangeStart(r, _) => format!("krange_start({})", o(r)?),
+        Rvalue::RangeHas(r, i) => format!("krange_has({}, {})", o(r)?, o(i)?),
+        Rvalue::RangeLast(r, i) => format!("krange_last({}, {})", o(r)?, o(i)?),
+        Rvalue::Succ(v, n) => format!("ksucc({}, {})", o(v)?, num(*n)),
+        Rvalue::Closure(f, ops) => format!("kclosure({f}, {})", list(cx, ops)?),
+        Rvalue::Capture(k) => format!("kcapture(env, {k})"),
+        Rvalue::Uninit | Rvalue::Moved => "KUNIT".into(),
+        Rvalue::Format(_) => return Err("a formatted string is written as statements".into()),
+    })
+}
+
+// ---- machine integers ----
+//
+// A local that only ever holds integers of one kind of 64 bits or less, or
+// only booleans, is a plain C variable instead of a tagged value. Arithmetic
+// on it is written inline; the tagged helpers of the runtime remain the
+// slow path, which is where an overflow is reported.
+
+/// How a local is stored.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Rep {
+    /// Nothing is known yet.
+    Top,
+    /// Only integer literals so far: any integer kind fits.
+    AnyInt,
+    Int(&'static str),
+    Bool,
+    F64,
+    /// A tagged value, in `L`.
+    Boxed,
+}
+
+struct Cx {
+    reps: Vec<Rep>,
+}
+
+fn rep_type(r: Rep) -> &'static str {
+    match r {
+        Rep::Int(k) => ctype(k),
+        Rep::F64 => "double",
+        _ => "bool",
+    }
+}
+
+/// A machine value as a tagged one.
+fn tagged(r: Rep, value: &str) -> String {
+    match r {
+        Rep::Int(_) => format!("kint((i128)({value}))"),
+        Rep::F64 => format!("kf64({value})"),
+        _ => format!("kbool({value})"),
+    }
+}
+
+/// The machine signature of a function, when all of its parameters and its
+/// result are integers or booleans and it never changes a parameter (so
+/// there is nothing to hand back to the caller).
+fn direct_sig(f: &Func, fns: &[Func]) -> Option<(Vec<Rep>, Rep)> {
+    let ret = scalar_rep(f.ret);
+    if ret == Rep::Boxed || f.scalars.len() != f.params {
+        return None;
+    }
+    let reps = infer(f, fns);
+    let params: Vec<Rep> = reps[..f.params].to_vec();
+    if params.iter().any(|r| *r == Rep::Boxed) {
+        return None;
+    }
+    let written = f.blocks.iter().any(|b| {
+        b.stmts.iter().any(|st| st.place.local < f.params)
+            || matches!(&b.term, Term::Call { dest, writeback, .. }
+                if dest.local < f.params || writeback.iter().any(|(_, place)| place.local < f.params))
+    });
+    (!written).then_some((params, ret))
+}
+
+fn machine(k: &str) -> bool {
+    matches!(k, "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize")
+}
+
+fn ctype(k: &str) -> &'static str {
+    if k.starts_with('i') {
+        "int64_t"
+    } else {
+        "uint64_t"
+    }
+}
+
+/// A 128-bit constant that fits in 64 bits, as a C expression.
+fn wide(v: i128) -> String {
+    if v == i64::MIN as i128 {
+        "((i128)INT64_MIN)".into()
+    } else if v < 0 || v <= i64::MAX as i128 {
+        format!("((i128){v}LL)")
+    } else {
+        format!("((i128){v}ULL)")
+    }
+}
+
+/// The check that a result left the range of a kind narrower than its C type.
+fn narrow(k: &str, r: &str) -> String {
+    let (lo, hi) = bounds(k);
+    if lo == i64::MIN as i128 || hi == u64::MAX as i128 {
+        return String::new();
+    }
+    if lo == 0 {
+        format!(" || {r} > {hi}ULL")
+    } else {
+        format!(" || {r} < {lo}LL || {r} > {hi}LL")
+    }
+}
+
+fn scalar_rep(s: Option<Scalar>) -> Rep {
+    match s {
+        Some(Scalar::Int(k)) if machine(k) => Rep::Int(k),
+        Some(Scalar::Bool) => Rep::Bool,
+        Some(Scalar::F64) => Rep::F64,
+        _ => Rep::Boxed,
+    }
+}
+
+fn join(a: Rep, b: Rep) -> Rep {
+    use Rep::*;
+    match (a, b) {
+        (Top, x) | (x, Top) => x,
+        (AnyInt, Int(k)) | (Int(k), AnyInt) => Int(k),
+        (x, y) if x == y => x,
+        _ => Boxed,
+    }
+}
+
+fn is_cmp(op: BinOp) -> bool {
+    matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+}
+
+/// What an rvalue produces, given what is known about the locals.
+fn rep_of(rv: &Rvalue, reps: &[Rep]) -> Rep {
+    use Rep::*;
+    let int = |n: &Num| match n {
+        Num::Int(k) if machine(k) => Int(k),
+        _ => Boxed,
+    };
+    match rv {
+        Rvalue::Use(Operand::Const(Value::Int(i))) if i64::try_from(*i).is_ok() => AnyInt,
+        Rvalue::Use(Operand::Const(Value::Bool(_))) => Bool,
+        Rvalue::Use(Operand::Const(Value::Float(_))) => F64,
+        Rvalue::Binary(op, Num::F64, _, _) if !is_cmp(*op) => F64,
+        Rvalue::Unary(UnOp::Neg, Num::F64, _) | Rvalue::CastFloat(_, false) | Rvalue::Convert(_, Conv::ToFloat(false)) => F64,
+        Rvalue::Use(Operand::Place(p)) if p.proj.is_empty() => reps[p.local],
+        Rvalue::Binary(op, _, _, _) if is_cmp(*op) => Bool,
+        Rvalue::Binary(_, n, _, _) | Rvalue::Unary(UnOp::Neg | UnOp::BitNot, n, _) => int(n),
+        Rvalue::Unary(UnOp::Not, _, _) | Rvalue::Is(..) | Rvalue::RangeHas(..) | Rvalue::RangeLast(..) => Bool,
+        Rvalue::CastInt(_, k) | Rvalue::Convert(_, Conv::Fit(k)) if machine(k) => Int(k),
+        Rvalue::Len(_) => Int("usize"),
+        Rvalue::RangeStart(_, n) | Rvalue::Succ(_, n) => int(n),
+        Rvalue::Uninit | Rvalue::Moved => Top,
+        _ => Boxed,
+    }
+}
+
+/// Decides how every local of a function is stored.
+fn infer(f: &Func, fns: &[Func]) -> Vec<Rep> {
+    let mut reps = vec![Rep::Top; f.locals];
+    for l in 0..f.params.min(f.locals) {
+        reps[l] = scalar_rep(f.scalars.get(l).copied().flatten());
+    }
+    // A variable whose type is an integer or a boolean is stored as one,
+    // whatever its value is read from.
+    let mut typed = vec![false; f.locals];
+    for l in f.params..f.locals {
+        let r = scalar_rep(f.hints.get(l).copied().flatten());
+        if r != Rep::Boxed {
+            reps[l] = r;
+            typed[l] = true;
+        }
+    }
+    // A local with fields or items is a tagged value.
+    fn projected(op: &Operand, reps: &mut [Rep]) {
+        if let Operand::Place(p) = op {
+            through(p, reps);
+        }
+    }
+    fn through(p: &Place, reps: &mut [Rep]) {
+        if !p.proj.is_empty() {
+            reps[p.local] = Rep::Boxed;
+        }
+        for pr in &p.proj {
+            match pr {
+                Proj::Index(i) => projected(i, reps),
+                // The steps are an array, read where it is kept.
+                Proj::Path(l) => reps[*l] = Rep::Boxed,
+                Proj::Field(_) => {}
+            }
+        }
+    }
+    for b in &f.blocks {
+        for st in &b.stmts {
+            through(&st.place, &mut reps);
+            each_operand(&st.rv, &mut |op| projected(op, &mut reps));
+            if let Rvalue::Push(p, _) | Rvalue::Pop(p) = &st.rv {
+                reps[p.local] = Rep::Boxed;
+            }
+        }
+        match &b.term {
+            Term::Call { args, writeback, dest, .. } => {
+                args.iter().for_each(|a| projected(a, &mut reps));
+                through(dest, &mut reps);
+                for (_, place) in writeback {
+                    reps[place.local] = Rep::Boxed;
+                }
+            }
+            Term::Branch(op, _, _) | Term::Return(op) => projected(op, &mut reps),
+            _ => {}
+        }
+    }
+    loop {
+        let before = reps.clone();
+        for b in &f.blocks {
+            for st in &b.stmts {
+                if st.place.proj.is_empty() && !typed[st.place.local] {
+                    let l = st.place.local;
+                    reps[l] = join(reps[l], rep_of(&st.rv, &reps));
+                }
+            }
+            if let Term::Call { callee, dest, .. } = &b.term {
+                let produced = match callee {
+                    Callee::Fn(g) => scalar_rep(fns[*g].ret),
+                    _ => Rep::Boxed,
+                };
+                if !typed[dest.local] {
+                    reps[dest.local] = join(reps[dest.local], produced);
+                }
+            }
+        }
+        if reps == before {
+            break;
+        }
+    }
+    reps.iter()
+        .map(|r| match r {
+            Rep::Top => Rep::Boxed,
+            Rep::AnyInt => Rep::Int("i64"),
+            other => *other,
+        })
+        .collect()
+}
+
+/// Calls `visit` with every operand an rvalue reads.
+fn each_operand(rv: &Rvalue, visit: &mut dyn FnMut(&Operand)) {
+    use Rvalue::*;
+    match rv {
+        Use(a) | Unary(_, _, a) | CastInt(a, _) | CastFloat(a, _) | Convert(a, _) | Some(a) | Ok(a) | Err(a) | Is(a, _)
+        | Len(a) | Chars(a) | RangeStart(a, _) | Succ(a, _) | Push(_, a) => visit(a),
+        Binary(_, _, a, b) | Repeat(a, b) | Slice(a, b) | RangeHas(a, b) | RangeLast(a, b) | Get(a, b) => {
+            visit(a);
+            visit(b);
+        }
+        Tuple(ops) | Struct(_, ops) | Enum(_, _, ops) | Array(ops) | Closure(_, ops) => ops.iter().for_each(visit),
+        Format(parts) => parts.iter().for_each(|part| {
+            if let FmtPart::Val(o) = part {
+                visit(o)
+            }
+        }),
+        Pop(_) | Const(_) | Capture(_) | Uninit | Moved => {}
+    }
+}
+
+impl Cx {
+    fn rep(&self, p: &Place) -> Rep {
+        if p.proj.is_empty() {
+            self.reps[p.local]
+        } else {
+            Rep::Boxed
+        }
+    }
+
+    /// A C pointer to the tagged value a place holds.
+    fn ptr(&self, local: usize, proj: &[Proj], write: bool) -> Option<String> {
+        if self.reps[local] != Rep::Boxed {
+            return None;
+        }
+        // A place that ends in steps only known at run time may be a bare
+        // item of a packed array: it is read without taking its address.
+        if !write && matches!(proj.last(), Some(Proj::Path(_))) {
+            return None;
+        }
+        self.walk(local, proj, write)
+    }
+
+    /// A C pointer to a value that has parts: it is never a bare item.
+    fn walk(&self, local: usize, proj: &[Proj], write: bool) -> Option<String> {
+        if self.reps[local] != Rep::Boxed {
+            return None;
+        }
+        let mut s = format!("&L[{local}]");
+        for pr in proj {
+            match pr {
+                Proj::Path(l) => s = format!("kpath({s}, &L[{l}], {write})"),
+                Proj::Field(k) => s = format!("kfield({s}, {k}, {write})"),
+                Proj::Index(i) => match self.int(i) {
+                    Ok(i) => s = format!("kitemp({s}, (i128)({i}), {write})"),
+                    Err(_) => return None,
+                },
+            }
+        }
+        Some(s)
+    }
+
+    /// The array, the position and the field of a place that ends in a
+    /// field of an item: `xs[i].f`.
+    fn field_item(&self, p: &Place, write: bool) -> Result<Option<(String, String, usize)>, String> {
+        let [before @ .., Proj::Index(i), Proj::Field(f)] = p.proj.as_slice() else {
+            return Ok(None);
+        };
+        let Some(base) = self.walk(p.local, before, write) else {
+            return Ok(None);
+        };
+        Ok(Some((base, format!("(i128)({})", self.int(i)?), *f)))
+    }
+
+    /// The array and the position of a place that ends in an index.
+    fn item(&self, p: &Place, write: bool) -> Result<Option<(String, String)>, String> {
+        let Some((Proj::Index(i), before)) = p.proj.split_last() else {
+            return Ok(None);
+        };
+        let Some(base) = self.ptr(p.local, before, write) else {
+            return Ok(None);
+        };
+        Ok(Some((base, format!("(i128)({})", self.int(i)?))))
+    }
+
+    /// The operand as a C integer, when it is known to be one without
+    /// looking at a tag.
+    fn known_int(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Const(Value::Int(i)) if i64::try_from(*i).is_ok() || u64::try_from(*i).is_ok() => Some(wide(*i)),
+            Operand::Place(p) if matches!(self.rep(p), Rep::Int(_)) => Some(format!("s{}", p.local)),
+            _ => None,
+        }
+    }
+
+    /// The operand as a C boolean, when it is known to be one without
+    /// looking at a tag.
+    fn known_bool(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Const(Value::Bool(b)) => Some((*b as u8).to_string()),
+            Operand::Place(p) if self.rep(p) == Rep::Bool => Some(format!("s{}", p.local)),
+            _ => None,
+        }
+    }
+
+    /// The operand as a C double, when it is known to be one without
+    /// looking at a tag.
+    fn known_f64(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Const(Value::Float(f)) => Some(format!("kdbl(0x{:016x}ULL)", f.to_bits())),
+            Operand::Place(p) if self.rep(p) == Rep::F64 => Some(format!("s{}", p.local)),
+            _ => None,
+        }
+    }
+
+    /// The operand as a C double, where the types say it is an `f64`.
+    fn float(&self, op: &Operand) -> Result<String, String> {
+        if let Some(known) = self.known_f64(op) {
+            return Ok(known);
+        }
+        match op {
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.f", p.local)),
+            Operand::Place(p) => {
+                if let Some((base, i)) = self.item(p, false)? {
+                    return Ok(format!("kitem_f64({base}, {i})"));
+                }
+                if let Some((base, i, f)) = self.field_item(p, false)? {
+                    return Ok(format!("kitem_field_f64({base}, {i}, {f})"));
+                }
+                match self.ptr(p.local, &p.proj, false) {
+                    Some(ptr) => Ok(format!("{ptr}->u.f")),
+                    None => Ok(format!("({}).u.f", operand(self, op)?)),
+                }
+            }
+            _ => Ok(format!("({}).u.f", operand(self, op)?)),
+        }
+    }
+
+    /// An rvalue as a C double.
+    fn f64_rvalue(&self, rv: &Rvalue) -> Result<String, String> {
+        Ok(match rv {
+            Rvalue::Use(a) => self.float(a)?,
+            Rvalue::Uninit | Rvalue::Moved => "0".into(),
+            Rvalue::Binary(op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div), Num::F64, a, b) => {
+                let c = match op {
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    BinOp::Mul => "*",
+                    _ => "/",
+                };
+                format!("({} {c} {})", self.float(a)?, self.float(b)?)
+            }
+            Rvalue::Unary(UnOp::Neg, Num::F64, a) => format!("(-{})", self.float(a)?),
+            Rvalue::CastFloat(a, false) | Rvalue::Convert(a, Conv::ToFloat(false)) if self.known_int(a).is_some() => {
+                format!("(double)({})", self.known_int(a).unwrap_or_default())
+            }
+            _ => format!("({}).u.f", rvalue(self, rv)?),
+        })
+    }
+
+    /// The operand as a C integer, where the types say it is an integer.
+    fn int(&self, op: &Operand) -> Result<String, String> {
+        if let Some(known) = self.known_int(op) {
+            return Ok(known);
+        }
+        match op {
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.i", p.local)),
+            Operand::Place(p) => {
+                if let Some((base, i)) = self.item(p, false)? {
+                    return Ok(format!("kitem_int({base}, {i})"));
+                }
+                if let Some((base, i, f)) = self.field_item(p, false)? {
+                    return Ok(format!("kitem_field_int({base}, {i}, {f})"));
+                }
+                match self.ptr(p.local, &p.proj, false) {
+                    Some(ptr) => Ok(format!("{ptr}->u.i")),
+                    None => Ok(format!("({}).u.i", operand(self, op)?)),
+                }
+            }
+            _ => Ok(format!("({}).u.i", operand(self, op)?)),
+        }
+    }
+
+    fn truth(&self, op: &Operand) -> Result<String, String> {
+        match op {
+            Operand::Const(Value::Bool(b)) => Ok((*b as u8).to_string()),
+            Operand::Place(p) if self.rep(p) == Rep::Bool => Ok(format!("s{}", p.local)),
+            Operand::Place(p) if !p.proj.is_empty() => {
+                if let Some((base, i)) = self.item(p, false)? {
+                    return Ok(format!("kitem_bool({base}, {i})"));
+                }
+                if let Some((base, i, f)) = self.field_item(p, false)? {
+                    return Ok(format!("kitem_field_bool({base}, {i}, {f})"));
+                }
+                match self.ptr(p.local, &p.proj, false) {
+                    Some(ptr) => Ok(format!("ktruth(*{ptr})")),
+                    None => Ok(format!("ktruth({})", operand(self, op)?)),
+                }
+            }
+            _ => Ok(format!("ktruth({})", operand(self, op)?)),
+        }
+    }
+
+    /// An rvalue as a C integer of kind `k`.
+    fn int_rvalue(&self, rv: &Rvalue, k: &'static str) -> Result<String, String> {
+        let t = ctype(k);
+        let unboxed = |boxed: String| format!("({t})({boxed}).u.i");
+        let slow = |cx: &Cx| Ok::<String, String>(unboxed(rvalue(cx, rv)?));
+        Ok(match rv {
+            Rvalue::Use(a) => format!("({t})({})", self.int(a)?),
+            Rvalue::Uninit | Rvalue::Moved => "0".into(),
+            Rvalue::Len(Operand::Place(p)) if self.ptr(p.local, &p.proj, false).is_some() => {
+                format!("({t})klen_at({})", self.ptr(p.local, &p.proj, false).unwrap_or_default())
+            }
+            Rvalue::Binary(op, Num::Int(kind), a, b) if *kind == k => {
+                let (x, y) = (self.int(a)?, self.int(b)?);
+                // The slow path redoes the operation on tagged values, and
+                // reports the overflow or the division by zero.
+                let again = unboxed(format!("kbin({}, {}, kint((i128)(x_)), kint((i128)(y_)))", binop(*op), num(Num::Int(k))));
+                let builtin = match op {
+                    BinOp::Add => Some("add"),
+                    BinOp::Sub => Some("sub"),
+                    BinOp::Mul => Some("mul"),
+                    _ => None,
+                };
+                let head = format!("{t} x_ = ({t})({x}), y_ = ({t})({y}), r_;");
+                match (builtin, op) {
+                    (Some(name), _) => {
+                        format!("({{ {head} (__builtin_{name}_overflow(x_, y_, &r_){}) ? {again} : r_; }})", narrow(k, "r_"))
+                    }
+                    (None, BinOp::Div | BinOp::Rem) => {
+                        let c = if *op == BinOp::Div { "/" } else { "%" };
+                        let risky = if t == "int64_t" { "y_ == 0 || y_ == -1" } else { "y_ == 0" };
+                        format!("({{ {head} ({risky}) ? {again} : (r_ = x_ {c} y_, r_); }})")
+                    }
+                    _ => format!("({{ {head} (void)r_; {again}; }})"),
+                }
+            }
+            Rvalue::Succ(a, Num::Int(kind)) if *kind == k => {
+                let x = self.int(a)?;
+                let again = unboxed(format!("ksucc(kint((i128)(x_)), {})", num(Num::Int(k))));
+                format!("({{ {t} x_ = ({t})({x}), r_; (__builtin_add_overflow(x_, 1, &r_){}) ? {again} : r_; }})", narrow(k, "r_"))
+            }
+            Rvalue::CastInt(a, kind) if *kind == k => match self.known_int(a) {
+                Some(x) => {
+                    let (lo, hi) = bounds(k);
+                    let again = unboxed(format!("kcast_int(kint(v_), {})", self::kind(k)));
+                    format!("({{ i128 v_ = (i128)({x}); (v_ < {} || v_ > {}) ? {again} : ({t})v_; }})", wide(lo), wide(hi))
+                }
+                None => slow(self)?,
+            },
+            _ => slow(self)?,
+        })
+    }
+
+    /// An rvalue as a C boolean.
+    fn bool_rvalue(&self, rv: &Rvalue) -> Result<String, String> {
+        Ok(match rv {
+            Rvalue::Use(a) => self.truth(a)?,
+            Rvalue::Uninit | Rvalue::Moved => "0".into(),
+            Rvalue::Unary(UnOp::Not, _, a) => format!("!{}", self.truth(a)?),
+            Rvalue::Binary(op, _, a, b) if is_cmp(*op) => match (self.known_int(a), self.known_int(b)) {
+                (Some(x), Some(y)) => {
+                    let c = match op {
+                        BinOp::Eq => "==",
+                        BinOp::Ne => "!=",
+                        BinOp::Lt => "<",
+                        BinOp::Le => "<=",
+                        BinOp::Gt => ">",
+                        _ => ">=",
+                    };
+                    format!("((i128)({x}) {c} (i128)({y}))")
+                }
+                _ => match (self.known_f64(a), self.known_f64(b)) {
+                    (Some(x), Some(y)) => {
+                        let c = match op {
+                            BinOp::Eq => "==",
+                            BinOp::Ne => "!=",
+                            BinOp::Lt => "<",
+                            BinOp::Le => "<=",
+                            BinOp::Gt => ">",
+                            _ => ">=",
+                        };
+                        format!("({x} {c} {y})")
+                    }
+                    _ => format!("ktruth({})", rvalue(self, rv)?),
+                },
+            },
+            // The range stays where it is: only its upper bound is read.
+            Rvalue::RangeHas(Operand::Place(r), i) | Rvalue::RangeLast(Operand::Place(r), i)
+                if r.proj.is_empty() && self.reps[r.local] == Rep::Boxed && self.known_int(i).is_some() =>
+            {
+                let helper = if matches!(rv, Rvalue::RangeHas(..)) { "krange_has_int" } else { "krange_last_int" };
+                format!("{helper}(&L[{}], (i128)({}))", r.local, self.known_int(i).unwrap_or_default())
+            }
+            _ => format!("ktruth({})", rvalue(self, rv)?),
+        })
+    }
+
+    /// The statement that gives a local its value.
+    fn assign(&self, place: &Place, rv: &Rvalue) -> Result<String, String> {
+        match self.rep(place) {
+            Rep::Int(k) => Ok(format!("s{} = {};", place.local, self.int_rvalue(rv, k)?)),
+            Rep::Bool => Ok(format!("s{} = {};", place.local, self.bool_rvalue(rv)?)),
+            Rep::F64 => Ok(format!("s{} = {};", place.local, self.f64_rvalue(rv)?)),
+            _ => {
+                // A machine value goes into an array without being tagged.
+                if let (Rvalue::Use(op), Some((base, i))) = (rv, self.item(place, true)?) {
+                    if let Some(t) = self.known_bool(op) {
+                        return Ok(format!("kitem_set_bool({base}, {i}, {t});"));
+                    }
+                    if let Some(x) = self.known_int(op) {
+                        return Ok(format!("kitem_set_int({base}, {i}, (i128)({x}));"));
+                    }
+                    if let Some(x) = self.known_f64(op) {
+                        return Ok(format!("kitem_set_f64({base}, {i}, {x});"));
+                    }
+                }
+                if let (Rvalue::Use(op), Some((base, i, f))) = (rv, self.field_item(place, true)?) {
+                    if let Some(t) = self.known_bool(op) {
+                        return Ok(format!("kitem_field_set_bool({base}, {i}, {f}, {t});"));
+                    }
+                    if let Some(x) = self.known_int(op) {
+                        return Ok(format!("kitem_field_set_int({base}, {i}, {f}, (i128)({x}));"));
+                    }
+                    if let Some(x) = self.known_f64(op) {
+                        return Ok(format!("kitem_field_set_f64({base}, {i}, {f}, {x});"));
+                    }
+                }
+                store(self, place, &rvalue(self, rv)?)
+            }
+        }
+    }
+
+    /// Stores a tagged value the runtime produced.
+    fn take(&self, place: &Place, value: &str) -> Result<String, String> {
+        match self.rep(place) {
+            Rep::Int(k) => Ok(format!("s{} = ({})({value}).u.i;", place.local, ctype(k))),
+            Rep::Bool => Ok(format!("s{} = ktruth({value});", place.local)),
+            Rep::F64 => Ok(format!("s{} = ({value}).u.f;", place.local)),
+            _ => store(self, place, value),
+        }
+    }
+
+    /// A machine value of the given representation from an operand.
+    fn machine(&self, r: Rep, op: &Operand) -> Result<String, String> {
+        match r {
+            Rep::Int(k) => Ok(format!("({})({})", ctype(k), self.int(op)?)),
+            Rep::F64 => self.float(op),
+            _ => self.truth(op),
+        }
+    }
+
+    /// Stores a machine value a direct call produced.
+    fn take_machine(&self, place: &Place, r: Rep, value: &str) -> Result<String, String> {
+        match (self.rep(place), r) {
+            (Rep::Int(k), Rep::Int(_)) => Ok(format!("s{} = ({})({value});", place.local, ctype(k))),
+            (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) => Ok(format!("s{} = {value};", place.local)),
+            _ => self.take(place, &tagged(r, value)),
+        }
+    }
+
+    /// A local as a tagged value.
+    fn boxed(&self, l: usize) -> String {
+        match self.reps[l] {
+            Rep::Int(_) => format!("kint((i128)s{l})"),
+            Rep::Bool => format!("kbool(s{l})"),
+            Rep::F64 => format!("kf64(s{l})"),
+            _ => format!("L[{l}]"),
+        }
+    }
+}
+
+/// The C declaration of the machine version of a function.
+fn direct_head(i: usize, params: &[Rep], ret: Rep) -> String {
+    let ps: Vec<String> = params.iter().enumerate().map(|(l, r)| format!("{} s{l}", rep_type(*r))).collect();
+    format!("static {} g{i}({})", rep_type(ret), if ps.is_empty() { "void".to_string() } else { ps.join(", ") })
+}
+
+fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>]) -> Result<(), String> {
+    let cx = &Cx { reps: infer(f, fns) };
+    let n = f.locals.max(1);
+    let mine = direct[i].as_ref();
+    match mine {
+        Some((params, ret)) => writeln!(out, "{} {{", direct_head(i, params, *ret)).unwrap(),
+        None => writeln!(out, "static kv f{i}(kv *a, kv env) {{").unwrap(),
+    }
+    writeln!(out, "    kv L[{n}];").unwrap();
+    for (l, rep) in cx.reps.iter().enumerate() {
+        match rep {
+            _ if l < f.params && mine.is_some() => {}
+            Rep::Int(k) if l < f.params => writeln!(out, "    {} s{l} = ({})a[{l}].u.i;", ctype(k), ctype(k)).unwrap(),
+            Rep::Int(k) => writeln!(out, "    {} s{l} = 0;", ctype(k)).unwrap(),
+            Rep::Bool if l < f.params => writeln!(out, "    bool s{l} = a[{l}].u.t;").unwrap(),
+            Rep::Bool => writeln!(out, "    bool s{l} = false;").unwrap(),
+            Rep::F64 if l < f.params => writeln!(out, "    double s{l} = a[{l}].u.f;").unwrap(),
+            Rep::F64 => writeln!(out, "    double s{l} = 0;").unwrap(),
+            _ => {}
+        }
+    }
+    writeln!(out, "    kenter();").unwrap();
+    if mine.is_none() {
+        writeln!(out, "    (void)env;").unwrap();
+    }
+    // The slots of machine locals stay empty, so that releasing them is free.
+    for l in 0..n {
+        if cx.reps.get(l).is_some_and(|r| *r != Rep::Boxed) {
+            continue;
+        }
+        let init = if l < f.params { format!("a[{l}]") } else { "KUNIT".to_string() };
+        writeln!(out, "    L[{l}] = {init};").unwrap();
+    }
+    writeln!(out, "    goto b0;").unwrap();
+    for (b, block) in f.blocks.iter().enumerate() {
+        writeln!(out, "b{b}:;").unwrap();
+        // Nothing inside a block moves the position but the block itself.
+        let mut at = None;
+        let mut mark = |out: &mut String, span: crate::lexer::Span| {
+            if at != Some((span.line, span.col)) {
+                at = Some((span.line, span.col));
+                writeln!(out, "    KL({}, {});", span.line, ((i + 1) << 12) | (span.col as usize).min(4095)).unwrap();
+            }
+        };
+        for st in &block.stmts {
+            mark(out, st.span);
+            if let Rvalue::Format(parts) = &st.rv {
+                writeln!(out, "    {{").unwrap();
+                writeln!(out, "        ksb sb = {{0}};").unwrap();
+                for part in parts {
+                    match part {
+                        FmtPart::Lit(s) => writeln!(out, "        ksb_lit(&sb, {}, {});", quote(s), s.len()).unwrap(),
+                        FmtPart::Val(op) => writeln!(out, "        ksb_val(&sb, {});", operand(cx, op)?).unwrap(),
+                    }
+                }
+                writeln!(out, "        {}", cx.take(&st.place, "ksb_done(&sb)")?).unwrap();
+                writeln!(out, "    }}").unwrap();
+            } else {
+                writeln!(out, "    {}", cx.assign(&st.place, &st.rv)?).unwrap();
+            }
+        }
+        mark(out, block.span);
+        match &block.term {
+            Term::Goto(t) => writeln!(out, "    goto b{t};").unwrap(),
+            Term::Branch(c, yes, no) => writeln!(out, "    if ({}) goto b{yes}; else goto b{no};", cx.truth(c)?).unwrap(),
+            Term::Call { callee, args, writeback, dest, next } => {
+                writeln!(out, "    {{").unwrap();
+                let fast = match callee {
+                    Callee::Fn(g) => direct[*g].as_ref().filter(|(params, _)| params.len() == args.len()),
+                    _ => None,
+                };
+                if let (Some((params, ret)), Callee::Fn(g)) = (fast, callee) {
+                    let values: Result<Vec<String>, String> = params.iter().zip(args).map(|(r, a)| cx.machine(*r, a)).collect();
+                    writeln!(out, "        {} r = g{g}({});", rep_type(*ret), values?.join(", ")).unwrap();
+                    writeln!(out, "        {}", cx.take_machine(dest, *ret, "r")?).unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(out, "    goto b{next};").unwrap();
+                    continue;
+                }
+                if let Callee::Print | Callee::Panic = callee {
+                    let text = args.first().map_or(Ok("KUNIT".to_string()), |a| operand(cx, a))?;
+                    let helper = if *callee == Callee::Print { "kprint" } else { "kpanic_with" };
+                    writeln!(out, "        kv r = {helper}({text});").unwrap();
+                } else if let Callee::Extern(x) = callee {
+                    let x = &externs[*x];
+                    let mut parts = Vec::new();
+                    for (a, t) in args.iter().zip(&x.params) {
+                        let v = operand(cx, a)?;
+                        parts.push(match *t {
+                            "bool" => format!("({v}).u.t"),
+                            "f64" => format!("({v}).u.f"),
+                            "f32" => format!("({v}).u.g"),
+                            int => format!("({})({v}).u.i", c_int(int)),
+                        });
+                    }
+                    let call = format!("{}({})", x.name, parts.join(", "));
+                    let r = match x.ret {
+                        "unit" => format!("({call}, KUNIT)"),
+                        "bool" => format!("kbool({call})"),
+                        "f64" => format!("kf64({call})"),
+                        "f32" => format!("kf32({call})"),
+                        _ => format!("kint((i128)({call}))"),
+                    };
+                    writeln!(out, "        kv r = {r};").unwrap();
+                } else if let Callee::Native(name) = callee {
+                    let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
+                    writeln!(out, "        kv r = k{}({});", name.replace('.', "_"), parts?.join(", ")).unwrap();
+                } else {
+                    let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
+                    let parts = parts?;
+                    let init = if parts.is_empty() { "KUNIT".to_string() } else { parts.join(", ") };
+                    writeln!(out, "        kv A[{}] = {{{init}}};", parts.len().max(1)).unwrap();
+                    match callee {
+                        Callee::Fn(f) => writeln!(out, "        kv r = f{f}(A, KUNIT);").unwrap(),
+                        Callee::Indirect(op) => writeln!(out, "        kv r = kcall({}, A);", operand(cx, op)?).unwrap(),
+                        Callee::Print | Callee::Panic | Callee::Native(_) | Callee::Extern(_) => {}
+                    }
+                    // The callee left the final values of its parameters in `A`.
+                    for k in 0..parts.len() {
+                        match writeback.iter().find(|(i, _)| *i == k) {
+                            Some((_, place)) => writeln!(out, "        {}", cx.take(place, &format!("A[{k}]"))?).unwrap(),
+                            None => writeln!(out, "        krelease(A[{k}]);").unwrap(),
+                        }
+                    }
+                }
+                writeln!(out, "        {}", cx.take(dest, "r")?).unwrap();
+                writeln!(out, "    }}").unwrap();
+                writeln!(out, "    goto b{next};").unwrap();
+            }
+            Term::Return(op) => {
+                writeln!(out, "    {{").unwrap();
+                match mine {
+                    Some((_, ret)) => writeln!(out, "        {} r = {};", rep_type(*ret), cx.machine(*ret, op)?).unwrap(),
+                    None => writeln!(out, "        kv r = {};", operand(cx, op)?).unwrap(),
+                }
+                for l in 0..n {
+                    if l < f.params && mine.is_some() {
+                        continue;
+                    }
+                    if l < f.params {
+                        writeln!(out, "        a[{l}] = {};", cx.boxed(l)).unwrap();
+                    } else if cx.reps.get(l) == Some(&Rep::Boxed) {
+                        writeln!(out, "        krelease(L[{l}]);").unwrap();
+                    }
+                }
+                writeln!(out, "        return r;").unwrap();
+                writeln!(out, "    }}").unwrap();
+            }
+            Term::Panic(msg) => writeln!(out, "    kpanic({});", quote(msg)).unwrap(),
+            Term::Unreachable => writeln!(out, "    kinternal(\"reached a block that has no terminator\");").unwrap(),
+        }
+    }
+    match mine {
+        Some((params, ret)) => {
+            writeln!(out, "    return 0;").unwrap();
+            writeln!(out, "}}\n").unwrap();
+            // The tagged entry, for calls through a function value.
+            let unboxed: Vec<String> = params
+                .iter()
+                .enumerate()
+                .map(|(l, r)| match r {
+                    Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
+                    Rep::F64 => format!("a[{l}].u.f"),
+                    _ => format!("a[{l}].u.t"),
+                })
+                .collect();
+            writeln!(out, "static kv f{i}(kv *a, kv env) {{").unwrap();
+            writeln!(out, "    (void)env;").unwrap();
+            writeln!(out, "    (void)a;").unwrap();
+            writeln!(out, "    return {};", tagged(*ret, &format!("g{i}({})", unboxed.join(", ")))).unwrap();
+            writeln!(out, "}}\n").unwrap();
+        }
+        None => {
+            writeln!(out, "    return KUNIT;").unwrap();
+            writeln!(out, "}}\n").unwrap();
+        }
+    }
+    Ok(())
+}
+
+/// The C source of a program. `paths` are the files of its modules, which
+/// panics report; the first is the program's own.
+pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
+    let path = paths.first().map_or("program", |p| p.as_str());
+    let main = p.main.filter(|m| p.fns[*m].params == 0).ok_or("the program has no `main` function without parameters")?;
+    let mut out = String::new();
+    let names = |items: &mut dyn Iterator<Item = String>| items.map(|s| format!("{s}, ")).collect::<String>();
+    writeln!(out, "/* Generated by mou from {path}. */").unwrap();
+    writeln!(out, "static const char *const KFILE = {};", quote(path)).unwrap();
+    let files = paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(", ");
+    writeln!(out, "static const char *const KFILES[] = {{{files}}};").unwrap();
+    // Entry 0 is where the program is before its first statement.
+    let funcs = std::iter::once("main").chain(p.fns.iter().map(|f| f.name.as_str())).map(quote).collect::<Vec<_>>().join(", ");
+    writeln!(out, "static const char *const KFUNCS[] = {{{funcs}}};").unwrap();
+    writeln!(out, "enum {{ KFILE_COUNT = {}, KFILE_SHIFT = {} }};", paths.len(), crate::lexer::FILE_SHIFT).unwrap();
+    // The structs an array keeps in line, and how it keeps each field.
+    for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
+        let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
+        writeln!(out, "static const signed char KR{i}[] = {{{}}};", kinds.join(", ")).unwrap();
+    }
+    let tables = |f: &dyn Fn(usize, &Vec<u8>) -> String| p.records.iter().enumerate().map(|(i, k)| f(i, k) + ", ").collect::<String>();
+    writeln!(out, "static const signed char *const KREC_K[] = {{{}0}};", tables(&|i, k| if k.is_empty() { "0".into() } else { format!("KR{i}") })).unwrap();
+    writeln!(out, "static const int KREC_N[] = {{{}0}};", tables(&|_, k| k.len().to_string())).unwrap();
+    writeln!(out, "enum {{ KREC_COUNT = {} }};", p.records.len()).unwrap();
+    for (i, (_, fields)) in p.structs.iter().enumerate() {
+        writeln!(out, "static const char *const KSF{i}[] = {{{}0}};", names(&mut fields.iter().map(|f| quote(f)))).unwrap();
+    }
+    writeln!(out, "static const char *const KSTRUCT_NAME[] = {{{}0}};", names(&mut p.structs.iter().map(|s| quote(&s.0)))).unwrap();
+    writeln!(out, "static const char *const *const KSTRUCT_FIELDS[] = {{{}0}};", names(&mut (0..p.structs.len()).map(|i| format!("KSF{i}")))).unwrap();
+    for (e, (_, variants)) in p.enums.iter().enumerate() {
+        for (v, (_, fields)) in variants.iter().enumerate() {
+            let fs = names(&mut fields.iter().map(|f| f.as_ref().map_or("0".to_string(), |f| quote(f))));
+            writeln!(out, "static const char *const KEF{e}_{v}[] = {{{fs}0}};").unwrap();
+        }
+        writeln!(out, "static const char *const KEV{e}[] = {{{}0}};", names(&mut variants.iter().map(|v| quote(&v.0)))).unwrap();
+        writeln!(out, "static const char *const *const KEF{e}[] = {{{}0}};", names(&mut (0..variants.len()).map(|v| format!("KEF{e}_{v}")))).unwrap();
+    }
+    writeln!(out, "static const char *const *const KENUM_VARIANTS[] = {{{}0}};", names(&mut (0..p.enums.len()).map(|e| format!("KEV{e}")))).unwrap();
+    writeln!(out, "static const char *const *const *const KENUM_FIELDS[] = {{{}0}};", names(&mut (0..p.enums.len()).map(|e| format!("KEF{e}")))).unwrap();
+    writeln!(out, "static const char *const KFN_NAME[] = {{{}0}};\n", names(&mut p.fns.iter().map(|f| quote(&f.name)))).unwrap();
+    out.push_str(RUNTIME);
+    let mut headers: Vec<&str> = p.externs.iter().map(|x| x.header.as_str()).collect();
+    headers.sort();
+    headers.dedup();
+    for h in headers {
+        writeln!(out, "#include \"{h}\"").unwrap();
+    }
+    writeln!(out, "\n/* ---- the program ---- */\n").unwrap();
+    writeln!(out, "static kv KC[{}];", p.consts.len().max(1)).unwrap();
+    for i in 0..p.fns.len() {
+        writeln!(out, "static kv f{i}(kv *a, kv env);").unwrap();
+    }
+    writeln!(out, "static kv (*const KFN[])(kv *, kv) = {{{}0}};", names(&mut (0..p.fns.len()).map(|i| format!("f{i}")))).unwrap();
+    writeln!(out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}\n").unwrap();
+    let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns)).collect();
+    for (i, sig) in direct.iter().enumerate() {
+        if let Some((params, ret)) = sig {
+            writeln!(out, "{};", direct_head(i, params, *ret)).unwrap();
+        }
+    }
+    for (i, f) in p.fns.iter().enumerate() {
+        function(&mut out, i, f, &p.fns, &p.externs, &direct).map_err(|e| format!("{}: {e}", f.name))?;
+    }
+    writeln!(out, "int main(int argc, char **argv) {{").unwrap();
+    writeln!(out, "    char base;").unwrap();
+    writeln!(out, "    kargc = argc;").unwrap();
+    writeln!(out, "    kargv = argv;").unwrap();
+    writeln!(out, "    kv A[1] = {{KUNIT}};").unwrap();
+    writeln!(out, "    kstack_base = &base;").unwrap();
+    for (k, f) in p.consts.iter().enumerate() {
+        // A constant computed while compiling is written as its value.
+        match p.values.get(k).and_then(|v| v.as_ref()).and_then(|v| constant(v).ok()) {
+            Some(value) => writeln!(out, "    KC[{k}] = {value};").unwrap(),
+            None => writeln!(out, "    KC[{k}] = f{f}(A, KUNIT);").unwrap(),
+        }
+    }
+    writeln!(out, "    int status = kfinish(f{main}(A, KUNIT));").unwrap();
+    writeln!(out, "    for (int i = 0; i < {}; i++) krelease(KC[i]);", p.consts.len()).unwrap();
+    writeln!(out, "    return status;").unwrap();
+    writeln!(out, "}}").unwrap();
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{check, interp, mir, own};
+    use std::process::Command;
+
+    /// Builds a program with the C backend and runs it. `None` when there is
+    /// no C compiler to test with.
+    fn native(name: &str, src: &str) -> Option<(String, i32)> {
+        let file = crate::load::load("test.mou", src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let (_, info) = check::analyze(&file).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let mut program = mir::lower(&file, &info).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        assert!(own::check(&program).is_empty());
+        // As in `mou build`: constants become values when they can be computed.
+        let _ = crate::comptime::eval(&mut program);
+        let dir = std::env::temp_dir().join(format!("mou-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (c, exe) = (dir.join(format!("{name}.c")), dir.join(name));
+        std::fs::write(&c, super::emit(&program, &["test.mou".to_string()]).unwrap()).unwrap();
+        let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+        let built = Command::new(cc).arg("-O1").arg("-o").arg(&exe).arg(&c).arg("-lm").output().ok()?;
+        assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+        let run = Command::new(&exe).output().unwrap();
+        Some((String::from_utf8(run.stdout).unwrap(), run.status.code().unwrap_or(-1)))
+    }
+
+    /// What the interpreter prints and the exit status `mou run` would give.
+    fn interpreted(src: &str) -> (String, i32) {
+        let file = crate::load::load("test.mou", src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let (_, info) = check::analyze(&file).unwrap();
+        let program = mir::lower(&file, &info).unwrap();
+        let mut out = Vec::new();
+        let status = match interp::run(&program, program.main.unwrap(), &mut out) {
+            Ok(mir::Value::Int(i)) => (i & 0xFF) as i32,
+            Ok(mir::Value::Err(_)) => 1,
+            Ok(_) => 0,
+            Err(_) => 101,
+        };
+        (String::from_utf8(out).unwrap(), status)
+    }
+
+    #[test]
+    fn c_functions_are_called() {
+        let src = "@profile(system)
+import c \"math.h\" as m {
+    fn sqrt(x: f64) -> f64
+    fn floor(x: f64) -> f64
+}
+import c \"stdlib.h\" as lib {
+    fn abs(n: i32) -> i32
+    fn labs(n: i64) -> i64
+}
+import c \"ctype.h\" as ct { fn isdigit(c: i32) -> i32 }
+fn digit(c: u8) -> bool { unsafe { ct.isdigit(c as i32) != 0 } }
+fn main() -> int {
+    let root = unsafe { m.floor(m.sqrt(50.0)) as int }
+    let far = unsafe { lib.labs(-9000000000) - 9000000000 }
+    var n = root + far + unsafe { lib.abs(-30) as int }
+    if digit(53) && !digit(65) { n += 5 }
+    n
+}";
+        if let Some((out, status)) = native("cfuncs", src) {
+            assert_eq!((out.as_str(), status), ("", 42));
+        }
+        // The interpreter says that it cannot call them.
+        let file = crate::load::load("test.mou", src).1.unwrap();
+        let (_, info) = check::analyze(&file).unwrap();
+        let program = mir::lower(&file, &info).unwrap();
+        let stopped = interp::run(&program, program.main.unwrap(), &mut Vec::new()).unwrap_err();
+        assert!(stopped.msg.contains("can only be called in a compiled program"), "{}", stopped.msg);
+    }
+
+    #[test]
+    fn native_programs_match_the_interpreter() {
+        let programs = [
+            ("core", include_str!("../examples/core.mou").to_string()),
+            ("shapes", include_str!("../examples/shapes.mou").to_string()),
+            ("tour", include_str!("../examples/tour.mou").to_string()),
+            ("traits", include_str!("../examples/traits.mou").to_string()),
+            ("closures", include_str!("../examples/closures.mou").to_string()),
+            ("values", include_str!("../examples/values.mou").to_string()),
+            ("generic_types", include_str!("../examples/generic_types.mou").to_string()),
+            ("library", include_str!("../examples/library.mou").to_string()),
+            ("overflow", "fn f(a: u8, b: u8) -> u8 { a + b }\nfn main() -> int { f(200, 100) as int }".to_string()),
+            ("bounds", "fn main() -> int {\n let xs = [1, 2, 3]\n var i = 0\n while true { i += xs[i] }\n i\n}".to_string()),
+            ("status", "fn main() -> int { 42 }".to_string()),
+            ("failure", "enum E { Bad }\nfn g() ! E { return E.Bad }\nfn main() ! E { g()? }".to_string()),
+        ];
+        // Arithmetic at the limits of each integer kind, calls between
+        // functions of machine integers, and what must panic.
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native");
+        let mut programs: Vec<(String, String)> = programs.iter().map(|(n, s)| (n.to_string(), s.clone())).collect();
+        let mut edge: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+        edge.sort();
+        assert!(edge.len() >= 28, "the edge cases are missing");
+        for path in edge {
+            let name = path.file_stem().unwrap().to_string_lossy().to_string();
+            programs.push((name, std::fs::read_to_string(&path).unwrap()));
+        }
+        for (name, src) in &programs {
+            let Some(got) = native(name, src) else {
+                eprintln!("no C compiler: the C backend was not tested");
+                return;
+            };
+            assert_eq!(got, interpreted(src), "{name}");
+        }
+    }
+}

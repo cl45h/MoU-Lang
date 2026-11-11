@@ -1,0 +1,54 @@
+import std.io
+
+trait Into[T] {
+    fn into(self) -> T
+    fn twice(self) -> [T] { [self.into(), self.into()] }
+}
+
+trait Sink[T] {
+    fn put(mut self, item: T)
+    fn count(self) -> int
+}
+
+struct Celsius { deg: int }
+struct Name { text: str }
+struct Bag { items: [str] }
+struct Sum { total: int, n: int }
+
+impl Into[str] for Celsius { fn into(self) -> str { "{self.deg} C" } }
+impl Into[str] for Name { fn into(self) -> str { self.text } }
+impl Into[str] for int { fn into(self) -> str { "#{self}" } }
+
+impl Sink[str] for Bag {
+    fn put(mut self, item: str) { self.items.push(item) }
+    fn count(self) -> int { self.items.len as int }
+}
+
+impl Sink[int] for Sum {
+    fn put(mut self, item: int) {
+        self.total += item
+        self.n += 1
+    }
+    fn count(self) -> int { self.n }
+}
+
+fn all(xs: [dyn Into[str]]) -> str {
+    var out = ""
+    for x in xs { out = "{out}[{x.into()}]" }
+    out
+}
+
+fn feed[T](sink: mut dyn Sink[T], items: [T]) {
+    for i in items { sink.put(i) }
+}
+
+fn main() ! io.Error {
+    let xs: [dyn Into[str]] = [Celsius(21) as dyn Into[str], Name("ana") as dyn Into[str], 7 as dyn Into[str]]
+    io.print("{all(xs)} {xs[0].twice()}")?
+    var bag = Bag([]) as dyn Sink[str]
+    feed(mut bag, ["a", "b", "c"])
+    var sum = Sum(0, 0) as dyn Sink[int]
+    feed(mut sum, [10, 20])
+    sum.put(5)
+    io.print("{bag.count()} {bag} {sum.count()} {sum}")?
+}

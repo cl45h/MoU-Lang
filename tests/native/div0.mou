@@ -1,0 +1,4 @@
+import std.io
+fn d(a: int, b: int) -> int { a / b }
+fn main() ! io.Error { io.print("{d(7, 2)} {d(-7, 2)} {d(7, -1)}")?
+ io.print("{d(1, 0)}")? }

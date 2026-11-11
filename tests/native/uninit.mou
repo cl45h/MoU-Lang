@@ -1,0 +1,5 @@
+import std.io
+fn pick(c: bool) -> int { let x: int
+ if c { x = 1 } else { x = 2 }
+ x }
+fn main() ! io.Error { io.print("{pick(true)} {pick(false)}")? }

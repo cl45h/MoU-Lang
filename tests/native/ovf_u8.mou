@@ -1,0 +1,4 @@
+import std.io
+fn add(a: u8, b: u8) -> u8 { a + b }
+fn main() ! io.Error { io.print("{add(200, 55)}")?
+ io.print("{add(200, 56)}")? }

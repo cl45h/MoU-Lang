@@ -1,0 +1,32 @@
+import std.io
+
+struct Point { x: f64, y: f64 }
+
+enum Shape {
+    Circle(center: Point, radius: f64),
+    Rect(min: Point, max: Point),
+}
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Circle(_, r) => 3.14159 * r * r,
+        Rect(a, b) => (b.x - a.x) * (b.y - a.y),
+    }
+}
+
+fn scale(p: mut Point, k: f64) {
+    p.x *= k
+    p.y *= k
+}
+
+fn main() ! io.Error {
+    let shapes = [
+        Shape.Circle(Point(0.0, 0.0), 1.0),
+        Shape.Rect(Point(0.0, 0.0), Point(2.0, 3.0)),
+    ]
+    for s in shapes {
+        io.print("area = {area(s)}")?
+    }
+    var p = Point(1.0, 2.0)
+    scale(mut p, 3.0)
+}

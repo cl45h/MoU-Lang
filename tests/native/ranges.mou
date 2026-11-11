@@ -1,0 +1,15 @@
+import std.io
+fn sum(lo: int, hi: int) -> int { var t = 0
+ for i in lo..hi { t += i }
+ t }
+fn main() ! io.Error { var c = 0
+ for i in 0..=255 { let b: u8 = i as u8
+ c += b as int }
+ var d: u8 = 0
+ let top: u8 = 255
+ for b in 250..=top { d = d +% b }
+ var neg = 0
+ for i in -3..3 { neg += i }
+ var down = 0
+ for i in 5..2 { down += 1 }
+ io.print("{sum(1, 101)} {c} {d} {neg} {down} {sum(5, 5)}")? }

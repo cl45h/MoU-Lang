@@ -1,0 +1,58 @@
+import std.fs
+import c "sqlite3.h"
+import py "numpy" as np
+
+/* Errors as values, pattern matching,
+   /* nested comments, */ and structured concurrency. */
+
+fn load_config(path: Path) -> Config ! ConfigError {
+    let text = fs.read(path)?
+    let cfg = parse(text) catch e {
+        return ConfigError.Syntax(e)
+    }
+    defer log("loaded {path} with {cfg.entries.len} entries")
+    cfg
+}
+
+fn classify(n: int) -> str {
+    match n {
+        0 => "zero"
+        1..=9 => "small"
+        -1 | -2 => "just below zero"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+
+fn fetch_all(urls: [Url]) -> [Page] ! NetError {
+    with alloc = arena {
+        scope s {
+            let a = s.spawn(download(urls[0]))
+            let b = s.spawn(download(urls[1]))
+            [a.wait()?, b.wait()?]
+        }
+    }
+}
+
+fn first_word(s: str) -> str? {
+    if let Some(i) = s.find(' ') { s[..i] } else { None }
+}
+
+fn sum_squares(xs: [int]) -> int {
+    var total = 0
+    for x in xs {
+        if x == 0 { continue }
+        total = total +% x * x
+    }
+    let doubled = xs
+        .map(fn(x: int) -> int { x * 2 })
+        .filter(fn(x) { x > 10 })
+    total + doubled.len as int
+}
+
+fn describe(p: Point) -> str {
+    match p {
+        Point { x: 0, y } => "on the y axis at {y}"
+        Point { x, .. } => "x = {x}"
+    }
+}

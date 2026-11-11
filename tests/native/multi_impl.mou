@@ -1,0 +1,83 @@
+import std.io
+
+trait Into[T] {
+    fn into(self) -> T
+    fn twice(self) -> [T] { [self.into(), self.into()] }
+}
+
+trait From[T] {
+    fn from(value: T) -> Self
+}
+
+trait Scale[T] {
+    fn scale(mut self, by: T)
+}
+
+struct Meters { v: int }
+
+impl Into[int] for Meters { fn into(self) -> int { self.v } }
+impl Into[str] for Meters { fn into(self) -> str { "{self.v} m" } }
+impl Into[f64] for Meters {
+    fn into(self) -> f64 { self.v as f64 }
+    fn twice(self) -> [f64] { [0.5] }
+}
+
+impl From[int] for Meters { fn from(value: int) -> Self { Meters(value) } }
+impl From[str] for Meters { fn from(value: str) -> Self { Meters(value.len as int) } }
+impl From[(int, int)] for Meters {
+    fn from(value: (int, int)) -> Self {
+        let (a, b) = value
+        Meters(a * 1000 + b)
+    }
+}
+
+impl Scale[int] for Meters { fn scale(mut self, by: int) { self.v *= by } }
+impl Scale[bool] for Meters { fn scale(mut self, by: bool) { if by { self.v = 0 - self.v } } }
+
+fn conv[A: Into[B], B](a: A) -> B { a.into() }
+
+fn text[A: Into[str]](a: A) -> str {
+    let s = a.into()
+    "<{s}>"
+}
+
+fn number[A: Into[int]](a: A) -> int { a.into() + 1 }
+
+fn both[A: Into[int] + Into[str]](a: A) -> str {
+    let n: int = a.into()
+    let s: str = a.into()
+    "{n}|{s}"
+}
+
+fn make[T: From[int]](n: int) -> T { T.from(n) }
+
+fn show(s: str) -> str { "[{s}]" }
+
+fn main() ! io.Error {
+    let m = Meters(5)
+    let n: int = m.into()
+    let s: str = m.into()
+    let f: f64 = m.into()
+    io.print("{n} {s} {f} {show(m.into())}")?
+    io.print("{conv[Meters, int](m)} {conv[Meters, str](m)} {text(m)} {number(m)} {both(m)}")?
+    let a: [int] = m.twice()
+    let b: [str] = m.twice()
+    let c: [f64] = m.twice()
+    io.print("{a} {b} {c}")?
+
+    let x = Meters.from(7)
+    let y = Meters.from("hola")
+    let z = Meters.from((2, 30))
+    let w: Meters = make(9)
+    io.print("{x} {y} {z} {w}")?
+
+    var k = Meters(3)
+    k.scale(4)
+    k.scale(true)
+    io.print("{k}")?
+
+    let d = m as dyn Into[str]
+    let e = m as dyn Into[int]
+    let g = m as dyn Into[f64]
+    io.print("{d.into()} {e.into() + 1} {d.twice()} {e.twice()} {g.twice()}")?
+}

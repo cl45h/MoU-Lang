@@ -1,0 +1,11 @@
+import std.io
+fn bump(n: mut int, by: int) { n += by }
+fn twice(n: mut u8) -> u8 { n = n * 2
+ n }
+fn main() ! io.Error { var a = 5
+ bump(mut a, 3)
+ var b: u8 = 100
+ let r = twice(mut b)
+ io.print("{a} {b} {r}")?
+ let r2 = twice(mut b)
+ io.print("{r2}")? }

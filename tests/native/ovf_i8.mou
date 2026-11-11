@@ -1,0 +1,4 @@
+import std.io
+fn mul(a: i8, b: i8) -> i8 { a * b }
+fn main() ! io.Error { io.print("{mul(-8, 16)} {mul(11, 11)}")?
+ io.print("{mul(16, 8)}")? }

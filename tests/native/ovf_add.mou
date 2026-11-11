@@ -1,0 +1,4 @@
+import std.io
+fn main() ! io.Error { var x: i64 = 9223372036854775807
+ x = x + 1
+ io.print("{x}")? }

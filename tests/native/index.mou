@@ -1,0 +1,6 @@
+import std.io
+fn at(xs: [int], i: int) -> int { xs[i] }
+fn main() ! io.Error { let xs = [10, 20, 30]
+ var j: usize = 2
+ io.print("{at(xs, 1)} {xs[j]}")?
+ io.print("{at(xs, -1)}")? }

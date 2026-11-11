@@ -1,0 +1,4 @@
+import std.io
+fn main() -> int { var t = 0
+ for i in 0..10 { t += i }
+ t }

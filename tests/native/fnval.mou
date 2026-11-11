@@ -1,0 +1,7 @@
+import std.io
+fn sq(x: int) -> int { x * x }
+fn apply(f: fn(int) -> int, v: int) -> int { f(v) }
+fn main() ! io.Error { let g = sq
+ let fs = [sq, sq]
+ io.print("{apply(sq, 7)} {g(3)} {fs[1](4)} {apply(fn(x: int) -> int { x + 1 }, 1)}")?
+ io.print("{apply(sq, 4000000000)}")? }

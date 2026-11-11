@@ -1,0 +1,5 @@
+import std.io
+fn f(a: u32, n: u32) -> u32 { (a << n) >> 1 }
+fn g(a: int, b: int) -> int { (a & b) | (a ^ b) }
+fn main() ! io.Error { io.print("{f(1, 4)} {f(3, 31)} {g(12, 10)} {g(-1, 7)}")?
+ io.print("{f(1, 40)}")? }

@@ -1,0 +1,47 @@
+import std.io
+
+struct Bag { items: [int], name: str }
+
+struct List[T] { items: [T] }
+
+impl[T] List[T] {
+    fn new() -> List[T] { List(items: []) }
+    fn push(mut self, v: T) { self.items.push(v) }
+    fn pop(mut self) -> T? { self.items.pop() }
+    fn get(self, i: int) -> T? { self.items.get(i) }
+    fn len(self) -> int { self.items.len as int }
+}
+
+fn fill(xs: mut [int], n: int) {
+    for i in 0..n { xs.push(i * i) }
+}
+
+fn main() ! io.Error {
+    var xs: [int] = []
+    fill(mut xs, 5)
+    io.print("{xs} {xs.len}")?
+    let copy = xs
+    xs.push(99)
+    io.print("{copy} {xs}")?
+    io.print("{xs.pop()} {xs.pop()} {xs}")?
+    io.print("{xs.get(0)} {xs.get(3)} {xs.get(4)} {xs.get(0 - xs.len as int)}")?
+    var b = Bag(items: [1], name: "b")
+    b.items.push(2)
+    var bags: [Bag] = [b, b]
+    bags[1].items.push(3)
+    io.print("{bags} {b}")?
+    var empty: [str] = []
+    io.print("{empty.pop()}")?
+    var l: List[str] = List.new()
+    l.push("a")
+    l.push("b")
+    io.print("{l.len()} {l.get(1)} {l.pop()} {l.pop()} {l.pop()} {l}")?
+    var big: [int] = []
+    for i in 0..200000 { big.push(i) }
+    var total = 0
+    for x in big { total += x }
+    io.print("{big.len} {total}")?
+    var nested: [[int]] = [[], []]
+    nested[1].push(7)
+    io.print("{nested}")?
+}

@@ -1,0 +1,9 @@
+[package]
+name = "mou"
+version = "0.1.0"
+edition = "2021"
+description = "Compiler for the Mou programming language"
+
+[[bin]]
+name = "mou"
+path = "src/main.rs"

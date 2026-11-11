@@ -1,0 +1,5 @@
+import std.io
+fn even(n: u32) -> bool { if n == 0 { true } else { odd(n - 1) } }
+fn odd(n: u32) -> bool { if n == 0 { false } else { even(n - 1) } }
+fn gcd(a: int, b: int) -> int { if b == 0 { a } else { gcd(b, a % b) } }
+fn main() ! io.Error { io.print("{even(10)} {odd(7)} {gcd(84, 36)}")? }

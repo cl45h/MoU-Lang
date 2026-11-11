@@ -1,0 +1,93 @@
+// A map from keys to values, kept sorted by key.
+//
+// Lookups take logarithmic time. Adding or removing a key moves the keys
+// after it, so it takes linear time: good for small and medium maps.
+
+import std.cmp
+
+pub struct Map[K, V] {
+    keys: [K]
+    vals: [V]
+}
+
+impl[K: cmp.Ord, V] Map[K, V] {
+    pub fn new() -> Map[K, V] { Map(keys: [], vals: []) }
+
+    pub fn len(self) -> int { self.keys.len as int }
+
+    pub fn is_empty(self) -> bool { self.keys.len == 0 }
+
+    /// Where a key is, or where it would go, and whether it is there.
+    fn find(self, key: K) -> (bool, int) {
+        var lo = 0
+        var hi = self.len()
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            match self.keys[mid].cmp(key) {
+                cmp.Order.Less => { lo = mid + 1 }
+                cmp.Order.Greater => { hi = mid }
+                cmp.Order.Equal => { return (true, mid) }
+            }
+        }
+        (false, lo)
+    }
+
+    pub fn get(self, key: K) -> V? {
+        let (found, i) = self.find(key)
+        if found { Some(self.vals[i]) } else { None }
+    }
+
+    /// The value of a key, or `fallback` when the key is absent.
+    pub fn get_or(self, key: K, fallback: V) -> V {
+        let (found, i) = self.find(key)
+        if found { self.vals[i] } else { fallback }
+    }
+
+    pub fn has(self, key: K) -> bool {
+        let (found, _) = self.find(key)
+        found
+    }
+
+    /// Sets the value of a key, adding the key when it is new.
+    pub fn set(mut self, key: K, val: V) {
+        let (found, i) = self.find(key)
+        if found {
+            self.vals[i] = val
+            return
+        }
+        let n = self.len()
+        self.keys.push(key)
+        self.vals.push(val)
+        var j = n
+        while j > i {
+            self.keys[j] = self.keys[j - 1]
+            self.vals[j] = self.vals[j - 1]
+            j -= 1
+        }
+        self.keys[i] = key
+        self.vals[i] = val
+    }
+
+    /// Removes a key and returns the value it had.
+    pub fn remove(mut self, key: K) -> V? {
+        let (found, i) = self.find(key)
+        if !found { return None }
+        let val = self.vals[i]
+        let n = self.len()
+        var j = i
+        while j < n - 1 {
+            self.keys[j] = self.keys[j + 1]
+            self.vals[j] = self.vals[j + 1]
+            j += 1
+        }
+        self.keys.pop()
+        self.vals.pop()
+        Some(val)
+    }
+
+    /// The keys, in order.
+    pub fn keys(self) -> [K] { self.keys }
+
+    /// The values, in the order of their keys.
+    pub fn values(self) -> [V] { self.vals }
+}

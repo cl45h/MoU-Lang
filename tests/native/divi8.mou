@@ -1,0 +1,5 @@
+import std.io
+fn d(a: i8, b: i8) -> i8 { a / b }
+fn main() ! io.Error { let m: i8 = -128
+ io.print("{d(m, 2)}")?
+ io.print("{d(m, -1)}")? }

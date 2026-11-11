@@ -1,0 +1,68 @@
+// The standard library: lists, maps, text and ordering. It is written in
+// the language itself (see the std directory) and imported as modules.
+
+import std.io
+import std.list
+import std.map
+import std.math
+import std.text
+import std.cmp
+
+struct City { name: str, people: int }
+
+impl cmp.Ord for City {
+    fn cmp(self, other: Self) -> cmp.Order { self.people.cmp(other.people) }
+}
+
+fn main() ! io.Error {
+    var xs: list.List[int] = list.List.new()
+    for n in [5, 3, 9, 1, 7] { xs.push(n) }
+    io.print("{xs.len()} {xs.all()} {xs.first()} {xs.last()} {xs.get(9)}")?
+    xs.insert(1, 100)
+    let gone = xs.remove(0)
+    io.print("{gone} {xs.all()}")?
+    xs.sort()
+    io.print("{xs.all()} {xs.index_of(9)} {xs.contains(4)} {xs.smallest()} {xs.largest()}")?
+    xs.reverse()
+    let doubled = xs.map(fn(n: int) -> int { n * 2 })
+    let texts = xs.map(fn(n: int) -> str { "<{n}>" })
+    let big = xs.filter(fn(n: int) -> bool { n > 4 })
+    let total = xs.fold(0, fn(acc: int, n: int) -> int { acc + n })
+    io.print("{doubled.all()} {texts.all()} {big.all()} {total}")?
+    io.print("{xs.any(fn(n: int) -> bool { n > 99 })} {xs.every(fn(n: int) -> bool { n > 99 })}")?
+    io.print("{xs.pop()} {xs.len()} {xs.is_empty()}")?
+    xs.clear()
+    io.print("{xs.is_empty()} {xs.pop()}")?
+
+    var cities = list.List.of([City("Lima", 10), City("Quito", 3), City("Bogota", 8)])
+    cities.sort()
+    io.print("{cities.map(fn(c: City) -> str { c.name }).all()} {cities.largest()}")?
+
+    var ages: map.Map[str, int] = map.Map.new()
+    ages.set("zoe", 31)
+    ages.set("ana", 25)
+    ages.set("leo", 40)
+    ages.set("ana", 26)
+    io.print("{ages.len()} {ages.keys()} {ages.values()}")?
+    io.print("{ages.get("ana")} {ages.get("bob")} {ages.get_or("bob", 0)} {ages.has("leo")}")?
+    io.print("{ages.remove("leo")} {ages.remove("leo")} {ages.keys()}")?
+
+    var counts: map.Map[str, int] = map.Map.new()
+    for w in text.words("  the cat and the hat and the bat ") {
+        counts.set(w, counts.get_or(w, 0) + 1)
+    }
+    for k in counts.keys() { io.print("{k}: {counts.get_or(k, 0)}")? }
+
+    io.print("{math.abs(-4)} {math.pow(2, 10)} {math.gcd(12, 18)} {math.clamp(15, 0, 10)} {math.max(3, 8)} {math.fabs(-2.5)}")?
+    io.print("{cmp.max("pera", "uva")} {cmp.min(2.5, 1.5)} {cmp.max('a', 'z')}")?
+
+    io.print("{text.split("a,b,,c", ',')} {text.join(["x", "y", "z"], "-")} [{text.trim("  hola  ")}]")?
+    io.print("{text.chars("añ")} {text.count("añ")} {"añ".len} {text.from_chars(['o', 'k'])}")?
+    io.print("{text.starts_with("mou", "kil")} {text.ends_with("mou", "by")} {text.find("canción", "ón")} {text.contains("abc", "x")}")?
+    io.print("{text.repeat("ab", 3)} {text.lines("uno\ndos")} {text.split("ñ|é", '|')}")?
+    io.print("{text.parse_int("42")} {text.parse_int("-17")} {text.parse_int("4x")} {text.parse_int("")}")?
+    io.print("{text.parse_int("9223372036854775807")} {text.parse_int("9223372036854775808")} {text.parse_int("-9223372036854775808")}")?
+    var sorted: [int] = [3, 1, 2]
+    cmp.sort(mut sorted)
+    io.print("{sorted}")?
+}

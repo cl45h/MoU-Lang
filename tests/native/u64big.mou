@@ -1,0 +1,6 @@
+import std.io
+fn h(a: u64, b: u64) -> u64 { a + b }
+fn lt(a: u64, b: u64) -> bool { a < b }
+fn main() ! io.Error { let big: u64 = 18446744073709551615
+ io.print("{h(big - 1, 1)} {lt(big, 1)} {lt(1, big)} {big / 3} {big % 10}")?
+ io.print("{h(big, 1)}")? }

@@ -1,0 +1,4 @@
+import std.io
+fn u(x: int) -> usize { x as usize }
+fn main() ! io.Error { io.print("{u(5)}")?
+ io.print("{u(-1)}")? }

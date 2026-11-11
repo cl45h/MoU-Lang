@@ -1,0 +1,66 @@
+import std.io
+import std.math
+
+// Effects: what a function can do besides computing its result. They are
+// inferred, and an annotation rules one out. `mou effects` prints them.
+
+struct Sample { at: f64, value: f64 }
+
+// The index is proved by the loop, and floats do not panic.
+@nopanic @noalloc @noio
+fn total(xs: [Sample]) -> f64 {
+    var sum = 0.0
+    for i in 0..xs.len { sum += xs[i].value }
+    sum
+}
+
+// The caller has to show that there is a sample.
+@nopanic @noalloc @noio
+fn mean(xs: [Sample]) -> f64
+    where xs.len > 0
+{
+    total(xs) / xs.len as f64
+}
+
+// `+%` wraps instead of stopping the program.
+@nopanic @noalloc @noio
+fn checksum(bytes: [u8]) -> u32 {
+    var h: u32 = 17
+    for b in bytes { h = h *% 31 +% b as u32 }
+    h
+}
+
+// An index that comes from outside is checked before it is used.
+@nopanic @noalloc @noio
+fn value_at(xs: [Sample], i: usize) -> f64 {
+    if i < xs.len { xs[i].value } else { 0.0 }
+}
+
+// A ring: the remainder of a length that is not zero is a good index.
+@nopanic @noalloc @noio
+fn ring(xs: [int], turn: usize) -> int {
+    if xs.len == 0 { return 0 }
+    xs[turn % xs.len]
+}
+
+// Changing an array in place does not allocate.
+@nopanic @noalloc @noio
+fn scale(xs: mut [Sample], k: f64) {
+    for i in 0..xs.len { xs[i].value = xs[i].value * k }
+}
+
+@nopanic @noalloc @noio
+fn spread(a: int, b: int) -> int {
+    math.max(a, b) -% math.min(a, b)
+}
+
+fn main() ! io.Error {
+    var xs: [Sample] = [Sample(0.0, 1.5), Sample(1.0, 2.5), Sample(2.0, 5.0)]
+    scale(mut xs, 2.0)
+    io.print("total {total(xs)}")?
+    // The array has three samples here: the condition of `mean` is proved.
+    if xs.len > 0 { io.print("mean {mean(xs)}")? }
+    io.print("at 1: {value_at(xs, 1)}, at 9: {value_at(xs, 9)}")?
+    io.print("checksum {checksum([1, 2, 3])}")?
+    io.print("ring {ring([10, 20, 30], 7)} spread {spread(3, -4)}")?
+}

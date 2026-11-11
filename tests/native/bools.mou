@@ -1,0 +1,5 @@
+import std.io
+fn both(a: bool, b: bool) -> bool { a && b }
+fn flip(a: bool) -> bool { !a }
+fn pick(c: bool, x: int, y: int) -> int { if c { x } else { y } }
+fn main() ! io.Error { io.print("{both(true, flip(false))} {flip(true)} {pick(both(true, false), 1, 2)} {true == flip(false)}")? }

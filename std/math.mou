@@ -1,0 +1,46 @@
+// Arithmetic helpers.
+
+@noalloc @noio
+pub fn abs(n: int) -> int { if n < 0 { 0 - n } else { n } }
+
+@nopanic @noalloc @noio
+pub fn fabs(x: f64) -> f64 { if x < 0.0 { 0.0 - x } else { x } }
+
+@nopanic @noalloc @noio
+pub fn min(a: int, b: int) -> int { if b < a { b } else { a } }
+
+@nopanic @noalloc @noio
+pub fn max(a: int, b: int) -> int { if b > a { b } else { a } }
+
+/// `n` kept inside `lo..=hi`.
+@nopanic @noalloc @noio
+pub fn clamp(n: int, lo: int, hi: int) -> int where lo <= hi {
+    if n < lo { lo } else if n > hi { hi } else { n }
+}
+
+/// `base` to the power `exp`. Panics on overflow, like `*`.
+@noalloc @noio
+pub fn pow(base: int, exp: int) -> int where exp >= 0 {
+    var result = 1
+    var b = base
+    var e = exp
+    while e > 0 {
+        if e % 2 == 1 { result *= b }
+        e /= 2
+        if e > 0 { b *= b }
+    }
+    result
+}
+
+/// Greatest common divisor, never negative.
+@noalloc @noio
+pub fn gcd(a: int, b: int) -> int {
+    var x = abs(a)
+    var y = abs(b)
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    x
+}

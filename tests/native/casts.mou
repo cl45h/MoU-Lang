@@ -1,0 +1,6 @@
+import std.io
+fn n(x: int) -> u8 { x as u8 }
+fn w(x: u8) -> int { x as int }
+fn s(x: int) -> i32 { x as i32 }
+fn main() ! io.Error { io.print("{n(255)} {w(200)} {s(-5)} {(3.9 as int)} {(7 as f64)}")?
+ io.print("{n(256)}")? }

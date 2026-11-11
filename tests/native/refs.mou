@@ -1,0 +1,91 @@
+import std.io
+
+struct Point { x: int, y: int }
+
+struct Grid {
+    rows: [[int]]
+    points: [Point]
+    origin: Point
+    calls: int
+}
+
+impl Grid {
+    fn row(mut self, i: int) -> ref mut [int] { self.rows[i] }
+
+    fn cell(mut self, i: int, j: int) -> ref mut int { self.row(i)[j] }
+
+    fn point(mut self, i: int) -> ref mut Point {
+        self.calls += 1
+        self.points[i]
+    }
+
+    /// The point at `i`, or the origin when there is none.
+    fn point_or_origin(mut self, i: int) -> ref mut Point {
+        if i < self.points.len as int { self.points[i] } else { self.origin }
+    }
+
+    fn px(mut self, i: int) -> ref mut int { self.point(i).x }
+
+    fn first(self) -> ref Point { self.points[0] }
+
+    fn me(mut self) -> ref mut Grid { self }
+}
+
+fn second(p: mut Point) -> ref mut int { p.y }
+
+fn bump(n: mut int) { n += 100 }
+
+fn move_by(p: mut Point, d: int) {
+    p.x += d
+    p.y += d
+}
+
+struct Stack[T] { items: [T] }
+
+impl[T] Stack[T] {
+    fn top(mut self) -> ref mut T { self.items[self.items.len as int - 1] }
+    fn at(mut self, i: int) -> ref mut T { self.items[i] }
+}
+
+fn main() ! io.Error {
+    var g = Grid(rows: [[1, 2, 3], [4, 5, 6]], points: [Point(1, 2), Point(3, 4)], origin: Point(0, 0), calls: 0)
+    let before = g
+
+    g.row(0)[1] = 20
+    g.row(1).push(7)
+    g.cell(1, 0) = 40
+    g.cell(0, 2) += 5
+    io.print("{g.rows} {g.row(1).len} {g.cell(1, 3)}")?
+
+    g.point(0).x = 10
+    g.point(1) = Point(30, 40)
+    g.point(1).y -= 1
+    bump(mut g.point(0).y)
+    move_by(mut g.point(1), 1000)
+    io.print("{g.points} calls={g.calls}")?
+
+    g.point_or_origin(0).x = -1
+    g.point_or_origin(9).x = -9
+    g.px(1) = 77
+    g.me().origin.y = 5
+    second(mut g.origin) += 1
+    second(mut g.me().point_or_origin(5)) *= 10
+    io.print("{g.points} {g.origin} {g.first()} {g.first().y} calls={g.calls}")?
+
+    // Writing through a `ref mut` result does not change a copy.
+    io.print("{before.rows} {before.points} {before.origin}")?
+
+    var s: Stack[int] = Stack(items: [1, 2, 3])
+    s.top() = 30
+    s.at(0) += 9
+    bump(mut s.at(1))
+    var names: Stack[str] = Stack(items: ["a", "b"])
+    names.top() = "z"
+    var nested: Stack[Stack[int]] = Stack(items: [Stack(items: [5]), Stack(items: [6, 7])])
+    nested.top().top() = 70
+    nested.at(0).items.push(50)
+    io.print("{s.items} {names.items} {nested.at(1).items} {nested.at(0).items} {s.top() + 1}")?
+
+    // The index is checked when the result is used.
+    g.cell(1, 9) = 0
+}

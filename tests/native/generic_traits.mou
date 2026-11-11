@@ -1,0 +1,54 @@
+import std.io
+
+trait Into[T] {
+    fn into(self) -> T
+    fn twice(self) -> (T, T) { (self.into(), self.into()) }
+}
+
+trait Container[T] {
+    fn items(self) -> [T]
+    fn first(self) -> T? { self.items().get(0) }
+    fn count(self) -> int { self.items().len as int }
+}
+
+trait Keyed[K, V]: Container[V] {
+    fn key(self) -> K
+    fn describe(self) -> str { "{self.key()} con {self.count()}" }
+}
+
+struct Celsius { deg: f64 }
+struct Bag[T] { things: [T], name: str }
+
+impl Into[str] for int { fn into(self) -> str { "n{self}" } }
+impl Into[f64] for Celsius { fn into(self) -> f64 { self.deg * 1.8 + 32.0 } }
+impl[T] Into[[T]] for Bag[T] { fn into(self) -> [T] { self.things } }
+impl[T] Container[T] for Bag[T] { fn items(self) -> [T] { self.things } }
+impl[T] Keyed[str, T] for Bag[T] { fn key(self) -> str { self.name } }
+impl Container[char] for str {
+    fn items(self) -> [char] {
+        var out: [char] = []
+        for c in self { out.push(c) }
+        out
+    }
+}
+
+fn convert[A: Into[B], B](a: A) -> B { a.into() }
+
+fn text[A: Into[str]](a: A) -> str { "<{a.into()}>" }
+
+fn size[C: Container[T], T](c: C) -> int { c.count() }
+
+fn head[C: Container[T], T](c: C) -> T? { c.first() }
+
+fn label[X: Keyed[K, V], K, V](x: X) -> str { "{x.describe()} / {x.first()}" }
+
+fn main() ! io.Error {
+    let b = Bag(things: [3, 4, 5], name: "bolsa")
+    let s: str = 7.into()
+    io.print("{s} {Celsius(deg: 100.0).into()} {b.into()} {7.twice()}")?
+    io.print("{convert(9)} {convert(Celsius(deg: 0.0))} {convert(b)} {text(42)}")?
+    io.print("{size(b)} {size("hola")} {head(b)} {head("")} {head("ñu")}")?
+    io.print("{b.describe()} | {label(b)} | {label(Bag(things: ["x"], name: "letras"))}")?
+    let e: Bag[f64] = Bag(things: [], name: "vacía")
+    io.print("{e.first()} {e.count()} {label(e)}")?
+}

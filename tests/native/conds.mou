@@ -1,0 +1,50 @@
+import std.io
+
+fn side(n: int, log: mut [int]) -> bool {
+    log.push(n)
+    n > 0
+}
+
+@nopanic
+fn pick(xs: [int], i: usize, j: usize) -> int {
+    if i < xs.len && j < xs.len { return xs[i] -% xs[j] }
+    if i >= xs.len || xs[i] == 0 { return -1 }
+    if !(j < xs.len) { return xs[i] }
+    0
+}
+
+@nopanic
+fn clamp_index(xs: [int], i: int) -> int
+    where xs.len > 0
+{
+    if i >= 0 && (i as usize) < xs.len { xs[i as usize] } else { xs[0] }
+}
+
+fn count(xs: [int], lo: int, hi: int) -> int {
+    var n = 0
+    var i: usize = 0
+    while i < xs.len && n < 100 {
+        if !(xs[i] < lo || xs[i] > hi) { n += 1 }
+        i += 1
+    }
+    n
+}
+
+fn main() ! io.Error {
+    var log: [int] = []
+    // The right side only runs when the left one does not decide.
+    let a = side(1, mut log) && side(-2, mut log) && side(3, mut log)
+    let b = side(-4, mut log) || side(5, mut log) || side(6, mut log)
+    if side(-7, mut log) && side(8, mut log) { log.push(100) }
+    if side(9, mut log) || side(10, mut log) { log.push(200) }
+    if !side(-11, mut log) && !(side(12, mut log) && side(-13, mut log)) { log.push(300) }
+    assert(side(14, mut log) || side(15, mut log), "never")
+    io.print("{a} {b} {log}")?
+    let xs = [5, 0, 9]
+    io.print("{pick(xs, 0, 2)} {pick(xs, 7, 0)} {pick(xs, 1, 9)} {pick(xs, 2, 9)}")?
+    io.print("{clamp_index(xs, 2)} {clamp_index(xs, -1)} {clamp_index(xs, 3)}")?
+    io.print("{count([1, 5, 9, 12, 3], 3, 9)}")?
+    var k = 0
+    while !(k >= 3) { k += 1 }
+    io.print("{k}")?
+}

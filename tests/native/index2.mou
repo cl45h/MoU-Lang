@@ -1,0 +1,7 @@
+import std.io
+fn main() ! io.Error { var xs: [int] = [1, 2, 3]
+ var i = 0
+ while i < 3 { xs[i] = xs[i] * 10
+ i += 1 }
+ io.print("{xs} {i}")?
+ io.print("{xs[i]}")? }

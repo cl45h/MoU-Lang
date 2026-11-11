@@ -1,0 +1,22 @@
+import std.io
+struct P { x: f64, name: str }
+enum S { A, B(n: int, tag: char) }
+fn main() ! io.Error {
+    let big: i128 = 170141183460469231731687303715884105727
+    let fs = [0.1, 1e21, 1.5e-7, 100.0, 0.0001, 123456789.125, 1e16, 1e15, -0.0, 2.5e-5]
+    io.print("{big} {-big} {fs}")?
+    let f: f32 = 16777217.0
+    let t = (1, "a\tb", 'q', None, S.B(3, '\n'))
+    io.print("{f} {1.0 / 3.0} {t} {P(2, "ñandú")}")?
+    let xs: [f64] = [1, 2, 3]
+    let o: int? = 4
+    let u: u64 = 18446744073709551615
+    io.print("{xs} {o} {u} {u -| 1} {u *% 3} {(u >> 60) as int} {~u}")?
+    var grid = [[1, 2], [3, 4]]
+    grid[1][0] = 9
+    let copy = grid
+    grid[0][1] = 7
+    io.print("{grid} {copy} {grid == copy} {grid[1] == copy[1]} {"abc" < "abd"} {'a' < 'b'}")?
+    let i: i8 = -128
+    io.print("{i +% -1} {i -| 5} {(i as int) * 2} {7 % -3} {-7 / 2} {1 << 100}")?
+}

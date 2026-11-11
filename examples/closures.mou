@@ -1,0 +1,19 @@
+import std.io
+
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+fn each(xs: [int], f: fn(int) ! io.Error) ! io.Error {
+    for x in xs { f(x)? }
+}
+fn adder(n: int) -> fn(int) -> int { fn(x: int) -> int { x + n } }
+fn bump(f: fn(mut int), x: mut int) { f(mut x) }
+
+fn main() ! io.Error {
+    let base = 100
+    let add = fn(x: int) -> int { x + base }
+    let twice = fn(x: int) -> int { add(add(x)) }
+    io.print("{apply(add, 1)} {twice(1)} {adder(5)(10)}")?
+    each([1, 2], fn(x: int) ! io.Error { io.print("item {x} of {base}")? })?
+    var n = 1
+    bump(fn(v: mut int) { v += base }, mut n)
+    io.print("n = {n}")?
+}

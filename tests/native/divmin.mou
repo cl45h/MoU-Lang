@@ -1,0 +1,6 @@
+import std.io
+fn d(a: int, b: int) -> int { a / b }
+fn r(a: int, b: int) -> int { a % b }
+fn main() ! io.Error { let m = -9223372036854775807 - 1
+ io.print("{r(-7, 3)} {r(7, -3)} {r(m, -1)}")?
+ io.print("{d(m, -1)}")? }

@@ -1,0 +1,6 @@
+import std.io
+fn main() ! io.Error { let k = 10
+ let add = fn(x: int) -> int { x + k }
+ var t = 0
+ for i in 0..5 { t += add(i) }
+ io.print("{t}")? }

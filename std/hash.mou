@@ -1,0 +1,191 @@
+// A hash table: a map from keys to values that finds a key in constant
+// time on average. The keys are in no particular order; `std.map` keeps
+// them sorted.
+
+import std.raw
+
+/// Types whose values can be the keys of a `Table`.
+pub trait Key {
+    /// A number that is the same for equal values and spread over all of
+    /// `int` for different ones.
+    fn hash(self) -> int
+    fn same(self, other: Self) -> bool
+}
+
+impl Key for int {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for str {
+    fn hash(self) -> int { raw.hash(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for char {
+    fn hash(self) -> int { raw.mix(self as int) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for bool {
+    fn hash(self) -> int { if self { 1 } else { 0 } }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+// Open addressing with linear probing. A key lives in the first free slot
+// at or after the one its hash names, so a search stops at an empty slot.
+// At most three quarters of the slots are in use.
+pub struct Table[K, V] {
+    keys: [K?]
+    vals: [V?]
+    count: int
+}
+
+impl[K: Key, V] Table[K, V] {
+    pub fn new() -> Table[K, V] { Table(keys: [], vals: [], count: 0) }
+
+    pub fn len(self) -> int { self.count }
+
+    pub fn is_empty(self) -> bool { self.count == 0 }
+
+    /// The slot the search for a key starts at.
+    fn home(self, key: K) -> int {
+        let cap = self.keys.len as int
+        let h = key.hash() % cap
+        if h < 0 { h + cap } else { h }
+    }
+
+    /// The slot a key is in, or the empty one where its search ends.
+    /// The table must have an empty slot.
+    fn find(self, key: K) -> (bool, int) {
+        let cap = self.keys.len as int
+        var i = self.home(key)
+        while true {
+            match self.keys[i] {
+                Some(k) => {
+                    if k.same(key) { return (true, i) }
+                }
+                None => { return (false, i) }
+            }
+            i = if i + 1 == cap { 0 } else { i + 1 }
+        }
+        (false, i)
+    }
+
+    pub fn get(self, key: K) -> V? {
+        if self.count == 0 { return None }
+        let (found, i) = self.find(key)
+        if found { self.vals[i] } else { None }
+    }
+
+    /// The value of a key, or `fallback` when the key is absent.
+    pub fn get_or(self, key: K, fallback: V) -> V {
+        match self.get(key) {
+            Some(v) => v
+            None => fallback
+        }
+    }
+
+    pub fn has(self, key: K) -> bool {
+        if self.count == 0 { return false }
+        let (found, _) = self.find(key)
+        found
+    }
+
+    /// Makes room for more keys: doubles the slots and places every key again.
+    fn grow(mut self) {
+        let old_keys = self.keys
+        let old_vals = self.vals
+        let cap = if old_keys.len == 0 { 8 } else { old_keys.len as int * 2 }
+        var keys: [K?] = []
+        var vals: [V?] = []
+        for i in 0..cap {
+            keys.push(None)
+            vals.push(None)
+        }
+        self.keys = keys
+        self.vals = vals
+        for i in 0..old_keys.len as int {
+            match old_keys[i] {
+                Some(k) => {
+                    let (_, at) = self.find(k)
+                    self.keys[at] = Some(k)
+                    self.vals[at] = old_vals[i]
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// Sets the value of a key, adding the key when it is new.
+    pub fn set(mut self, key: K, val: V) {
+        if (self.count + 1) * 4 > self.keys.len as int * 3 { self.grow() }
+        let (found, i) = self.find(key)
+        if !found {
+            self.keys[i] = Some(key)
+            self.count += 1
+        }
+        self.vals[i] = Some(val)
+    }
+
+    /// Removes a key and returns the value it had.
+    pub fn remove(mut self, key: K) -> V? {
+        if self.count == 0 { return None }
+        let (found, at) = self.find(key)
+        if !found { return None }
+        let val = self.vals[at]
+        let cap = self.keys.len as int
+        // Close the gap: move back every later key of the run whose search
+        // would otherwise stop at the slot that is now empty.
+        var hole = at
+        var j = if at + 1 == cap { 0 } else { at + 1 }
+        while true {
+            match self.keys[j] {
+                Some(k) => {
+                    let home = self.home(k)
+                    let stays = if hole <= j { home > hole && home <= j } else { home > hole || home <= j }
+                    if !stays {
+                        self.keys[hole] = Some(k)
+                        self.vals[hole] = self.vals[j]
+                        hole = j
+                    }
+                }
+                None => { break }
+            }
+            j = if j + 1 == cap { 0 } else { j + 1 }
+        }
+        self.keys[hole] = None
+        self.vals[hole] = None
+        self.count -= 1
+        val
+    }
+
+    /// The keys, in no particular order.
+    pub fn keys(self) -> [K] {
+        var out: [K] = []
+        for k in self.keys {
+            match k {
+                Some(key) => { out.push(key) }
+                None => {}
+            }
+        }
+        out
+    }
+
+    /// The values, in the order of `keys`.
+    pub fn values(self) -> [V] {
+        var out: [V] = []
+        for i in 0..self.keys.len as int {
+            match self.keys[i] {
+                Some(_) => {
+                    match self.vals[i] {
+                        Some(v) => { out.push(v) }
+                        None => {}
+                    }
+                }
+                None => {}
+            }
+        }
+        out
+    }
+}

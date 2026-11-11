@@ -1,0 +1,106 @@
+import std.io
+
+struct P { x: int, y: int }
+struct Grid { cells: [int], name: str }
+enum Tree { Leaf, Node(left: int, right: int) }
+
+let LIMIT: u8 = 200
+let BIG = 1 << 40
+
+fn fib(n: int) -> int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+fn bump(p: mut P, by: int = 10) { p.x += by }
+fn swap(a: mut int, b: mut int) {
+    let t = a
+    a = b
+    b = t
+}
+fn first_even(xs: [int]) -> int? {
+    for x in xs { if x % 2 == 0 { return x } }
+    None
+}
+fn double_first(xs: [int]) -> int? {
+    let v = first_even(xs)?
+    v * 2
+}
+fn classify(n: int) -> str {
+    match n {
+        0 => "zero"
+        1 | 2 | 3 => "small"
+        4..10 => "medium"
+        x if x < 0 => "negative"
+        _ => "large"
+    }
+}
+fn sum_tuple(t: (int, int, int)) -> int {
+    let (a, _, c) = t
+    a + c
+}
+fn shape(xs: [int]) -> str {
+    match xs {
+        [] => "empty"
+        [x] => "one {x}"
+        [a, .., z] => "from {a} to {z}"
+        _ => "never"
+    }
+}
+fn order() ! io.Error {
+    defer io.print("defer 1") catch e {}
+    defer io.print("defer 2") catch e {}
+    io.print("body")?
+}
+fn mean(xs: [f64]) -> f64 where xs.len > 0 {
+    var s = 0.0
+    for x in xs { s += x }
+    s / xs.len as f64
+}
+
+fn main() ! io.Error {
+    io.print("fib(20) = {fib(20)}")?
+    var p = P(1, 2)
+    bump(mut p)
+    bump(mut p, 5)
+    io.print("p = {p}")?
+    var a = 1
+    var b = 2
+    swap(mut a, mut b)
+    io.print("a={a} b={b}")?
+    var ps = [P(0, 0), P(5, 5)]
+    bump(mut ps[1], 100)
+    swap(mut ps[0].y, mut ps[1].y)
+    io.print("ps = {ps}")?
+    io.print("{first_even([1, 3, 4, 5])} {first_even([1, 3])} {double_first([7, 8])} {double_first([7])}")?
+    io.print("{classify(0)} {classify(2)} {classify(7)} {classify(-4)} {classify(99)}")?
+    io.print("{sum_tuple((1, 2, 3))} {shape([])} {shape([4])} {shape([1, 2, 3])}")?
+    order()?
+    var total = 0
+    for i in 1..=4 { total += i }
+    for i in 0..10 {
+        if i % 2 == 0 { continue }
+        if i > 6 { break }
+        total += i * 100
+    }
+    io.print("total = {total}")?
+    var word = ""
+    for c in 'a'..='e' { word = "{word}{c}" }
+    for c in "ñu" { word = "{word}-{c}" }
+    io.print(word)?
+    let found = loop {
+        total -= 7
+        if total % 5 == 0 { break total }
+    }
+    io.print("found {found}")?
+    let x: u8 = 250
+    io.print("{x +% 10} {x +| 10} {x -| 255} {LIMIT} {BIG} {7 / 2} {-7 % 3} {7.0 / 2}")?
+    let f: f32 = 0.1
+    io.print("{f} {f + 0.2} {1.0 / 3.0} {mean([1, 2, 4])}")?
+    let s = "hola mundo"
+    io.print("{s[..4]}|{s[5..]}|{s.len}|{[1, 2, 3, 4][1..=2]}")?
+    var t = Tree.Node(1, 2)
+    if let Node(l, r) = t { io.print("node {l} {r}")? }
+    t = Tree.Leaf
+    io.print("{t} {t == Tree.Leaf} {3 as f64} {3.99 as int} {'a' as u32}")?
+    var opt: int? = 5
+    while let Some(n) = opt { opt = if n > 3 { n - 1 } else { None } }
+    io.print("opt {opt} {1 < 2 && 2 < 1 || true}")?
+}

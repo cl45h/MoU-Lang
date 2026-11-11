@@ -1,0 +1,49 @@
+@profile(system)
+
+// Traits, generics, effects and regions.
+
+enum Order { Less, Equal, Greater }
+
+trait Ord {
+    fn cmp(self, other: Self) -> Order
+}
+
+fn max[T: Ord](a: T, b: T) -> T {
+    if a.cmp(b) == Order.Greater { a } else { b }
+}
+
+@noalloc @nopanic
+fn average(xs: [f64]) -> f64
+    where xs.len > 0
+{
+    var sum = 0.0
+    for x in xs { sum += x }
+    sum / xs.len as f64
+}
+
+enum AllocError { OutOfMemory }
+
+struct View[region r] { data: ref[r] [u8] }
+
+struct List[T] {
+    items: [T]
+    len: usize
+}
+
+impl[T] List[T] {
+    pub fn first(self) -> ref T { self.items[0] }
+
+    pub fn push(mut self, item: own T) ! AllocError {
+        self.items.append(own item)?
+    }
+}
+
+impl Ord for int {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+type Pair[T] = (T, T)
+
+let MAX_ITEMS: usize = 1 << 20

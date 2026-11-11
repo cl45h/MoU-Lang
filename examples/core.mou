@@ -1,0 +1,127 @@
+// Everything in this file is covered by the type checker and runs in the
+// interpreter: no generics and no traits.
+
+import std.io
+
+struct Account {
+    id: u32
+    balance: int
+    frozen: bool
+}
+
+enum BankError {
+    Frozen(id: u32),
+    Insufficient(needed: int, available: int),
+    NotFound,
+}
+
+enum Command {
+    Deposit(amount: int),
+    Withdraw(amount: int),
+    Freeze,
+}
+
+let MAX_BALANCE: int = 1_000_000
+
+impl Account {
+    fn open(id: u32) -> Account {
+        Account(id, 0, false)
+    }
+
+    fn can_pay(self, amount: int) -> bool {
+        !self.frozen && self.balance >= amount
+    }
+
+    fn deposit(mut self, amount: int) ! BankError {
+        if self.frozen {
+            return BankError.Frozen(self.id)
+        }
+        self.balance = self.balance +| amount
+        if self.balance > MAX_BALANCE {
+            self.balance = MAX_BALANCE
+        }
+    }
+
+    fn withdraw(mut self, amount: int) -> int ! BankError {
+        if self.frozen {
+            return BankError.Frozen(self.id)
+        }
+        if !self.can_pay(amount) {
+            return BankError.Insufficient(amount, self.balance)
+        }
+        self.balance -= amount
+        self.balance
+    }
+}
+
+fn find(accounts: [Account], id: u32) -> usize? {
+    var i: usize = 0
+    for a in accounts {
+        if a.id == id { return i }
+        i += 1
+    }
+    None
+}
+
+fn apply(account: mut Account, cmd: Command) -> int ! BankError {
+    match cmd {
+        Deposit(n) => {
+            account.deposit(n)?
+            account.balance
+        }
+        Withdraw(n) => account.withdraw(n)?
+        Freeze => {
+            account.frozen = true
+            account.balance
+        }
+    }
+}
+
+fn describe(e: BankError) -> str {
+    match e {
+        Frozen(id) => "account {id} is frozen"
+        Insufficient(needed, available) => "needs {needed}, has {available}"
+        NotFound => "no such account"
+    }
+}
+
+fn balance_or_zero(accounts: [Account], id: u32) -> int {
+    match find(accounts, id) {
+        Some(i) => accounts[i].balance
+        None => 0
+    }
+}
+
+fn run(commands: [Command]) -> int {
+    var account = Account.open(7)
+    var failures = 0
+    for cmd in commands {
+        apply(mut account, cmd) catch e {
+            failures += 1
+            0
+        }
+    }
+    let total = account.balance - failures
+    if total < 0 { 0 } else { total }
+}
+
+fn checksum(data: [u8]) -> u32 {
+    var sum: u32 = 0
+    for byte in data {
+        sum = (sum << 5) +% (byte as u32)
+    }
+    sum
+}
+
+fn main() ! io.Error {
+    let commands = [Command.Deposit(100), Command.Withdraw(30), Command.Freeze, Command.Withdraw(1)]
+    io.print("final balance: {run(commands)}")?
+    io.print("checksum: {checksum([1, 2, 3])}")?
+    io.print(describe(BankError.Insufficient(50, 20)))?
+
+    var accounts = [Account.open(1), Account.open(2)]
+    accounts[1].deposit(250) catch e { io.print(describe(e))? }
+    io.print("balance of 2: {balance_or_zero(accounts, 2)}")?
+    io.print("balance of 9: {balance_or_zero(accounts, 9)}")?
+    io.print("account: {accounts[1]}")?
+}

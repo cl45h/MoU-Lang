@@ -1,0 +1,58 @@
+import std.io
+
+enum Order { Less, Equal, Greater }
+
+trait Ord {
+    fn cmp(self, other: Self) -> Order
+}
+
+trait Show {
+    fn show(self) -> str
+}
+
+struct Version { major: int, minor: int }
+
+impl Ord for int {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for Version {
+    fn cmp(self, other: Self) -> Order {
+        if self.major != other.major { self.major.cmp(other.major) } else { self.minor.cmp(other.minor) }
+    }
+}
+
+impl Show for Version {
+    fn show(self) -> str { "v{self.major}.{self.minor}" }
+}
+
+fn max[T: Ord](a: T, b: T) -> T {
+    if a.cmp(b) == Order.Greater { a } else { b }
+}
+
+fn largest[T: Ord](xs: [T]) -> T? {
+    var best: T? = None
+    for x in xs {
+        best = match best {
+            Some(b) => max(b, x)
+            None => x
+        }
+    }
+    best
+}
+
+fn pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
+
+fn describe[T: Ord + Show](a: T, b: T) -> str {
+    "largest is {max(a, b).show()}"
+}
+
+fn main() ! io.Error {
+    io.print("{max(3, 9)} {max[int](7, 2)}")?
+    io.print("{max(Version(1, 4), Version(1, 10))}")?
+    io.print("{largest([4, 8, 1])} {largest([Version(2, 0), Version(1, 9)])}")?
+    io.print("{pair(1, 'x')} {pair(2.5, true)}")?
+    io.print(describe(Version(0, 1), Version(0, 2)))?
+}

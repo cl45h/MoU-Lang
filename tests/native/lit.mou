@@ -1,0 +1,8 @@
+import std.io
+fn main() ! io.Error { let a = 1 << 40
+ let b: i128 = 170141183460469231731687303715884105727
+ var c: i128 = b - 1
+ c += 1
+ io.print("{a} {b} {c}")?
+ c += 1
+ io.print("{c}")? }

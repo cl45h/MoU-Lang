@@ -1,0 +1,6 @@
+import std.io
+fn n(x: int) -> int { -x }
+fn m(x: i8) -> i8 { -x }
+fn main() ! io.Error { let lo: i8 = -128
+ io.print("{n(5)} {n(-5)} {m(127)}")?
+ io.print("{m(lo)}")? }

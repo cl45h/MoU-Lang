@@ -1,0 +1,74 @@
+// Ordering of values.
+
+pub enum Order { Less, Equal, Greater }
+
+/// Types whose values have a total order.
+pub trait Ord {
+    fn cmp(self, other: Self) -> Order
+}
+
+impl Ord for int {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for f64 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for str {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for char {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+pub fn min[T: Ord](a: T, b: T) -> T {
+    if b.cmp(a) == Order.Less { b } else { a }
+}
+
+pub fn max[T: Ord](a: T, b: T) -> T {
+    if b.cmp(a) == Order.Greater { b } else { a }
+}
+
+/// Sorts in place. Equal items keep their order (merge sort).
+pub fn sort[T: Ord](xs: mut [T]) {
+    let n = xs.len as int
+    if n < 2 { return }
+    let mid = n / 2
+    var left: [T] = xs[..mid]
+    var right: [T] = xs[mid..]
+    sort(mut left)
+    sort(mut right)
+    var i = 0
+    var j = 0
+    var k = 0
+    while i < mid && j < n - mid {
+        if right[j].cmp(left[i]) == Order.Less {
+            xs[k] = right[j]
+            j += 1
+        } else {
+            xs[k] = left[i]
+            i += 1
+        }
+        k += 1
+    }
+    while i < mid {
+        xs[k] = left[i]
+        i += 1
+        k += 1
+    }
+    while j < n - mid {
+        xs[k] = right[j]
+        j += 1
+        k += 1
+    }
+}

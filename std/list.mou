@@ -1,0 +1,164 @@
+// A growable sequence of values.
+
+import std.cmp
+
+pub struct List[T] { items: [T] }
+
+impl[T] List[T] {
+    pub fn new() -> List[T] { List(items: []) }
+
+    /// A list holding the items of an array, in order.
+    pub fn of(items: [T]) -> List[T] { List(items: items) }
+
+    pub fn len(self) -> int { self.items.len as int }
+
+    pub fn is_empty(self) -> bool { self.items.len == 0 }
+
+    /// The items, to iterate over: `for x in list.all() { ... }`.
+    pub fn all(self) -> [T] { self.items }
+
+    pub fn push(mut self, item: T) { self.items.push(item) }
+
+    /// Removes and returns the last item.
+    pub fn pop(mut self) -> T? { self.items.pop() }
+
+    /// The item at a position, or `None` when there is none.
+    pub fn get(self, i: int) -> T? { self.items.get(i) }
+
+    /// The item at a position. Panics when the position is out of range.
+    pub fn at(self, i: int) -> T { self.items[i] }
+
+    /// Replaces the item at a position. Panics when it is out of range.
+    pub fn set(mut self, i: int, item: T) { self.items[i] = item }
+
+    pub fn first(self) -> T? { self.items.get(0) }
+
+    pub fn last(self) -> T? { self.items.get(self.len() - 1) }
+
+    /// Puts an item at a position, moving the later ones up.
+    /// Panics when the position is past the end.
+    pub fn insert(mut self, i: int, item: T) {
+        let n = self.len()
+        if i < 0 || i > n { panic("List.insert: position {i} is out of range for length {n}") }
+        self.items.push(item)
+        var j = n
+        while j > i {
+            self.items[j] = self.items[j - 1]
+            j -= 1
+        }
+        self.items[i] = item
+    }
+
+    /// Removes and returns the item at a position, moving the later ones down.
+    /// Panics when the position is out of range.
+    pub fn remove(mut self, i: int) -> T {
+        let n = self.len()
+        let item = self.items[i]
+        var j = i
+        while j < n - 1 {
+            self.items[j] = self.items[j + 1]
+            j += 1
+        }
+        self.items.pop()
+        item
+    }
+
+    pub fn clear(mut self) { self.items = [] }
+
+    pub fn extend(mut self, more: [T]) {
+        for item in more { self.items.push(item) }
+    }
+
+    pub fn reverse(mut self) {
+        var i = 0
+        var j = self.len() - 1
+        while i < j {
+            let t = self.items[i]
+            self.items[i] = self.items[j]
+            self.items[j] = t
+            i += 1
+            j -= 1
+        }
+    }
+
+    /// A list with the result of `f` for every item.
+    pub fn map[U](self, f: fn(T) -> U) -> List[U] {
+        var out: [U] = []
+        for item in self.items { out.push(f(item)) }
+        List(items: out)
+    }
+
+    /// A list with the items for which `keep` is true.
+    pub fn filter(self, keep: fn(T) -> bool) -> List[T] {
+        var out: [T] = []
+        for item in self.items {
+            if keep(item) { out.push(item) }
+        }
+        List(items: out)
+    }
+
+    /// Combines all items into one value, starting from `start`.
+    pub fn fold[A](self, start: A, f: fn(A, T) -> A) -> A {
+        var acc: A = start
+        for item in self.items { acc = f(acc, item) }
+        acc
+    }
+
+    pub fn any(self, test: fn(T) -> bool) -> bool {
+        for item in self.items {
+            if test(item) { return true }
+        }
+        false
+    }
+
+    pub fn every(self, test: fn(T) -> bool) -> bool {
+        for item in self.items {
+            if !test(item) { return false }
+        }
+        true
+    }
+}
+
+impl[T: cmp.Ord] List[T] {
+    /// Sorts in place. Equal items keep their order.
+    pub fn sort(mut self) { cmp.sort(mut self.items) }
+
+    /// Position of the first item equal to `item`.
+    pub fn index_of(self, item: T) -> int? {
+        var i = 0
+        for x in self.items {
+            if x.cmp(item) == cmp.Order.Equal { return i }
+            i += 1
+        }
+        None
+    }
+
+    pub fn contains(self, item: T) -> bool {
+        match self.index_of(item) {
+            Some(_) => true
+            None => false
+        }
+    }
+
+    pub fn smallest(self) -> T? {
+        var best: T? = None
+        for x in self.items {
+            best = match best {
+                Some(b) => Some(cmp.min(b, x))
+                None => Some(x)
+            }
+        }
+        best
+    }
+
+    pub fn largest(self) -> T? {
+        var best: T? = None
+        for x in self.items {
+            best = match best {
+                Some(b) => Some(cmp.max(b, x))
+                None => Some(x)
+            }
+        }
+        best
+    }
+}

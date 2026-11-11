@@ -1,0 +1,57 @@
+import std.io
+import std.hash
+import std.text
+
+struct Point { x: int, y: int }
+
+impl hash.Key for Point {
+    fn hash(self) -> int { self.x * 31 + self.y }
+    fn same(self, other: Self) -> bool { self.x == other.x && self.y == other.y }
+}
+
+fn main() ! io.Error {
+    var t: hash.Table[int, str] = hash.Table.new()
+    io.print("{t.len()} {t.get(3)} {t.has(3)} {t.remove(3)}")?
+    for i in 0..1000 { t.set(i * 7, "v{i}") }
+    io.print("{t.len()} {t.get(7)} {t.get(6993)} {t.get(8)} {t.get_or(8, "nada")}")?
+    t.set(7, "otro")
+    io.print("{t.len()} {t.get(7)}")?
+    var gone = 0
+    for i in 0..1000 {
+        if i % 3 != 0 {
+            match t.remove(i * 7) {
+                Some(_) => { gone += 1 }
+                None => {}
+            }
+        }
+    }
+    var ok = true
+    for i in 0..1000 {
+        let want = i % 3 == 0
+        if t.has(i * 7) != want { ok = false }
+    }
+    io.print("{gone} {t.len()} {ok} {t.keys().len} {t.values().len} {t.remove(7)}")?
+
+    var words: hash.Table[str, int] = hash.Table.new()
+    for w in text.words("la casa de la esquina de la casa azul") {
+        words.set(w, words.get_or(w, 0) + 1)
+    }
+    io.print("{words.get("la")} {words.get("casa")} {words.get("azul")} {words.get("rojo")} {words.len()}")?
+
+    var grid: hash.Table[Point, bool] = hash.Table.new()
+    grid.set(Point(1, 2), true)
+    grid.set(Point(2, 1), false)
+    io.print("{grid.get(Point(1, 2))} {grid.get(Point(2, 1))} {grid.get(Point(0, 0))}")?
+
+    // Keys that all start at the same slot.
+    var same: hash.Table[bool, int] = hash.Table.new()
+    same.set(true, 1)
+    same.set(false, 2)
+    io.print("{same.remove(false)} {same.get(true)} {same.len()}")?
+
+    var b = text.Builder.new()
+    for i in 0..5 { b.add("{i}") }
+    b.add_char('ñ')
+    b.line("!")
+    io.print("{b.build()}{text.join(["a", "b", "c"], ", ")} {text.repeat("ab", 3)} {text.from_chars(['o', 'k'])} {text.concat([])}|")?
+}

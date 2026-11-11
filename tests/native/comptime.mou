@@ -1,0 +1,67 @@
+import std.io
+
+struct Point { x: int, y: int }
+
+enum Shape { Dot, Box(int, int) }
+
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn squares(n: int) -> [int] {
+    var out: [int] = []
+    for i in 0..n { out.push(i * i) }
+    out
+}
+
+fn crc_table() -> [u32] {
+    var table: [u32] = []
+    for n in 0..256 {
+        var c: u32 = n as u32
+        for _ in 0..8 {
+            if c & 1 == 1 { c = 0xEDB88320 ^ (c >> 1) } else { c = c >> 1 }
+        }
+        table.push(c)
+    }
+    table
+}
+
+fn crc(table: [u32], text: [u8]) -> u32 {
+    var c: u32 = 0xFFFFFFFF
+    for b in text {
+        c = table[((c ^ b as u32) & 255) as usize] ^ (c >> 8)
+    }
+    c ^ 0xFFFFFFFF
+}
+
+let LIMIT: int = 1 << 20
+let FIB: int = fib(20)
+let SQUARES: [int] = squares(6)
+let ORIGIN: Point = Point(LIMIT / 4, FIB)
+let SHAPES: [Shape] = [Shape.Dot, Shape.Box(2, 3)]
+let NAME: str = "table of {SQUARES.len}"
+let MAYBE: int? = Some(7)
+let HALF: f64 = 1.0 / 2.0
+let CRC: [u32] = crc_table()
+
+fn area(s: Shape) -> int {
+    match s {
+        Shape.Dot => 0
+        Shape.Box(w, h) => w * h
+    }
+}
+
+fn main() ! io.Error {
+    io.print("{LIMIT} {FIB} {SQUARES} {ORIGIN} {NAME} {MAYBE} {HALF}")?
+    var total = 0
+    for s in SHAPES { total += area(s) }
+    io.print("{total} {SHAPES}")?
+    // Computed once, when the program is compiled.
+    let big = comptime fib(24)
+    let table = comptime squares(4)
+    io.print("{big} {table} {comptime LIMIT * 2 + FIB}")?
+    for i in 0..3 {
+        io.print("{i + comptime fib(10)}")?
+    }
+    io.print("{crc(CRC, [49, 50, 51, 52, 53, 54, 55, 56, 57])} {CRC.len} {CRC[255]}")?
+}

@@ -1,0 +1,4 @@
+import std.io
+fn f(n: int) -> int { if n == 0 { 0 } else { 1 + f(n - 1) } }
+fn main() ! io.Error { io.print("{f(1000)}")?
+ io.print("{f(100000000)}")? }

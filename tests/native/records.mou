@@ -1,0 +1,100 @@
+import std.io
+
+struct P { x: f64, y: f64, hits: int, live: bool, tag: char }
+struct Small { a: i8, b: u8, c: u32 }
+struct Big { n: u64, m: int }
+struct Line { from: P, to: P }
+struct Bag { ps: [P], name: str }
+struct Pair[T] { a: T, b: T }
+
+impl P {
+    fn hit(mut self) { self.hits += 1 }
+    fn dist(self) -> f64 { self.x + self.y }
+}
+
+impl Bag {
+    fn at(mut self, i: int) -> ref mut P { self.ps[i] }
+}
+
+fn bump(n: mut int) { n += 10 }
+
+fn shift(p: mut P, d: f64) {
+    p.x += d
+    p.y -= d
+}
+
+fn mk(i: int) -> P { P(x: i as f64, y: 0.5, hits: i, live: i % 2 == 0, tag: 'a') }
+
+fn main() ! io.Error {
+    var ps: [P] = []
+    for i in 0..5 { ps.push(mk(i)) }
+    io.print("{ps.len} {ps[0]} {ps[4].x} {ps[3].live} {ps[2].tag} {ps[1].hits}")?
+
+    // Fields, whole items, and both ways of changing them.
+    ps[1].x = 9.5
+    ps[1].hits += 4
+    ps[1].live = true
+    ps[1].tag = 'z'
+    ps[2] = P(x: -1.0, y: -2.0, hits: -3, live: false, tag: 'q')
+    bump(mut ps[0].hits)
+    shift(mut ps[3], 100.0)
+    ps[4].hit()
+    ps[4].hit()
+    io.print("{ps}")?
+    io.print("{ps[4].dist()} {ps[3].dist()} {ps[1] == ps[1]} {ps[1] == ps[2]}")?
+
+    // A copy is a value of its own.
+    var qs = ps
+    qs[0].x = 77.0
+    qs.push(mk(9))
+    let last = qs.pop()
+    io.print("{ps[0].x} {qs[0].x} {ps.len} {qs.len} {last} {ps == qs}")?
+    qs[0].x = ps[0].x
+    io.print("{ps == qs} {ps[1..3]} {ps[..0]} {ps[4..]}")?
+
+    var total = 0.0
+    var hits = 0
+    for p in ps {
+        total += p.dist()
+        hits += p.hits
+    }
+    io.print("{total} {hits}")?
+
+    // Literals, repeats and arrays inside other values.
+    let lit = [mk(1), mk(2)]
+    var rep = [mk(7); 3]
+    rep[1].hits = 0
+    var grid: [[P]] = [lit, rep]
+    grid[1][2].x = 3.25
+    grid[0].push(mk(8))
+    var bag = Bag(ps: lit, name: "bag")
+    bag.ps[0].y = 6.0
+    bag.at(1).hits = 42
+    bag.at(0).hit()
+    io.print("{lit} {rep[1]} {grid[1][2]} {grid[0].len} {bag}")?
+
+    // Narrow integers keep their range.
+    var ss = [Small(a: 127, b: 255, c: 4000000000)]
+    ss[0].a -= 1
+    ss[0].b = ss[0].b +% 2
+    ss[0].c /= 2
+    io.print("{ss}")?
+
+    // Structs with other kinds of fields are kept as before.
+    var bigs = [Big(n: 18446744073709551615, m: 1)]
+    bigs[0].m += 1
+    var lines = [Line(from: mk(1), to: mk(2))]
+    lines[0].to.x = 8.0
+    var pairs = [Pair(a: 1, b: 2)]
+    pairs[0].b = 5
+    var maybe: [P?] = [Some(mk(3)), None]
+    io.print("{bigs} {lines[0].to} {pairs} {maybe}")?
+
+    var empty: [P] = []
+    io.print("{empty.pop()} {empty} {ps.get(1)} {ps.get(50)}")?
+
+    // An index out of range is still caught.
+    ss[0].a += 100
+    io.print("{ss}")?
+    ps[5].x = 1.0
+}

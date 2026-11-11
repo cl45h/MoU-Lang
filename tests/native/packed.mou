@@ -1,0 +1,104 @@
+import std.io
+
+struct Grid { cells: [bool], sizes: [int], name: str }
+
+struct Pair { a: int, b: bool }
+
+fn total(xs: [int]) -> int {
+    var t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn flip(g: mut Grid, i: int) {
+    g.cells[i] = !g.cells[i]
+    g.sizes[i] = g.sizes[i] * 2
+}
+
+fn main() ! io.Error {
+    // Booleans, written and read by position.
+    var flags: [bool] = [true; 6]
+    flags[2] = false
+    let old = flags
+    flags[4] = flags[2]
+    flags.push(!flags[0])
+    io.print("{flags} {old} {flags.len} {flags == old}")?
+
+    // Integers that stop fitting in 64 bits, and fit again.
+    var wide: [i128] = [1, 2, 3]
+    wide[1] = 170141183460469231731687303715884105727
+    wide.push(4)
+    io.print("{wide} {wide[1] - 1} {wide.pop()} {wide.len}")?
+    var big: [i128] = []
+    big.push(5)
+    big.push(0 - 170141183460469231731687303715884105727)
+    io.print("{big} {big.pop()} {big.pop()} {big.pop()} {big}")?
+    big.push(7)
+    io.print("{big}")?
+
+    // The same items, packed and not, are equal.
+    let a: [i128] = [1, 2]
+    var b: [i128] = [1, 170141183460469231731687303715884105727]
+    b[1] = 2
+    io.print("{a == b} {b == a} {a}")?
+
+    // Conversions of the items.
+    let small: [i64] = [1, 2, 3]
+    let maybe: [int?] = [1, None, 3]
+    let floats: [f64] = [1, 2.5, 3]
+    io.print("{small} {maybe} {floats} {total(small)}")?
+
+    // Slices, copies and arrays of arrays.
+    var xs: [int] = []
+    for i in 0..10 { xs.push(i * i) }
+    let mid = xs[2..5]
+    var rows: [[int]] = [xs[0..2], mid, []]
+    rows[2].push(9)
+    rows[0][1] = 100
+    io.print("{mid} {rows} {xs[0..2]} {total(xs)}")?
+
+    // Fields that hold arrays.
+    var g = Grid(cells: [false, true], sizes: [3, 4], name: "g")
+    let before = g
+    flip(mut g, 0)
+    flip(mut g, 1)
+    g.cells.push(true)
+    g.sizes.push(g.sizes.len as int)
+    io.print("{g} {before}")?
+    var ps: [Pair] = [Pair(a: 1, b: true), Pair(a: 2, b: false)]
+    ps[1].a = ps[0].a + 40
+    ps[0].b = ps[1].b
+    io.print("{ps} {ps[1].a + 1}")?
+
+    // Characters and floats.
+    var cs: [char] = []
+    for c in "añ→z" { cs.push(c) }
+    cs[1] = 'ü'
+    var fs: [f64] = [0.5; 3]
+    fs[2] = fs[0] + 1.25
+    fs.push(2)
+    io.print("{cs} {cs.len} {fs} {fs[2] * 2}")?
+
+    // Ranges that count without a range value.
+    var n = 0
+    for i in 250 as u8..=255 { n += i as int }
+    for i in 5..5 { n += 1000 }
+    for i in 9..2 { n += 1000 }
+    for i in 3..=3 { n += i }
+    for i in 0..100 {
+        if i % 2 == 0 { continue }
+        if i > 9 { break }
+        n += i
+    }
+    var hi = 4
+    for i in 0..hi {
+        hi = 100
+        n += 1
+    }
+    io.print("{n} {hi}")?
+
+    // Out of range, from a typed loop.
+    var last = 0
+    for i in 0..=xs.len as int { last = xs[i] }
+    io.print("{last}")?
+}

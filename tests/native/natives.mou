@@ -1,0 +1,18 @@
+import std.io
+import std.raw
+
+fn check(n: int) -> int {
+    assert(n >= 0, "negative: {n}")
+    n + 1
+}
+
+fn main() ! io.Error {
+    assert(true)
+    assert(check(1) == 2, "never shown")
+    io.print("{io.args()} {raw.hash("")} {raw.hash("mou")} {raw.mix(0)} {raw.mix(42)}")?
+    io.print("{raw.concat([])}|{raw.concat(["ñ", "", "andú"])}|{raw.from_chars([])}|{raw.from_chars(['a', '√', '😀'])}")?
+    let missing = io.read_file("no/such/file.txt") catch e { "failed: {e}" }
+    io.print(missing)?
+    let unwritable = io.write_file("no/such/dir/file.txt", "x") catch e { io.print("failed: {e}")? }
+    io.print("{check(-3)}")?
+}

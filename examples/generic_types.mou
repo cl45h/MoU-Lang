@@ -1,0 +1,127 @@
+// Generic structs, enums and `impl`s. One copy of each method is made
+// for every set of type arguments that the program uses.
+
+import std.io
+
+enum Order { Less, Equal, Greater }
+
+trait Ord {
+    fn cmp(self, other: Self) -> Order
+}
+
+trait Show {
+    fn show(self) -> str
+}
+
+impl Ord for int {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Show for int {
+    fn show(self) -> str { "<{self}>" }
+}
+
+struct Box[T] { v: T }
+
+impl[T: Show] Show for Box[T] {
+    fn show(self) -> str { "Box {self.v.show()}" }
+}
+
+impl[T] Box[T] {
+    fn map[U](self, f: fn(T) -> U) -> Box[U] { Box(v: f(self.v)) }
+    fn get(self) -> T { self.v }
+    fn put(mut self, v: T) -> T {
+        let old = self.v
+        self.v = v
+        old
+    }
+}
+
+enum Opt[T] {
+    Nothing
+    Just(T)
+}
+
+impl[T] Opt[T] {
+    fn or(self, d: T) -> T {
+        match self {
+            Opt.Nothing => d
+            Opt.Just(x) => x
+        }
+    }
+    fn is_some(self) -> bool { self != Opt.Nothing }
+}
+
+struct Sorted[T] { items: [T] }
+
+impl[T: Ord] Sorted[T] {
+    fn largest(self) -> Opt[T] {
+        var best: Opt[T] = Opt.Nothing
+        for x in self.items {
+            best = match best {
+                Opt.Nothing => Opt.Just(x)
+                Opt.Just(b) => if x.cmp(b) == Order.Greater { Opt.Just(x) } else { Opt.Just(b) }
+            }
+        }
+        best
+    }
+}
+
+fn describe[T: Show](x: T) -> str { x.show() }
+
+fn wrap[T](x: T) -> Box[T] { Box(v: x) }
+
+enum Tree[T] {
+    Leaf
+    Node(Tree[T], T, Tree[T])
+}
+
+impl[T: Ord] Tree[T] {
+    fn insert(self, v: T) -> Tree[T] {
+        match self {
+            Tree.Leaf => Tree.Node(Tree.Leaf, v, Tree.Leaf)
+            Tree.Node(l, x, r) => {
+                if v.cmp(x) == Order.Less { Tree.Node(l.insert(v), x, r) } else { Tree.Node(l, x, r.insert(v)) }
+            }
+        }
+    }
+
+    fn size(self) -> int {
+        match self {
+            Tree.Leaf => 0
+            Tree.Node(l, _, r) => l.size() + 1 + r.size()
+        }
+    }
+}
+
+type Two[T] = (T, T)
+
+fn main() ! io.Error {
+    var b = Box(v: 3)
+    io.print(describe(b))?
+    let old = b.put(10)
+    io.print("{old} {b.get()}")?
+    let s = b.map(fn(x: int) -> str { "n={x}" })
+    io.print(s.get())?
+    let bb = wrap(wrap(2.5))
+    io.print("{bb} {bb.get().get()}")?
+
+    let o: Opt[int] = Opt.Nothing
+    io.print("{o.or(7)} {Opt.Just(4).or(7)} {o.is_some()}")?
+    let srt = Sorted(items: [3, 9, 4])
+    io.print("{srt.largest()} {srt.largest().or(0)}")?
+
+    // The expected type decides what the values do not.
+    let small: Box[u8] = Box(v: 200)
+    io.print("{small.get() +% 100}")?
+    let empty = Sorted[int](items: [])
+    io.print("{empty.largest()}")?
+
+    var t: Tree[int] = Tree.Leaf
+    for v in [5, 2, 8, 1] { t = t.insert(v) }
+    io.print("{t.size()} {t}")?
+    let pair: Two[int] = (1, 2)
+    io.print("{pair.0 + pair.1}")?
+}

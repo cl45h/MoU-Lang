@@ -1,0 +1,48 @@
+import std.io
+
+struct Pixel { r: u8, g: u8, b: u8 }
+
+fn total(n: int) -> int { n * 2 }
+
+fn wide(a: u8, b: i16, c: u32, d: i64) -> i64 {
+    let x: i32 = a
+    let y: i64 = b
+    x + y + c + d
+}
+
+fn luma(p: Pixel) -> int {
+    // The fields are `u8`: the sums are made as `int`.
+    let r: int = p.r
+    (r * 299 + total(p.g) * 293 + p.b * 114) / 1000
+}
+
+fn checksum(bytes: [u8]) -> u32 {
+    var h: u32 = 17
+    for b in bytes { h = h *% 31 +% b }
+    h
+}
+
+fn grow(xs: mut [int], n: int) {
+    for i in 0..n { xs.push(i * i) }
+}
+
+let TABLE: [int] = fill(comptime total(20) + 2 * total(1))
+
+fn fill(n: int) -> [int] {
+    var out = [n]
+    grow(mut out, 3)
+    out
+}
+
+fn main() ! io.Error {
+    io.print("{wide(200, -300, 4000000000, 5)} {luma(Pixel(255, 128, 0))} {checksum([1, 2, 255])}")?
+    var xs = [7, 8]
+    grow(mut xs, 4)
+    xs.push(99)
+    var zeros = [0; 2]
+    zeros.push(5)
+    io.print("{xs} {zeros} {TABLE}")?
+    let small: u8 = 250
+    let big: int = small
+    io.print("{big + small} {small < big + 1} {comptime total(3) + total(4)}")?
+}
