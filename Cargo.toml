@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Compiler for the Mou programming language"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/cl45h/mou-lang"
+repository = "https://github.com/cl45h/MoU-Lang"
 
 [[bin]]
 name = "mou"
