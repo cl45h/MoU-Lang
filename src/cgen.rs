@@ -293,6 +293,7 @@ fn rep_type(r: Rep) -> &'static str {
     match r {
         Rep::Int(k) => ctype(k),
         Rep::F64 => "double",
+        Rep::Boxed => "kv",
         _ => "bool",
     }
 }
@@ -302,6 +303,7 @@ fn tagged(r: Rep, value: &str) -> String {
     match r {
         Rep::Int(_) => format!("kint((i128)({value}))"),
         Rep::F64 => format!("kf64({value})"),
+        Rep::Boxed => value.to_string(),
         _ => format!("kbool({value})"),
     }
 }
@@ -310,17 +312,23 @@ fn tagged(r: Rep, value: &str) -> String {
 /// result are integers or booleans and it never changes a parameter (so
 /// there is nothing to hand back to the caller).
 fn direct_sig(f: &Func, fns: &[Func]) -> Option<(Vec<Rep>, Rep)> {
+    // A function called with its arguments as they are, instead of through
+    // an array of tagged values: one that leaves its parameters alone (so
+    // that a tagged argument can be lent to it, without counting it) and
+    // that captures nothing.
     let ret = scalar_rep(f.ret);
-    if ret == Rep::Boxed || f.scalars.len() != f.params {
+    if f.scalars.len() != f.params {
         return None;
     }
     let reps = infer(f, fns);
     let params: Vec<Rep> = reps[..f.params].to_vec();
-    if params.iter().any(|r| *r == Rep::Boxed) {
-        return None;
-    }
+    let changes = |rv: &Rvalue| match rv {
+        Rvalue::Push(p, _) | Rvalue::Pop(p) => p.local < f.params,
+        Rvalue::Capture(_) => true,
+        _ => false,
+    };
     let written = f.blocks.iter().any(|b| {
-        b.stmts.iter().any(|st| st.place.local < f.params)
+        b.stmts.iter().any(|st| st.place.local < f.params || changes(&st.rv))
             || matches!(&b.term, Term::Call { dest, writeback, .. }
                 if dest.local < f.params || writeback.iter().any(|(_, place)| place.local < f.params))
     });
@@ -906,7 +914,12 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
         if cx.reps.get(l).is_some_and(|r| *r != Rep::Boxed) {
             continue;
         }
-        let init = if l < f.params { format!("a[{l}]") } else { "KUNIT".to_string() };
+        let init = match (l < f.params, mine.is_some()) {
+            // Lent by the caller: it is not released here.
+            (true, true) => format!("s{l}"),
+            (true, false) => format!("a[{l}]"),
+            _ => "KUNIT".to_string(),
+        };
         writeln!(out, "    L[{l}] = {init};").unwrap();
     }
     writeln!(out, "    goto b0;").unwrap();
@@ -948,8 +961,24 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     _ => None,
                 };
                 if let (Some((params, ret)), Callee::Fn(g)) = (fast, callee) {
-                    let values: Result<Vec<String>, String> = params.iter().zip(args).map(|(r, a)| cx.machine(*r, a)).collect();
-                    writeln!(out, "        {} r = g{g}({});", rep_type(*ret), values?.join(", ")).unwrap();
+                    let mut values = Vec::new();
+                    let mut temps = Vec::new();
+                    for (k, (r, a)) in params.iter().zip(args).enumerate() {
+                        match (r, a) {
+                            // A tagged local is lent as it is.
+                            (Rep::Boxed, Operand::Place(p)) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed => values.push(format!("L[{}]", p.local)),
+                            (Rep::Boxed, _) => {
+                                writeln!(out, "        kv t{k} = {};", operand(cx, a)?).unwrap();
+                                values.push(format!("t{k}"));
+                                temps.push(k);
+                            }
+                            _ => values.push(cx.machine(*r, a)?),
+                        }
+                    }
+                    writeln!(out, "        {} r = g{g}({});", rep_type(*ret), values.join(", ")).unwrap();
+                    for k in temps {
+                        writeln!(out, "        krelease(t{k});").unwrap();
+                    }
                     writeln!(out, "        {}", cx.take_machine(dest, *ret, "r")?).unwrap();
                     writeln!(out, "    }}").unwrap();
                     writeln!(out, "    goto b{next};").unwrap();
@@ -1008,6 +1037,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
             Term::Return(op) => {
                 writeln!(out, "    {{").unwrap();
                 match mine {
+                    Some((_, Rep::Boxed)) => writeln!(out, "        kv r = {};", operand(cx, op)?).unwrap(),
                     Some((_, ret)) => writeln!(out, "        {} r = {};", rep_type(*ret), cx.machine(*ret, op)?).unwrap(),
                     None => writeln!(out, "        kv r = {};", operand(cx, op)?).unwrap(),
                 }
@@ -1030,7 +1060,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     }
     match mine {
         Some((params, ret)) => {
-            writeln!(out, "    return 0;").unwrap();
+            writeln!(out, "    return {};", if *ret == Rep::Boxed { "KUNIT" } else { "0" }).unwrap();
             writeln!(out, "}}\n").unwrap();
             // The tagged entry, for calls through a function value.
             let unboxed: Vec<String> = params
@@ -1039,6 +1069,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                 .map(|(l, r)| match r {
                     Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
                     Rep::F64 => format!("a[{l}].u.f"),
+                    Rep::Boxed => format!("a[{l}]"),
                     _ => format!("a[{l}].u.t"),
                 })
                 .collect();

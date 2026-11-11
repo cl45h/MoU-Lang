@@ -478,7 +478,7 @@ La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se d
 
 Cómo se comprobó: un test corre el lexer y el parser de Mou en el intérprete sobre los 61 archivos `.mou` del proyecto, incluidos ellos mismos, y exige que tokens y árbol coincidan con los de Rust. A mano se comprobó lo mismo con el binario nativo, y además con 26 textos con errores de sintaxis o construcciones raras: los dos parsers dan el mismo árbol o el mismo error en la misma posición.
 
-Velocidad, medida sobre el propio parser (1600 líneas): el binario de Mou tarda 0,10 s y el de Rust 0,007 s, unas 15 veces más. Es el costo de los valores etiquetados, y es lo que tiene que resolver el layout propio antes de portar el verificador.
+Velocidad, medida sobre el propio parser (1600 líneas): el binario de Mou tarda 0,09 s y el de Rust 0,007 s, unas 13 veces más. Un perfil muestra que el tiempo no está en un punto sino repartido: para leer ese archivo el lexer hace un millón de llamadas, y cada una prepara y libera sus variables etiquetadas y cuenta referencias (unos 12 millones de liberaciones en total). Los caracteres, además, todavía se comparan como valores etiquetados. Un primer arreglo ya está: una función que no modifica sus parámetros recibe los argumentos tal cual, prestados, en vez de en un array de valores etiquetados; dio un 15 %. Lo que falta es lo de fondo, variables y campos con su tipo de máquina, y tiene que estar antes de portar el verificador.
 
 Diferencia conocida: el lexer de Mou solo acepta letras ASCII en los identificadores, y el parser solo mira mayúsculas ASCII para decidir si un nombre en un patrón es un constructor, porque los caracteres todavía no tienen métodos como `is_alphabetic`. Los de Rust aceptan cualquier letra Unicode.
 
