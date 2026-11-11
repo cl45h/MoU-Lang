@@ -34,7 +34,8 @@ commands:
   ast      print the syntax tree
   tokens   print the token stream
   lex      print the tokens in the form the lexer written in Mou prints them
-  tree     print the syntax tree in the form the parser written in Mou prints it";
+  tree     print the syntax tree in the form the parser written in Mou prints it
+  modules  print the program with all it imports, as the loader written in Mou does";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -119,6 +120,10 @@ fn main() -> ExitCode {
         }),
         "lex" => {
             print!("{}", lexer::dump(&src));
+            Ok(())
+        }
+        "modules" => {
+            print!("{}", load::dump(path, &src));
             Ok(())
         }
         "tree" => {
@@ -402,8 +407,8 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
 mod selfhost {
     use crate::{check, comptime, interp, lexer, load, mir, own};
 
-    /// The lexer and the parser written in Mou give, for every file of the
-    /// project, the tokens and the tree this compiler gives.
+    /// The lexer, the parser and the loader written in Mou give, for every
+    /// file of the project, what the ones of this compiler give.
     #[test]
     fn the_compiler_in_mou_agrees_with_this_one() {
         let root = env!("CARGO_MANIFEST_DIR");
@@ -426,9 +431,14 @@ mod selfhost {
         assert!(files.len() > 50);
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
-            let stages = [("lex", lexer::dump(&text)), ("tree", crate::ast::dump(&crate::parser::parse_file(&text)))];
+            let shown = path.display().to_string();
+            let stages = [
+                ("lex", lexer::dump(&text)),
+                ("tree", crate::ast::dump(&crate::parser::parse_file(&text))),
+                ("modules", load::dump(&shown, &text)),
+            ];
             for (stage, expected) in stages {
-                interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), path.display().to_string()]);
+                interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), shown.clone(), format!("{root}/std")]);
                 let mut out = Vec::new();
                 interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
                 assert_eq!(String::from_utf8_lossy(&out), expected, "{stage} of {}", path.display());

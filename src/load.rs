@@ -76,6 +76,31 @@ pub fn load(path: &str, text: &str) -> (Sources, Result<File, Vec<Error>>) {
     (sources, Ok(ld.merged))
 }
 
+/// A loaded program as text, in the form the loader written in Mou
+/// (`compiler/load.mou`) prints it.
+pub fn dump(path: &str, text: &str) -> String {
+    let file = match load(path, text).1 {
+        Ok(f) => f,
+        Err(errors) => return errors.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect(),
+    };
+    let paths = load(path, text).0.paths();
+    let mut out = String::new();
+    let opt = |o: &Option<String>| o.clone().unwrap_or_else(|| "_".to_string());
+    for (k, m) in file.modules.iter().enumerate() {
+        let name = if m.name.is_empty() { "-" } else { &m.name };
+        // The number of a module is the one of its file.
+        let source = (file.decls.get(m.decls.start).map_or(0, |d| d.span.line) >> FILE_SHIFT) as usize;
+        let shown = if m.decls.is_empty() { paths.get(k) } else { paths.get(source) };
+        out.push_str(&format!("module {k} {name} {} {}..{} {}\n", shown.map_or("?", |p| p.as_str()), m.decls.start, m.decls.end, opt(&m.profile)));
+        for i in &m.imports {
+            let target = i.module.map_or("_".to_string(), |n| n.to_string());
+            out.push_str(&format!("  import {} {} {target} {} {}\n", i.alias, i.path, opt(&i.origin), crate::ast::decls_dump(&i.decls)));
+        }
+    }
+    out.push_str(&crate::ast::dump(&Ok(file)));
+    out
+}
+
 impl Loader {
     /// Parses a module and, first, the modules it imports. Returns its number.
     fn module(&mut self, name: String, path: String, text: String) -> usize {

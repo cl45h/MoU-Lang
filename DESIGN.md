@@ -305,7 +305,7 @@ fuente -> lexer/parser -> AST
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números y `bool`. Pendiente: leer el header (vía libclang), strings, punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
-| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer y el parser ya están escritos en Mou (`compiler/`) y dan los mismos tokens y el mismo árbol que los de Rust. Faltan el verificador, el MIR y el emisor de C |
+| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer, el parser y el cargador de módulos ya están escritos en Mou (`compiler/`) y dan lo mismo que los de Rust. Faltan el verificador, el MIR y el emisor de C |
 
 Implementación inicial del compilador: Rust (seguro, buen ecosistema para compiladores), hasta que Mou pueda compilarse a sí mismo.
 
@@ -470,13 +470,14 @@ La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se d
 |---|---|
 | Lexer | Hecho: `compiler/lexer.mou`, unas 420 líneas |
 | Parser | Hecho: `compiler/parser.mou`, unas 1600 líneas con el árbol y su volcado |
+| Cargador de módulos | Hecho: `compiler/load.mou`, unas 170 líneas |
 | Verificador de tipos | Pendiente |
 | MIR, ownership, efectos | Pendiente |
 | Emisor de C | Pendiente |
 
-`mou build compiler/main.mou -o mouc` compila lo que hay. `./mouc lex archivo.mou` imprime los tokens y `./mouc tree archivo.mou` el árbol sintáctico; `mou lex` y `mou tree` imprimen los del compilador de Rust en el mismo formato, con la posición de cada expresión y de cada declaración.
+`mou build compiler/main.mou -o mouc` compila lo que hay. `./mouc lex archivo.mou` imprime los tokens, `./mouc tree archivo.mou` el árbol sintáctico y `./mouc modules archivo.mou` el programa entero con todo lo que importa; `mou lex`, `mou tree` y `mou modules` imprimen lo del compilador de Rust en el mismo formato, con la posición de cada expresión y de cada declaración. El compilador en Mou ya se carga a sí mismo: cinco módulos. La librería estándar la lee de la carpeta `std` (o de la que se le pase), porque todavía no puede llevarla adentro como el de Rust.
 
-Cómo se comprobó: un test corre el lexer y el parser de Mou en el intérprete sobre los 61 archivos `.mou` del proyecto, incluidos ellos mismos, y exige que tokens y árbol coincidan con los de Rust. A mano se comprobó lo mismo con el binario nativo, y además con 26 textos con errores de sintaxis o construcciones raras: los dos parsers dan el mismo árbol o el mismo error en la misma posición.
+Cómo se comprobó: un test corre el lexer, el parser y el cargador de Mou en el intérprete sobre los 62 archivos `.mou` del proyecto, incluidos ellos mismos, y exige que tokens, árbol y módulos coincidan con los de Rust. El cargador se probó además con imports en círculo, módulos que no existen, módulos con errores de sintaxis e imports de C. A mano se comprobó lo mismo con el binario nativo, y además con 26 textos con errores de sintaxis o construcciones raras: los dos parsers dan el mismo árbol o el mismo error en la misma posición.
 
 Velocidad, medida sobre el propio parser (1600 líneas): el binario de Mou tarda 0,08 s y el de Rust 0,007 s, unas 11 veces más. Un perfil muestra que el tiempo no está en un punto sino repartido: para leer ese archivo el lexer hace un millón de llamadas, y cada una prepara y libera sus variables etiquetadas y cuenta referencias (unos 12 millones de liberaciones en total). Los caracteres, además, todavía se comparan como valores etiquetados. Dos arreglos ya están: una función que no modifica sus parámetros recibe los argumentos tal cual, prestados, en vez de en un array de valores etiquetados (15 %), y comparar un carácter con uno escrito ya no pasa por la comparación general (otro 10 %). Contando instrucciones, lo que más pesa ahora es liberar valores (19 %) y que cada opcional vive en un bloque de memoria: `chars.get(i)` pide y libera memoria en cada carácter que el lexer mira. Lo que falta es lo de fondo, variables y campos con su tipo de máquina, y tiene que estar antes de portar el verificador.
 

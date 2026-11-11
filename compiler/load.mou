@@ -1,0 +1,183 @@
+// Finds and parses the modules a program is made of. It follows
+// `src/load.rs`: a file is a module, `import a.b` loads `a/b.mou` from
+// next to the file of the program, and the declarations of all the
+// modules end up in one tree, each module keeping its own names.
+
+import std.io
+import std.text
+import lexer
+import parser
+
+// Modules the compiler provides directly.
+let BUILTIN: [str] = ["std.io", "std.raw"]
+
+// Lines of module `n` are numbered from `n << FILE_SHIFT`, so that a
+// position alone says which file it is in.
+let FILE_SHIFT: int = 20
+
+pub struct ModImport { alias: str, path: str, module: int?, origin: str?, decls: [parser.Decl] }
+
+pub struct Module { name: str, path: str, first: int, last: int, imports: [ModImport], profile: str?, loaded: bool }
+
+pub struct Program { file: parser.File, modules: [Module], errors: [lexer.Error] }
+
+struct Loader {
+    root: str
+    std_dir: str
+    names: [str]
+    modules: [Module]
+    merged: parser.File
+    errors: [lexer.Error]
+}
+
+fn has(list: [str], s: str) -> bool {
+    for k in list {
+        if k == s { return true }
+    }
+    false
+}
+
+// The directory of a path, as far as its last `/`.
+fn dirname(path: str) -> str {
+    let cs = text.chars(path)
+    var cut = -1
+    for k in 0..cs.len {
+        if cs[k] == '/' { cut = k as int }
+    }
+    if cut < 0 { return "" }
+    if cut == 0 { return "/" }
+    var out: [char] = []
+    for k in 0..cs.len {
+        if (k as int) < cut { out.push(cs[k]) }
+    }
+    text.from_chars(out)
+}
+
+fn under(dir: str, rest: str) -> str {
+    if dir == "" { return rest }
+    if dir == "/" { return "/{rest}" }
+    "{dir}/{rest}"
+}
+
+impl Loader {
+    // Parses a module and, first, the modules it imports. Returns its number.
+    fn module(mut self, name: str, path: str, src: str) -> int {
+        let id = self.names.len as int
+        self.names.push(name)
+        self.modules.push(Module(name, path, 0, 0, [], None, false))
+        let origin = (id << FILE_SHIFT) + 1
+        let file = parser.parse_at(src, origin) catch e {
+            self.errors.push(e)
+            return id
+        }
+        var imports: [ModImport] = []
+        var kept: [parser.Import] = []
+        for imp in file.imports {
+            var alias = ""
+            var named = true
+            match imp.alias {
+                Some(a) => {
+                    alias = a
+                }
+                None => {
+                    match imp.origin {
+                        // A foreign import without a name brings nothing
+                        // the checker can see.
+                        Some(_) => {
+                            named = false
+                        }
+                        None => {
+                            let parts = text.split(imp.path, '.')
+                            alias = parts[parts.len - 1]
+                        }
+                    }
+                }
+            }
+            if !named {
+                kept.push(imp)
+                continue
+            }
+            let foreign = match imp.origin {
+                Some(_) => true
+                None => false
+            }
+            var target: int? = None
+            if !foreign && !has(BUILTIN, imp.path) { target = self.import_module(imp.path, origin) }
+            imports.push(ModImport(alias, imp.path, target, imp.origin, imp.decls))
+            kept.push(parser.Import(imp.origin, imp.path, imp.alias, []))
+        }
+        if id == 0 {
+            self.merged.profile = file.profile
+            self.merged.imports = kept
+        }
+        let first = self.merged.decls.len as int
+        for d in file.decls { self.merged.decls.push(d) }
+        self.modules[id] = Module(name, path, first, self.merged.decls.len as int, imports, file.profile, true)
+        id
+    }
+
+    fn import_module(mut self, name: str, at: int) -> int? {
+        for k in 0..self.names.len {
+            if self.names[k] == name { return Some(k as int) }
+        }
+        if text.starts_with(name, "std.") {
+            let parts = text.split(name, '.')
+            var rest: [str] = []
+            for k in 1..parts.len { rest.push(parts[k]) }
+            let file = "{self.std_dir}/{text.join(rest, ".")}.mou"
+            let src = io.read_file(file) catch e {
+                self.errors.push(lexer.Error("the standard library has no module `{name}`", at, 1))
+                return None
+            }
+            return Some(self.module(name, "<{name}>", src))
+        }
+        let shown = under(self.root, "{text.join(text.split(name, '.'), "/")}.mou")
+        let src = io.read_file(shown) catch e {
+            self.errors.push(lexer.Error("cannot load the module `{name}` from {shown}: {e}", at, 1))
+            return None
+        }
+        Some(self.module(name, shown, src))
+    }
+}
+
+// Loads a program: the file at `path`, whose text is `src`, and all it
+// imports. The standard library is read from `std_dir`.
+pub fn load(path: str, src: str, std_dir: str) -> Program {
+    var ld = Loader(dirname(path), std_dir, [], [], parser.File(None, [], []), [])
+    let _ = ld.module("", path, src)
+    var modules: [Module] = []
+    for m in ld.modules {
+        if m.loaded { modules.push(m) }
+    }
+    Program(ld.merged, modules, ld.errors)
+}
+
+fn opt_str(o: str?) -> str {
+    match o {
+        Some(s) => s
+        None => "_"
+    }
+}
+
+// A loaded program as lines of text, in the form `mou modules` prints it.
+pub fn dump(p: Program) -> [str] {
+    var out: [str] = []
+    if p.errors.len > 0 {
+        for e in p.errors { out.push("error {e.line}:{e.col} {e.msg}") }
+        return out
+    }
+    for k in 0..p.modules.len {
+        let m = p.modules[k]
+        let name = if m.name == "" { "-" } else { m.name }
+        out.push("module {k} {name} {m.path} {m.first}..{m.last} {opt_str(m.profile)}")
+        for i in m.imports {
+            let target = match i.module {
+                Some(n) => "{n}"
+                None => "_"
+            }
+            out.push("  import {i.alias} {i.path} {target} {opt_str(i.origin)} {parser.decls_text(i.decls)}")
+        }
+    }
+    for line in parser.dump(p.file) { out.push(line) }
+    out
+}

@@ -523,6 +523,11 @@ fn decl_text(d: &Decl) -> String {
     format!("(decl {}:{} {} {} {kind})", d.span.line, d.span.col, seq(&d.attrs, attr), if d.public { "pub" } else { "priv" })
 }
 
+/// Declarations as text, for what is printed about a module.
+pub fn decls_dump(decls: &[Decl]) -> String {
+    seq(decls, decl_text)
+}
+
 /// The tree of a file, or its first error, as text.
 pub fn dump(parsed: &Result<File, crate::lexer::Error>) -> String {
     let file = match parsed {

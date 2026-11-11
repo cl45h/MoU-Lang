@@ -1288,8 +1288,11 @@ impl Parser {
     }
 }
 
-pub fn parse(src: str) -> File ! lexer.Error {
-    let toks = lexer.lex(src)?
+pub fn parse(src: str) -> File ! lexer.Error { parse_at(src, 1)? }
+
+// Parses a file whose first line has the given number.
+pub fn parse_at(src: str, line: int) -> File ! lexer.Error {
+    let toks = lexer.lex_at(src, line, 1)?
     var p = Parser(toks, 0)
     p.file()?
 }
@@ -1367,7 +1370,7 @@ fn patterns_text(ps: [Pattern]) -> str {
     seq(out)
 }
 
-fn decls_text(ds: [Decl]) -> str {
+pub fn decls_text(ds: [Decl]) -> str {
     var out: [str] = []
     for d in ds { out.push(decl_text(d)) }
     seq(out)
