@@ -33,7 +33,8 @@ commands:
   parse    check that the file parses and list its declarations
   ast      print the syntax tree
   tokens   print the token stream
-  lex      print the tokens in the form the lexer written in Mou prints them";
+  lex      print the tokens in the form the lexer written in Mou prints them
+  tree     print the syntax tree in the form the parser written in Mou prints it";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -118,6 +119,10 @@ fn main() -> ExitCode {
         }),
         "lex" => {
             print!("{}", lexer::dump(&src));
+            Ok(())
+        }
+        "tree" => {
+            print!("{}", ast::dump(&parser::parse_file(&src)));
             Ok(())
         }
         "ast" => parser::parse_file(&src).map(|file| println!("{file:#?}")),
@@ -397,10 +402,10 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
 mod selfhost {
     use crate::{check, comptime, interp, lexer, load, mir, own};
 
-    /// The lexer written in Mou gives, for every file of the project, the
-    /// tokens the lexer of this compiler gives.
+    /// The lexer and the parser written in Mou give, for every file of the
+    /// project, the tokens and the tree this compiler gives.
     #[test]
-    fn the_lexer_in_mou_agrees_with_this_one() {
+    fn the_compiler_in_mou_agrees_with_this_one() {
         let root = env!("CARGO_MANIFEST_DIR");
         let main = format!("{root}/compiler/main.mou");
         let src = std::fs::read_to_string(&main).unwrap();
@@ -420,11 +425,14 @@ mod selfhost {
         }
         assert!(files.len() > 50);
         for path in files {
-            interp::ARGS.with(|a| *a.borrow_mut() = vec![path.display().to_string()]);
-            let mut out = Vec::new();
-            interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
-            let expected = lexer::dump(&std::fs::read_to_string(&path).unwrap());
-            assert_eq!(String::from_utf8_lossy(&out), expected, "{}", path.display());
+            let text = std::fs::read_to_string(&path).unwrap();
+            let stages = [("lex", lexer::dump(&text)), ("tree", crate::ast::dump(&crate::parser::parse_file(&text)))];
+            for (stage, expected) in stages {
+                interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), path.display().to_string()]);
+                let mut out = Vec::new();
+                interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
+                assert_eq!(String::from_utf8_lossy(&out), expected, "{stage} of {}", path.display());
+            }
         }
     }
 }

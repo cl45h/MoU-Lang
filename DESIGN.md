@@ -305,7 +305,7 @@ fuente -> lexer/parser -> AST
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números y `bool`. Pendiente: leer el header (vía libclang), strings, punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
-| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer ya está escrito en Mou (`compiler/lexer.mou`) y da los mismos tokens que el de Rust. Faltan el parser, el verificador, el MIR y el emisor de C |
+| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer y el parser ya están escritos en Mou (`compiler/`) y dan los mismos tokens y el mismo árbol que los de Rust. Faltan el verificador, el MIR y el emisor de C |
 
 Implementación inicial del compilador: Rust (seguro, buen ecosistema para compiladores), hasta que Mou pueda compilarse a sí mismo.
 
@@ -468,19 +468,23 @@ La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se d
 
 | Etapa | Estado |
 |---|---|
-| Lexer | Hecho: `compiler/lexer.mou`, unas 380 líneas |
-| Parser | Pendiente |
+| Lexer | Hecho: `compiler/lexer.mou`, unas 420 líneas |
+| Parser | Hecho: `compiler/parser.mou`, unas 1600 líneas con el árbol y su volcado |
 | Verificador de tipos | Pendiente |
 | MIR, ownership, efectos | Pendiente |
 | Emisor de C | Pendiente |
 
-`mou build compiler/main.mou -o mouc` compila lo que hay, y `./mouc archivo.mou` imprime los tokens. `mou lex archivo.mou` imprime los del lexer de Rust en el mismo formato. Un test corre el lexer de Mou en el intérprete sobre los 60 archivos del proyecto, incluido el propio lexer, y exige que coincidan; a mano se comprobó lo mismo con el binario nativo, y que los tres errores del lexer salen iguales.
+`mou build compiler/main.mou -o mouc` compila lo que hay. `./mouc lex archivo.mou` imprime los tokens y `./mouc tree archivo.mou` el árbol sintáctico; `mou lex` y `mou tree` imprimen los del compilador de Rust en el mismo formato, con la posición de cada expresión y de cada declaración.
 
-Diferencia conocida: el lexer de Mou solo acepta letras ASCII en los identificadores, porque los caracteres todavía no tienen métodos como `is_alphabetic`. El de Rust acepta cualquier letra Unicode.
+Cómo se comprobó: un test corre el lexer y el parser de Mou en el intérprete sobre los 61 archivos `.mou` del proyecto, incluidos ellos mismos, y exige que tokens y árbol coincidan con los de Rust. A mano se comprobó lo mismo con el binario nativo, y además con 26 textos con errores de sintaxis o construcciones raras: los dos parsers dan el mismo árbol o el mismo error en la misma posición.
 
-Lo que enseñó escribirlo: una llave suelta dentro de un string (`"{"`) abre una interpolación y hay que escribirla doble (`"{{"`); el mensaje de error de ese caso apunta lejos del problema y conviene mejorarlo.
+Velocidad, medida sobre el propio parser (1600 líneas): el binario de Mou tarda 0,10 s y el de Rust 0,007 s, unas 15 veces más. Es el costo de los valores etiquetados, y es lo que tiene que resolver el layout propio antes de portar el verificador.
 
-El compilador de Rust tiene unas 17 000 líneas. El lexer es la parte más chica: el verificador de tipos solo tiene más de 4 000. Para que el resto sea viable hace falta antes el layout propio de structs y enums, porque un compilador mueve muchísimos de esos valores.
+Diferencia conocida: el lexer de Mou solo acepta letras ASCII en los identificadores, y el parser solo mira mayúsculas ASCII para decidir si un nombre en un patrón es un constructor, porque los caracteres todavía no tienen métodos como `is_alphabetic`. Los de Rust aceptan cualquier letra Unicode.
+
+Lo que enseñó escribirlos: una llave suelta dentro de un string (`"{"`) abre una interpolación y hay que escribirla doble (`"{{"`); el error de ese caso ahora lo dice en el lugar. Los nombres de variables no pueden ser palabras clave (`region`, `type`, `scope`). Sin closures que modifiquen lo que capturan, las listas del parser se escriben como bucles en vez de pasar una función. Fuera de eso, el parser compiló sin tocar el lenguaje.
+
+El compilador de Rust tiene unas 17 000 líneas. Lexer y parser son cerca del 10 %: el verificador de tipos solo tiene más de 4 000. Para que el resto sea viable hace falta antes el layout propio de structs y enums, porque un compilador mueve muchísimos de esos valores.
 
 ### Formateador y sesión interactiva
 

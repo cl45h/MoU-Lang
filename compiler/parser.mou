@@ -1,0 +1,1577 @@
+// The parser of Mou, written in Mou: tokens to a syntax tree. It follows
+// `src/parser.rs` step by step, and `mou tree` prints what that one
+// gives in the form `dump` prints here.
+
+import std.text
+import lexer
+
+// ---- the tree ----
+
+pub enum Mode { Let, Mut, Own }
+
+pub enum Type {
+    Path([str], [GenArg])
+    Slice(Type)
+    Array(Type, Expr)
+    Soa(Type)
+    Tuple([Type])
+    Fn([FnParam], Type?, Type?)
+    Ref(str?, bool, Type)
+    Dyn([Type])
+    Optional(Type)
+    SelfType
+    TypeType
+}
+
+pub struct FnParam { mode: Mode, ty: Type }
+
+pub enum GenArg { OfType(Type), OfExpr(Expr) }
+
+pub struct Expr { kind: Kind, line: int, col: int }
+
+pub enum StrPart { Text(str), Value(Expr) }
+
+pub enum Kind {
+    Int(str)
+    Float(str)
+    Str([StrPart])
+    Char(char)
+    Bool(bool)
+    Name(str)
+    Tuple([Expr])
+    Array([Expr])
+    Repeat(Expr, Expr)
+    Blk(Block)
+    If(Cond, Block, Expr?)
+    Match(Expr, [Arm])
+    For(Pattern, Expr, Block)
+    While(Cond, Block)
+    Loop(Block)
+    Closure([Param], Type?, Type?, Block)
+    Comptime(Expr)
+    Unsafe(Block)
+    Scope(str, Block)
+    With([Binding], Block)
+    Return(Expr?)
+    Break(Expr?)
+    Continue
+    Unary(str, Expr)
+    Binary(str, Expr, Expr)
+    Range(Expr?, Expr?, bool)
+    Cast(Expr, Type)
+    Call(Expr, [Arg])
+    Index(Expr, [Expr])
+    Field(Expr, str)
+    Try(Expr)
+    Catch(Expr, str?, Block)
+}
+
+pub struct Arg { label: str?, mode: Mode, value: Expr }
+
+pub struct Binding { name: str, value: Expr }
+
+pub enum Cond { Test(Expr), Bind(Pattern, Expr) }
+
+pub struct Arm { pat: Pattern, guard: Expr?, body: Expr }
+
+pub struct Block { stmts: [Stmt], tail: Expr? }
+
+pub enum Stmt {
+    Let(bool, Pattern, Type?, Expr?)
+    Assign(Expr, str, Expr)
+    Defer(Expr)
+    Do(Expr)
+    Item(Decl)
+}
+
+pub enum Pattern {
+    Wildcard
+    Literal(Expr)
+    Range(Expr, Expr?, bool)
+    Bind(bool, str)
+    Ctor([str], [Pattern])
+    Struct([str], [FieldPat], bool)
+    Tuple([Pattern])
+    Slice([Pattern])
+    Rest
+    Or([Pattern])
+}
+
+pub struct FieldPat { name: str, pat: Pattern? }
+
+pub struct Param { ct: bool, name: str, mode: Mode, ty: Type?, default: Expr? }
+
+pub enum GenParam { OfType(str, [Type]), Region(str), Value(str, Type) }
+
+pub struct Attr { name: str, args: [Expr] }
+
+pub struct Decl { attrs: [Attr], public: bool, kind: DeclKind, line: int, col: int }
+
+pub enum DeclKind {
+    Fn(FnDecl)
+    Struct(StructDecl)
+    Enum(EnumDecl)
+    Trait(TraitDecl)
+    Impl(ImplDecl)
+    Const(str, Type?, Expr)
+    Alias(str, [GenParam], Type)
+}
+
+pub struct FnDecl {
+    name: str
+    generics: [GenParam]
+    params: [Param]
+    ret: Type?
+    by_ref: bool
+    err: Type?
+    conds: [Expr]
+    body: Expr?
+}
+
+pub struct Field { public: bool, name: str, ty: Type, default: Expr? }
+
+pub struct StructDecl { name: str, generics: [GenParam], fields: [Field] }
+
+pub struct VariantField { label: str?, ty: Type }
+
+pub struct Variant { name: str, fields: [VariantField], value: Expr? }
+
+pub struct EnumDecl { name: str, generics: [GenParam], variants: [Variant] }
+
+pub struct TraitDecl { name: str, generics: [GenParam], supers: [Type], methods: [Decl] }
+
+pub struct ImplDecl { generics: [GenParam], of_trait: Type?, ty: Type, decls: [Decl] }
+
+pub struct Import { origin: str?, path: str, alias: str?, decls: [Decl] }
+
+pub struct File { profile: str?, imports: [Import], decls: [Decl] }
+
+// ---- the parser ----
+
+let ASSIGN_OPS: [str] = ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
+
+struct Ret { ret: Type?, by_ref: bool, err: Type? }
+
+struct Parser { toks: [lexer.Token], pos: int }
+
+fn has(list: [str], s: str) -> bool {
+    for k in list {
+        if k == s { return true }
+    }
+    false
+}
+
+fn mk(kind: Kind, line: int, col: int) -> Expr { Expr(kind, line, col) }
+
+fn prec_of(p: str) -> int {
+    if p == "||" { return 2 }
+    if p == "&&" { return 3 }
+    if p == "==" || p == "!=" || p == "<" || p == "<=" || p == ">" || p == ">=" { return 4 }
+    if p == ".." || p == "..=" { return 5 }
+    if p == "|" { return 6 }
+    if p == "^" { return 7 }
+    if p == "&" { return 8 }
+    if p == "<<" || p == ">>" { return 9 }
+    if p == "+" || p == "-" || p == "+%" || p == "-%" || p == "+|" || p == "-|" { return 10 }
+    if p == "*" || p == "/" || p == "%" || p == "*%" || p == "*|" { return 11 }
+    0
+}
+
+// Parses the source of a value inserted in a string, which starts at a
+// position of the file.
+fn parse_expr_at(src: str, line: int, col: int) -> Expr ! lexer.Error {
+    let toks = lexer.lex_at(src, line, col)?
+    var p = Parser(toks, 0)
+    let _ = p.skip_nl()
+    let e = p.expr()?
+    let _ = p.skip_nl()
+    match p.peek() {
+        lexer.Tok.Eof => {}
+        _ => return p.err("unexpected {p.describe()} after expression")
+    }
+    e
+}
+
+impl Parser {
+    // ---- token helpers ----
+
+    fn tok_at(self, n: int) -> lexer.Tok {
+        var i = self.pos + n
+        let last = self.toks.len as int - 1
+        if i > last { i = last }
+        self.toks[i].tok
+    }
+
+    fn peek(self) -> lexer.Tok { self.tok_at(0) }
+
+    fn line(self) -> int { self.toks[self.pos].line }
+
+    fn col(self) -> int { self.toks[self.pos].col }
+
+    fn bump(mut self) {
+        if self.pos < self.toks.len as int - 1 { self.pos += 1 }
+    }
+
+    fn describe(self) -> str {
+        match self.peek() {
+            lexer.Tok.Ident(s) => "identifier `{s}`"
+            lexer.Tok.Int(s) => "number `{s}`"
+            lexer.Tok.Float(s) => "number `{s}`"
+            lexer.Tok.Str(_) => "string literal"
+            lexer.Tok.Char(_) => "character literal"
+            lexer.Tok.Kw(k) => "keyword `{k}`"
+            lexer.Tok.P(p) => "`{p}`"
+            lexer.Tok.Newline => "end of line"
+            lexer.Tok.Eof => "end of file"
+        }
+    }
+
+    fn err(self, msg: str) -> lexer.Error { lexer.Error(msg, self.line(), self.col()) }
+
+    fn p_at(self, n: int, s: str) -> bool {
+        match self.tok_at(n) {
+            lexer.Tok.P(p) => p == s
+            _ => false
+        }
+    }
+
+    fn kw_at(self, n: int, s: str) -> bool {
+        match self.tok_at(n) {
+            lexer.Tok.Kw(k) => k == s
+            _ => false
+        }
+    }
+
+    fn ident_at(self, n: int) -> bool {
+        match self.tok_at(n) {
+            lexer.Tok.Ident(_) => true
+            _ => false
+        }
+    }
+
+    fn int_at(self, n: int) -> bool {
+        match self.tok_at(n) {
+            lexer.Tok.Int(_) => true
+            _ => false
+        }
+    }
+
+    fn is_p(self, s: str) -> bool { self.p_at(0, s) }
+
+    fn is_kw(self, s: str) -> bool { self.kw_at(0, s) }
+
+    // The punctuation at the current position, or nothing.
+    fn peek_p(self) -> str {
+        match self.peek() {
+            lexer.Tok.P(p) => p
+            _ => ""
+        }
+    }
+
+    fn peek_kw(self) -> str {
+        match self.peek() {
+            lexer.Tok.Kw(k) => k
+            _ => ""
+        }
+    }
+
+    fn eat_p(mut self, s: str) -> bool {
+        let hit = self.is_p(s)
+        if hit { self.bump() }
+        hit
+    }
+
+    fn eat_kw(mut self, s: str) -> bool {
+        let hit = self.is_kw(s)
+        if hit { self.bump() }
+        hit
+    }
+
+    fn expect_p(mut self, s: str) ! lexer.Error {
+        if !self.eat_p(s) { return self.err("expected `{s}`, found {self.describe()}") }
+    }
+
+    fn expect_kw(mut self, s: str) ! lexer.Error {
+        if !self.eat_kw(s) { return self.err("expected `{s}`, found {self.describe()}") }
+    }
+
+    fn ident(mut self) -> str ! lexer.Error {
+        match self.peek() {
+            lexer.Tok.Ident(s) => {
+                self.bump()
+                s
+            }
+            _ => return self.err("expected identifier, found {self.describe()}")
+        }
+    }
+
+    // Skips ends of line; says whether there was at least one.
+    fn skip_nl(mut self) -> bool {
+        var any = false
+        loop {
+            match self.peek() {
+                lexer.Tok.Newline => {
+                    self.bump()
+                    any = true
+                }
+                _ => break
+            }
+        }
+        any
+    }
+
+    // End of statement: an end of line, the end of the file, or a closing
+    // brace, which is left there.
+    fn expect_nl(mut self) ! lexer.Error {
+        match self.peek() {
+            lexer.Tok.Newline => self.bump()
+            lexer.Tok.Eof => {}
+            lexer.Tok.P(p) => {
+                if p != "}}" { return self.err("expected end of line, found {self.describe()}") }
+            }
+            _ => return self.err("expected end of line, found {self.describe()}")
+        }
+    }
+
+    // After an item of a list: whether the list ended. Inside braces an
+    // end of line also separates items.
+    fn list_end(mut self, close: str) -> bool ! lexer.Error {
+        let had_nl = self.skip_nl()
+        if self.eat_p(",") { return false }
+        if self.eat_p(close) { return true }
+        if had_nl && close == "}}" { return false }
+        return self.err("expected `,` or `{close}`, found {self.describe()}")
+    }
+
+    // Before an item of a list: whether the list ended.
+    fn list_done(mut self, close: str) -> bool {
+        let _ = self.skip_nl()
+        self.eat_p(close)
+    }
+
+    // ---- file and declarations ----
+
+    fn file(mut self) -> File ! lexer.Error {
+        let _ = self.skip_nl()
+        var profile: str? = None
+        let named = match self.tok_at(1) {
+            lexer.Tok.Ident(s) => s == "profile"
+            _ => false
+        }
+        if self.is_p("@") && named && self.p_at(2, "(") {
+            self.bump()
+            self.bump()
+            self.bump()
+            profile = Some(self.ident()?)
+            self.expect_p(")")?
+            self.expect_nl()?
+        }
+        var imports: [Import] = []
+        loop {
+            let _ = self.skip_nl()
+            if !self.eat_kw("import") { break }
+            imports.push(self.import_decl()?)
+            self.expect_nl()?
+        }
+        var decls: [Decl] = []
+        loop {
+            let _ = self.skip_nl()
+            match self.peek() {
+                lexer.Tok.Eof => break
+                _ => {}
+            }
+            decls.push(self.decl()?)
+            self.expect_nl()?
+        }
+        File(profile, imports, decls)
+    }
+
+    fn import_decl(mut self) -> Import ! lexer.Error {
+        let first = self.ident()?
+        var origin: str? = None
+        var path = first
+        match self.peek() {
+            lexer.Tok.Str(parts) => {
+                self.bump()
+                if parts.len != 1 { return self.err("import path cannot use interpolation") }
+                match parts[0] {
+                    lexer.Part.Lit(s) => {
+                        origin = Some(first)
+                        path = s
+                    }
+                    _ => return self.err("import path cannot use interpolation")
+                }
+            }
+            _ => {
+                while self.eat_p(".") {
+                    let more = self.ident()?
+                    path = "{path}.{more}"
+                }
+            }
+        }
+        var alias: str? = None
+        if self.eat_kw("as") { alias = Some(self.ident()?) }
+        var decls: [Decl] = []
+        let foreign = match origin {
+            Some(_) => true
+            None => false
+        }
+        if foreign && self.is_p("{{") { decls = self.decl_body()? }
+        Import(origin, path, alias, decls)
+    }
+
+    fn starts_decl(self) -> bool {
+        if self.is_p("@") { return true }
+        let k = self.peek_kw()
+        if k == "fn" || k == "type" { return self.ident_at(1) }
+        k == "pub" || k == "struct" || k == "enum" || k == "trait" || k == "impl"
+    }
+
+    fn decl(mut self) -> Decl ! lexer.Error {
+        let line = self.line()
+        let col = self.col()
+        var attrs: [Attr] = []
+        while self.eat_p("@") {
+            let name = self.ident()?
+            var args: [Expr] = []
+            if self.eat_p("(") { args = self.exprs(")")? }
+            attrs.push(Attr(name, args))
+            let _ = self.skip_nl()
+        }
+        let public = self.eat_kw("pub")
+        let k = self.peek_kw()
+        var kind = DeclKind.Const("", None, mk(Kind.Continue, line, col))
+        if k == "fn" {
+            kind = DeclKind.Fn(self.fn_decl()?)
+        } else if k == "struct" {
+            kind = DeclKind.Struct(self.struct_decl()?)
+        } else if k == "enum" {
+            kind = DeclKind.Enum(self.enum_decl()?)
+        } else if k == "trait" {
+            kind = DeclKind.Trait(self.trait_decl()?)
+        } else if k == "impl" {
+            kind = DeclKind.Impl(self.impl_decl()?)
+        } else if k == "let" {
+            self.bump()
+            let name = self.ident()?
+            var ty: Type? = None
+            if self.eat_p(":") { ty = Some(self.ty()?) }
+            self.expect_p("=")?
+            kind = DeclKind.Const(name, ty, self.expr()?)
+        } else if k == "type" {
+            self.bump()
+            let name = self.ident()?
+            let generics = self.generics()?
+            self.expect_p("=")?
+            kind = DeclKind.Alias(name, generics, self.ty()?)
+        } else {
+            return self.err("expected a declaration, found {self.describe()}")
+        }
+        Decl(attrs, public, kind, line, col)
+    }
+
+    fn generics(mut self) -> [GenParam] ! lexer.Error {
+        var out: [GenParam] = []
+        if !self.eat_p("[") { return out }
+        loop {
+            if self.list_done("]") { break }
+            if self.eat_kw("region") {
+                out.push(GenParam.Region(self.ident()?))
+            } else if self.eat_kw("comptime") {
+                let name = self.ident()?
+                self.expect_p(":")?
+                out.push(GenParam.Value(name, self.ty()?))
+            } else {
+                let name = self.ident()?
+                var bounds: [Type] = []
+                if self.eat_p(":") { bounds = self.bounds()? }
+                out.push(GenParam.OfType(name, bounds))
+            }
+            if self.list_end("]")? { break }
+        }
+        out
+    }
+
+    // A bound is a trait: a `?` after it belongs to what surrounds it,
+    // as in `dyn Shape?`.
+    fn bounds(mut self) -> [Type] ! lexer.Error {
+        var out: [Type] = []
+        out.push(self.ty_base()?)
+        while self.eat_p("+") { out.push(self.ty_base()?) }
+        out
+    }
+
+    fn mode(mut self) -> Mode {
+        if self.eat_kw("mut") { return Mode.Mut }
+        if self.eat_kw("own") { return Mode.Own }
+        Mode.Let
+    }
+
+    fn param(mut self) -> Param ! lexer.Error {
+        let ct = self.eat_kw("comptime")
+        let self_mode = (self.is_kw("mut") || self.is_kw("own")) && self.kw_at(1, "self")
+        if self_mode || self.is_kw("self") {
+            let mode = self.mode()
+            self.expect_kw("self")?
+            return Param(ct, "self", mode, None, None)
+        }
+        let name = self.ident()?
+        var mode = Mode.Let
+        var ty: Type? = None
+        if self.eat_p(":") {
+            mode = self.mode()
+            ty = Some(self.ty()?)
+        }
+        var default: Expr? = None
+        if self.eat_p("=") { default = Some(self.expr()?) }
+        Param(ct, name, mode, ty, default)
+    }
+
+    fn params(mut self) -> [Param] ! lexer.Error {
+        var out: [Param] = []
+        loop {
+            if self.list_done(")") { break }
+            out.push(self.param()?)
+            if self.list_end(")")? { break }
+        }
+        out
+    }
+
+    // `("->" "ref"? type)? ("!" type)?`
+    fn ret(mut self) -> Ret ! lexer.Error {
+        var ret: Type? = None
+        var by_ref = false
+        if self.eat_p("->") {
+            // `ref T` is a result by reference; `ref[r] T` and `ref mut T`
+            // are reference types.
+            if self.is_kw("ref") && !(self.p_at(1, "[") || self.kw_at(1, "mut")) {
+                self.bump()
+                by_ref = true
+            }
+            ret = Some(self.ty()?)
+        }
+        var err: Type? = None
+        if self.eat_p("!") { err = Some(self.ty()?) }
+        Ret(ret, by_ref, err)
+    }
+
+    fn fn_decl(mut self) -> FnDecl ! lexer.Error {
+        self.expect_kw("fn")?
+        let name = self.ident()?
+        let generics = self.generics()?
+        self.expect_p("(")?
+        let params = self.params()?
+        let r = self.ret()?
+        var conds: [Expr] = []
+        if self.eat_kw("where") {
+            conds.push(self.expr()?)
+            while self.eat_p(",") { conds.push(self.expr()?) }
+        }
+        // The body may open on the next line.
+        let save = self.pos
+        let _ = self.skip_nl()
+        var body: Expr? = None
+        if self.is_p("{{") {
+            let line = self.line()
+            let col = self.col()
+            body = Some(mk(Kind.Blk(self.block()?), line, col))
+        } else {
+            self.pos = save
+            if self.eat_p("=") { body = Some(self.expr()?) }
+        }
+        FnDecl(name, generics, params, r.ret, r.by_ref, r.err, conds, body)
+    }
+
+    fn struct_decl(mut self) -> StructDecl ! lexer.Error {
+        self.expect_kw("struct")?
+        let name = self.ident()?
+        let generics = self.generics()?
+        self.expect_p("{{")?
+        var fields: [Field] = []
+        loop {
+            if self.list_done("}}") { break }
+            let public = self.eat_kw("pub")
+            let field = self.ident()?
+            self.expect_p(":")?
+            let ty = self.ty()?
+            var default: Expr? = None
+            if self.eat_p("=") { default = Some(self.expr()?) }
+            fields.push(Field(public, field, ty, default))
+            if self.list_end("}}")? { break }
+        }
+        StructDecl(name, generics, fields)
+    }
+
+    fn enum_decl(mut self) -> EnumDecl ! lexer.Error {
+        self.expect_kw("enum")?
+        let name = self.ident()?
+        let generics = self.generics()?
+        self.expect_p("{{")?
+        var variants: [Variant] = []
+        loop {
+            if self.list_done("}}") { break }
+            let variant = self.ident()?
+            var fields: [VariantField] = []
+            if self.eat_p("(") {
+                loop {
+                    if self.list_done(")") { break }
+                    var label: str? = None
+                    if self.ident_at(0) && self.p_at(1, ":") {
+                        label = Some(self.ident()?)
+                        self.bump()
+                    }
+                    fields.push(VariantField(label, self.ty()?))
+                    if self.list_end(")")? { break }
+                }
+            }
+            var value: Expr? = None
+            if self.eat_p("=") { value = Some(self.expr()?) }
+            variants.push(Variant(variant, fields, value))
+            if self.list_end("}}")? { break }
+        }
+        EnumDecl(name, generics, variants)
+    }
+
+    fn decl_body(mut self) -> [Decl] ! lexer.Error {
+        self.expect_p("{{")?
+        var decls: [Decl] = []
+        loop {
+            let _ = self.skip_nl()
+            if self.eat_p("}}") { break }
+            decls.push(self.decl()?)
+            self.expect_nl()?
+        }
+        decls
+    }
+
+    fn trait_decl(mut self) -> TraitDecl ! lexer.Error {
+        self.expect_kw("trait")?
+        let name = self.ident()?
+        let generics = self.generics()?
+        var supers: [Type] = []
+        if self.eat_p(":") { supers = self.bounds()? }
+        let methods = self.decl_body()?
+        TraitDecl(name, generics, supers, methods)
+    }
+
+    fn impl_decl(mut self) -> ImplDecl ! lexer.Error {
+        self.expect_kw("impl")?
+        let generics = self.generics()?
+        let first = self.ty()?
+        if self.eat_kw("for") {
+            let ty = self.ty()?
+            let decls = self.decl_body()?
+            return ImplDecl(generics, Some(first), ty, decls)
+        }
+        let decls = self.decl_body()?
+        ImplDecl(generics, None, first, decls)
+    }
+
+    // ---- types ----
+
+    fn starts_type(self) -> bool {
+        if self.ident_at(0) || self.is_p("[") || self.is_p("(") { return true }
+        let k = self.peek_kw()
+        k == "fn" || k == "ref" || k == "dyn" || k == "Self" || k == "soa" || k == "mut" || k == "type"
+    }
+
+    fn ty(mut self) -> Type ! lexer.Error {
+        var t = self.ty_base()?
+        while self.eat_p("?") { t = Type.Optional(t) }
+        t
+    }
+
+    fn types(mut self, close: str) -> [Type] ! lexer.Error {
+        var out: [Type] = []
+        loop {
+            if self.list_done(close) { break }
+            out.push(self.ty()?)
+            if self.list_end(close)? { break }
+        }
+        out
+    }
+
+    fn ty_base(mut self) -> Type ! lexer.Error {
+        if self.is_p("[") { return self.slice_or_array()? }
+        if self.eat_p("(") { return Type.Tuple(self.types(")")?) }
+        let k = self.peek_kw()
+        if k == "soa" {
+            self.bump()
+            if !self.is_p("[") { return self.err("expected `[` after `soa`") }
+            return Type.Soa(self.slice_or_array()?)
+        }
+        if k == "fn" {
+            self.bump()
+            self.expect_p("(")?
+            var params: [FnParam] = []
+            loop {
+                if self.list_done(")") { break }
+                let mode = self.mode()
+                params.push(FnParam(mode, self.ty()?))
+                if self.list_end(")")? { break }
+            }
+            let r = self.ret()?
+            return Type.Fn(params, r.ret, r.err)
+        }
+        if k == "ref" {
+            self.bump()
+            var reg: str? = None
+            // `ref[r] T` names a region; `ref [T]` is a reference to a slice.
+            if self.is_p("[") && self.ident_at(1) && self.p_at(2, "]") {
+                let save = self.pos
+                self.bump()
+                let name = self.ident()?
+                self.bump()
+                if self.starts_type() {
+                    reg = Some(name)
+                } else {
+                    self.pos = save
+                }
+            }
+            let mutable = self.eat_kw("mut")
+            return Type.Ref(reg, mutable, self.ty()?)
+        }
+        if k == "dyn" {
+            self.bump()
+            return Type.Dyn(self.bounds()?)
+        }
+        if k == "Self" {
+            self.bump()
+            return Type.SelfType
+        }
+        if k == "type" {
+            self.bump()
+            return Type.TypeType
+        }
+        if !self.ident_at(0) { return self.err("expected a type, found {self.describe()}") }
+        var path: [str] = []
+        path.push(self.ident()?)
+        while self.is_p(".") && self.ident_at(1) {
+            self.bump()
+            path.push(self.ident()?)
+        }
+        var args: [GenArg] = []
+        if self.eat_p("[") {
+            loop {
+                if self.list_done("]") { break }
+                if self.int_at(0) {
+                    args.push(GenArg.OfExpr(self.expr()?))
+                } else {
+                    args.push(GenArg.OfType(self.ty()?))
+                }
+                if self.list_end("]")? { break }
+            }
+        }
+        Type.Path(path, args)
+    }
+
+    fn slice_or_array(mut self) -> Type ! lexer.Error {
+        self.expect_p("[")?
+        let inner = self.ty()?
+        if self.eat_p(";") {
+            let len = self.expr()?
+            self.expect_p("]")?
+            return Type.Array(inner, len)
+        }
+        self.expect_p("]")?
+        Type.Slice(inner)
+    }
+
+    // ---- statements ----
+
+    fn block(mut self) -> Block ! lexer.Error {
+        self.expect_p("{{")?
+        var stmts: [Stmt] = []
+        loop {
+            let _ = self.skip_nl()
+            if self.eat_p("}}") { return Block(stmts, None) }
+            if self.is_kw("let") || self.is_kw("var") {
+                let mutable = self.is_kw("var")
+                self.bump()
+                let pat = self.pattern()?
+                var ty: Type? = None
+                if self.eat_p(":") { ty = Some(self.ty()?) }
+                var value: Expr? = None
+                if self.eat_p("=") { value = Some(self.expr()?) }
+                stmts.push(Stmt.Let(mutable, pat, ty, value))
+                self.expect_nl()?
+                continue
+            }
+            if self.eat_kw("defer") {
+                stmts.push(Stmt.Defer(self.expr()?))
+                self.expect_nl()?
+                continue
+            }
+            if self.starts_decl() {
+                stmts.push(Stmt.Item(self.decl()?))
+                self.expect_nl()?
+                continue
+            }
+            let e = self.expr()?
+            let op = self.peek_p()
+            if has(ASSIGN_OPS, op) {
+                self.bump()
+                let value = self.expr()?
+                stmts.push(Stmt.Assign(e, op, value))
+                self.expect_nl()?
+                continue
+            }
+            // An expression right before the closing brace is the value
+            // of the block.
+            let had_nl = self.skip_nl()
+            if self.eat_p("}}") { return Block(stmts, Some(e)) }
+            if !had_nl { return self.err("expected end of line, found {self.describe()}") }
+            stmts.push(Stmt.Do(e))
+        }
+    }
+
+    // ---- expressions ----
+
+    fn starts_expr(self) -> bool {
+        match self.peek() {
+            lexer.Tok.Ident(_) => true
+            lexer.Tok.Int(_) => true
+            lexer.Tok.Float(_) => true
+            lexer.Tok.Str(_) => true
+            lexer.Tok.Char(_) => true
+            lexer.Tok.Kw(k) => {
+                k == "true" || k == "false" || k == "self" || k == "Self" || k == "if" || k == "match" || k == "for"
+                    || k == "while" || k == "loop" || k == "fn" || k == "comptime" || k == "unsafe" || k == "scope"
+                    || k == "with" || k == "return" || k == "break" || k == "continue"
+            }
+            lexer.Tok.P(p) => p == "(" || p == "[" || p == "-" || p == "!" || p == "~"
+            _ => false
+        }
+    }
+
+    fn exprs(mut self, close: str) -> [Expr] ! lexer.Error {
+        var out: [Expr] = []
+        loop {
+            if self.list_done(close) { break }
+            out.push(self.expr()?)
+            if self.list_end(close)? { break }
+        }
+        out
+    }
+
+    fn expr(mut self) -> Expr ! lexer.Error {
+        var e = self.binary(2)?
+        while self.eat_kw("catch") {
+            var binding: str? = None
+            if self.ident_at(0) { binding = Some(self.ident()?) }
+            let handler = self.block()?
+            e = mk(Kind.Catch(e, binding, handler), e.line, e.col)
+        }
+        e
+    }
+
+    fn binary(mut self, min: int) -> Expr ! lexer.Error {
+        var lhs = self.cast()?
+        loop {
+            let op = self.peek_p()
+            let prec = prec_of(op)
+            if prec == 0 || prec < min { break }
+            let line = lhs.line
+            let col = lhs.col
+            self.bump()
+            if prec == 5 {
+                var hi: Expr? = None
+                if self.starts_expr() { hi = Some(self.binary(6)?) }
+                lhs = mk(Kind.Range(Some(lhs), hi, op == "..="), line, col)
+                continue
+            }
+            let rhs = self.binary(prec + 1)?
+            lhs = mk(Kind.Binary(op, lhs, rhs), line, col)
+            if prec == 4 && prec_of(self.peek_p()) == 4 {
+                return self.err("comparison operators cannot be chained; use `&&`")
+            }
+        }
+        lhs
+    }
+
+    fn cast(mut self) -> Expr ! lexer.Error {
+        var e = self.unary()?
+        while self.eat_kw("as") {
+            let ty = self.ty_base()?
+            e = mk(Kind.Cast(e, ty), e.line, e.col)
+        }
+        e
+    }
+
+    fn unary(mut self) -> Expr ! lexer.Error {
+        let op = self.peek_p()
+        if op == "-" || op == "!" || op == "~" {
+            let line = self.line()
+            let col = self.col()
+            self.bump()
+            let inner = self.unary()?
+            return mk(Kind.Unary(op, inner), line, col)
+        }
+        self.postfix()?
+    }
+
+    fn postfix(mut self) -> Expr ! lexer.Error {
+        var e = self.primary()?
+        loop {
+            let line = e.line
+            let col = e.col
+            if self.eat_p("(") {
+                var args: [Arg] = []
+                loop {
+                    if self.list_done(")") { break }
+                    var label: str? = None
+                    if self.ident_at(0) && self.p_at(1, ":") {
+                        label = Some(self.ident()?)
+                        self.bump()
+                    }
+                    let mode = self.mode()
+                    args.push(Arg(label, mode, self.expr()?))
+                    if self.list_end(")")? { break }
+                }
+                e = mk(Kind.Call(e, args), line, col)
+            } else if self.eat_p("[") {
+                let args = self.exprs("]")?
+                e = mk(Kind.Index(e, args), line, col)
+            } else if self.eat_p(".") {
+                let name = match self.peek() {
+                    lexer.Tok.Ident(s) => s
+                    lexer.Tok.Int(s) => s
+                    _ => return self.err("expected field name, found {self.describe()}")
+                }
+                self.bump()
+                e = mk(Kind.Field(e, name), line, col)
+            } else if self.eat_p("?") {
+                e = mk(Kind.Try(e), line, col)
+            } else {
+                return e
+            }
+        }
+    }
+
+    fn cond(mut self) -> Cond ! lexer.Error {
+        if self.eat_kw("let") {
+            let pat = self.pattern()?
+            self.expect_p("=")?
+            return Cond.Bind(pat, self.expr()?)
+        }
+        Cond.Test(self.expr()?)
+    }
+
+    fn if_expr(mut self) -> Expr ! lexer.Error {
+        let line = self.line()
+        let col = self.col()
+        self.expect_kw("if")?
+        let c = self.cond()?
+        let then = self.block()?
+        var els: Expr? = None
+        if self.eat_kw("else") {
+            if self.is_kw("if") {
+                els = Some(self.if_expr()?)
+            } else {
+                let bline = self.line()
+                let bcol = self.col()
+                els = Some(mk(Kind.Blk(self.block()?), bline, bcol))
+            }
+        }
+        mk(Kind.If(c, then, els), line, col)
+    }
+
+    fn opt_operand(mut self) -> Expr? ! lexer.Error {
+        if self.starts_expr() { return Some(self.expr()?) }
+        None
+    }
+
+    fn keyword(mut self, k: str, line: int, col: int) -> Expr ! lexer.Error {
+        if k == "true" || k == "false" {
+            self.bump()
+            return mk(Kind.Bool(k == "true"), line, col)
+        }
+        if k == "self" || k == "Self" {
+            self.bump()
+            return mk(Kind.Name(k), line, col)
+        }
+        if k == "if" { return self.if_expr()? }
+        if k == "match" {
+            self.bump()
+            let scrutinee = self.expr()?
+            self.expect_p("{{")?
+            var arms: [Arm] = []
+            loop {
+                if self.list_done("}}") { break }
+                let pat = self.pattern()?
+                var guard: Expr? = None
+                if self.eat_kw("if") { guard = Some(self.expr()?) }
+                self.expect_p("=>")?
+                arms.push(Arm(pat, guard, self.expr()?))
+                if self.list_end("}}")? { break }
+            }
+            return mk(Kind.Match(scrutinee, arms), line, col)
+        }
+        if k == "for" {
+            self.bump()
+            let pat = self.pattern()?
+            self.expect_kw("in")?
+            let iter = self.expr()?
+            return mk(Kind.For(pat, iter, self.block()?), line, col)
+        }
+        if k == "while" {
+            self.bump()
+            let c = self.cond()?
+            return mk(Kind.While(c, self.block()?), line, col)
+        }
+        if k == "loop" {
+            self.bump()
+            return mk(Kind.Loop(self.block()?), line, col)
+        }
+        if k == "fn" {
+            self.bump()
+            self.expect_p("(")?
+            let params = self.params()?
+            let r = self.ret()?
+            return mk(Kind.Closure(params, r.ret, r.err, self.block()?), line, col)
+        }
+        if k == "comptime" {
+            self.bump()
+            if self.is_p("{{") {
+                let bline = self.line()
+                let bcol = self.col()
+                let inner = mk(Kind.Blk(self.block()?), bline, bcol)
+                return mk(Kind.Comptime(inner), line, col)
+            }
+            // All of the expression that follows: `comptime a + b`.
+            return mk(Kind.Comptime(self.expr()?), line, col)
+        }
+        if k == "unsafe" {
+            self.bump()
+            return mk(Kind.Unsafe(self.block()?), line, col)
+        }
+        if k == "scope" {
+            self.bump()
+            let name = self.ident()?
+            return mk(Kind.Scope(name, self.block()?), line, col)
+        }
+        if k == "with" {
+            self.bump()
+            var bindings: [Binding] = []
+            loop {
+                let name = self.ident()?
+                self.expect_p("=")?
+                bindings.push(Binding(name, self.expr()?))
+                if !self.eat_p(",") { break }
+            }
+            return mk(Kind.With(bindings, self.block()?), line, col)
+        }
+        if k == "return" {
+            self.bump()
+            return mk(Kind.Return(self.opt_operand()?), line, col)
+        }
+        if k == "break" {
+            self.bump()
+            return mk(Kind.Break(self.opt_operand()?), line, col)
+        }
+        if k == "continue" {
+            self.bump()
+            return mk(Kind.Continue, line, col)
+        }
+        return self.err("expected an expression, found {self.describe()}")
+    }
+
+    fn primary(mut self) -> Expr ! lexer.Error {
+        let line = self.line()
+        let col = self.col()
+        match self.peek() {
+            lexer.Tok.Int(s) => {
+                self.bump()
+                return mk(Kind.Int(s), line, col)
+            }
+            lexer.Tok.Float(s) => {
+                self.bump()
+                return mk(Kind.Float(s), line, col)
+            }
+            lexer.Tok.Char(c) => {
+                self.bump()
+                return mk(Kind.Char(c), line, col)
+            }
+            lexer.Tok.Str(parts) => {
+                self.bump()
+                var out: [StrPart] = []
+                for part in parts {
+                    match part {
+                        lexer.Part.Lit(s) => out.push(StrPart.Text(s))
+                        lexer.Part.Expr(src, eline, ecol) => out.push(StrPart.Value(parse_expr_at(src, eline, ecol)?))
+                    }
+                }
+                return mk(Kind.Str(out), line, col)
+            }
+            lexer.Tok.Ident(s) => {
+                self.bump()
+                return mk(Kind.Name(s), line, col)
+            }
+            lexer.Tok.Kw(k) => return self.keyword(k, line, col)?
+            _ => {}
+        }
+        let p = self.peek_p()
+        if p == "(" {
+            self.bump()
+            var items: [Expr] = []
+            var trailing_comma = false
+            loop {
+                if self.eat_p(")") { break }
+                items.push(self.expr()?)
+                trailing_comma = self.eat_p(",")
+                if !trailing_comma {
+                    self.expect_p(")")?
+                    break
+                }
+            }
+            if items.len == 1 && !trailing_comma { return items[0] }
+            return mk(Kind.Tuple(items), line, col)
+        }
+        if p == "[" {
+            self.bump()
+            if self.eat_p("]") { return mk(Kind.Array([]), line, col) }
+            let first = self.expr()?
+            if self.eat_p(";") {
+                let len = self.expr()?
+                self.expect_p("]")?
+                return mk(Kind.Repeat(first, len), line, col)
+            }
+            var items: [Expr] = []
+            items.push(first)
+            if self.eat_p(",") {
+                for more in self.exprs("]")? { items.push(more) }
+            } else {
+                self.expect_p("]")?
+            }
+            return mk(Kind.Array(items), line, col)
+        }
+        if p == "{{" { return mk(Kind.Blk(self.block()?), line, col) }
+        if p == ".." || p == "..=" {
+            self.bump()
+            var hi: Expr? = None
+            if self.starts_expr() { hi = Some(self.binary(6)?) }
+            return mk(Kind.Range(None, hi, p == "..="), line, col)
+        }
+        return self.err("expected an expression, found {self.describe()}")
+    }
+
+    // ---- patterns ----
+
+    fn pattern(mut self) -> Pattern ! lexer.Error {
+        let first = self.pattern_alt()?
+        if !self.is_p("|") { return first }
+        var alts: [Pattern] = []
+        alts.push(first)
+        while self.eat_p("|") { alts.push(self.pattern_alt()?) }
+        Pattern.Or(alts)
+    }
+
+    fn patterns(mut self, close: str) -> [Pattern] ! lexer.Error {
+        var out: [Pattern] = []
+        loop {
+            if self.list_done(close) { break }
+            out.push(self.pattern()?)
+            if self.list_end(close)? { break }
+        }
+        out
+    }
+
+    fn pattern_literal(mut self) -> Expr ! lexer.Error {
+        let line = self.line()
+        let col = self.col()
+        if self.eat_p("-") {
+            let inner = self.pattern_literal()?
+            return mk(Kind.Unary("-", inner), line, col)
+        }
+        let t = self.peek()
+        self.bump()
+        match t {
+            lexer.Tok.Int(s) => return mk(Kind.Int(s), line, col)
+            lexer.Tok.Float(s) => return mk(Kind.Float(s), line, col)
+            lexer.Tok.Char(c) => return mk(Kind.Char(c), line, col)
+            lexer.Tok.Kw(k) => {
+                if k == "true" { return mk(Kind.Bool(true), line, col) }
+                if k == "false" { return mk(Kind.Bool(false), line, col) }
+            }
+            lexer.Tok.Str(parts) => {
+                if parts.len == 1 {
+                    match parts[0] {
+                        lexer.Part.Lit(s) => return mk(Kind.Str([StrPart.Text(s)]), line, col)
+                        _ => {}
+                    }
+                }
+                return lexer.Error("patterns cannot use string interpolation", line, col)
+            }
+            _ => {}
+        }
+        return lexer.Error("expected a literal in pattern", line, col)
+    }
+
+    fn starts_literal(self, with_str: bool) -> bool {
+        match self.peek() {
+            lexer.Tok.Int(_) => true
+            lexer.Tok.Float(_) => true
+            lexer.Tok.Char(_) => true
+            lexer.Tok.Str(_) => with_str
+            lexer.Tok.Kw(k) => with_str && (k == "true" || k == "false")
+            lexer.Tok.P(p) => p == "-"
+            _ => false
+        }
+    }
+
+    fn pattern_alt(mut self) -> Pattern ! lexer.Error {
+        let wildcard = match self.peek() {
+            lexer.Tok.Ident(s) => s == "_"
+            _ => false
+        }
+        if wildcard {
+            self.bump()
+            return Pattern.Wildcard
+        }
+        if self.starts_literal(true) {
+            let lo = self.pattern_literal()?
+            if self.is_p("..") || self.is_p("..=") {
+                let inclusive = self.is_p("..=")
+                self.bump()
+                var hi: Expr? = None
+                if self.starts_literal(false) { hi = Some(self.pattern_literal()?) }
+                return Pattern.Range(lo, hi, inclusive)
+            }
+            return Pattern.Literal(lo)
+        }
+        if self.eat_kw("mut") { return Pattern.Bind(true, self.ident()?) }
+        if self.ident_at(0) {
+            var path: [str] = []
+            path.push(self.ident()?)
+            while self.eat_p(".") { path.push(self.ident()?) }
+            // By convention a capitalized or dotted name is a constructor,
+            // not a new variable.
+            let head = text.chars(path[0])
+            let capital = head.len > 0 && head[0] >= 'A' && head[0] <= 'Z'
+            let is_ctor = path.len > 1 || capital
+            if self.eat_p("(") { return Pattern.Ctor(path, self.patterns(")")?) }
+            if is_ctor && self.eat_p("{{") {
+                var rest = false
+                var fields: [FieldPat] = []
+                loop {
+                    if self.list_done("}}") { break }
+                    if self.eat_p("..") {
+                        rest = true
+                    } else {
+                        let name = self.ident()?
+                        var pat: Pattern? = None
+                        if self.eat_p(":") { pat = Some(self.pattern()?) }
+                        fields.push(FieldPat(name, pat))
+                    }
+                    if self.list_end("}}")? { break }
+                }
+                return Pattern.Struct(path, fields, rest)
+            }
+            if is_ctor { return Pattern.Ctor(path, []) }
+            return Pattern.Bind(false, path[path.len - 1])
+        }
+        if self.eat_p("(") { return Pattern.Tuple(self.patterns(")")?) }
+        if self.eat_p("[") {
+            var items: [Pattern] = []
+            loop {
+                if self.list_done("]") { break }
+                if self.eat_p("..") {
+                    items.push(Pattern.Rest)
+                } else {
+                    items.push(self.pattern()?)
+                }
+                if self.list_end("]")? { break }
+            }
+            return Pattern.Slice(items)
+        }
+        return self.err("expected a pattern, found {self.describe()}")
+    }
+}
+
+pub fn parse(src: str) -> File ! lexer.Error {
+    let toks = lexer.lex(src)?
+    var p = Parser(toks, 0)
+    p.file()?
+}
+
+// ---- the tree as text ----
+
+fn quote(s: str) -> str {
+    var parts: [str] = []
+    parts.push("\"")
+    for c in text.chars(s) {
+        if c == '\\' {
+            parts.push("\\\\")
+        } else if c == '"' {
+            parts.push("\\\"")
+        } else if c == '\n' {
+            parts.push("\\n")
+        } else {
+            parts.push("{c}")
+        }
+    }
+    parts.push("\"")
+    text.concat(parts)
+}
+
+fn seq(items: [str]) -> str { "[{text.join(items, " ")}]" }
+
+fn opt_str(o: str?) -> str {
+    match o {
+        Some(s) => s
+        None => "_"
+    }
+}
+
+fn opt_ty(o: Type?) -> str {
+    match o {
+        Some(t) => ty_text(t)
+        None => "_"
+    }
+}
+
+fn opt_expr(o: Expr?) -> str {
+    match o {
+        Some(e) => expr_text(e)
+        None => "_"
+    }
+}
+
+fn mode_text(m: Mode) -> str {
+    match m {
+        Mode.Let => "let"
+        Mode.Mut => "mut"
+        Mode.Own => "own"
+    }
+}
+
+fn dots(inclusive: bool) -> str { if inclusive { "..=" } else { ".." } }
+
+fn var_text(mutable: bool) -> str { if mutable { "mut" } else { "let" } }
+
+fn types_text(ts: [Type]) -> str {
+    var out: [str] = []
+    for t in ts { out.push(ty_text(t)) }
+    seq(out)
+}
+
+fn exprs_text(es: [Expr]) -> str {
+    var out: [str] = []
+    for e in es { out.push(expr_text(e)) }
+    seq(out)
+}
+
+fn patterns_text(ps: [Pattern]) -> str {
+    var out: [str] = []
+    for p in ps { out.push(pattern_text(p)) }
+    seq(out)
+}
+
+fn decls_text(ds: [Decl]) -> str {
+    var out: [str] = []
+    for d in ds { out.push(decl_text(d)) }
+    seq(out)
+}
+
+fn params_text(ps: [Param]) -> str {
+    var out: [str] = []
+    for p in ps {
+        let kind = if p.ct { "comptime" } else { "plain" }
+        out.push("(param {kind} {p.name} {mode_text(p.mode)} {opt_ty(p.ty)} {opt_expr(p.default)})")
+    }
+    seq(out)
+}
+
+fn ty_text(t: Type) -> str {
+    match t {
+        Type.Path(path, args) => {
+            var out: [str] = []
+            for a in args {
+                match a {
+                    GenArg.OfType(x) => out.push(ty_text(x))
+                    GenArg.OfExpr(e) => out.push(expr_text(e))
+                }
+            }
+            "(path {text.join(path, ".")} {seq(out)})"
+        }
+        Type.Slice(x) => "(slice {ty_text(x)})"
+        Type.Array(x, n) => "(array {ty_text(x)} {expr_text(n)})"
+        Type.Soa(x) => "(soa {ty_text(x)})"
+        Type.Tuple(ts) => "(tuple {types_text(ts)})"
+        Type.Fn(params, ret, err) => {
+            var out: [str] = []
+            for p in params { out.push("({mode_text(p.mode)} {ty_text(p.ty)})") }
+            "(fn {seq(out)} {opt_ty(ret)} {opt_ty(err)})"
+        }
+        Type.Ref(reg, mutable, x) => "(ref {opt_str(reg)} {var_text(mutable)} {ty_text(x)})"
+        Type.Dyn(ts) => "(dyn {types_text(ts)})"
+        Type.Optional(x) => "(opt {ty_text(x)})"
+        Type.SelfType => "Self"
+        Type.TypeType => "type"
+    }
+}
+
+fn pattern_text(p: Pattern) -> str {
+    match p {
+        Pattern.Wildcard => "_"
+        Pattern.Literal(e) => "(lit {expr_text(e)})"
+        Pattern.Range(lo, hi, inclusive) => "(prange {expr_text(lo)} {opt_expr(hi)} {dots(inclusive)})"
+        Pattern.Bind(mutable, name) => "(bind {var_text(mutable)} {name})"
+        Pattern.Ctor(path, args) => "(ctor {text.join(path, ".")} {patterns_text(args)})"
+        Pattern.Struct(path, fields, rest) => {
+            var out: [str] = []
+            for f in fields {
+                let inner = match f.pat {
+                    Some(x) => pattern_text(x)
+                    None => "_"
+                }
+                out.push("({f.name} {inner})")
+            }
+            let tail = if rest { "rest" } else { "norest" }
+            "(pstruct {text.join(path, ".")} {seq(out)} {tail})"
+        }
+        Pattern.Tuple(ps) => "(ptuple {patterns_text(ps)})"
+        Pattern.Slice(ps) => "(pslice {patterns_text(ps)})"
+        Pattern.Rest => ".."
+        Pattern.Or(ps) => "(or {patterns_text(ps)})"
+    }
+}
+
+fn cond_text(c: Cond) -> str {
+    match c {
+        Cond.Test(e) => expr_text(e)
+        Cond.Bind(p, e) => "(let {pattern_text(p)} {expr_text(e)})"
+    }
+}
+
+fn block_text(b: Block) -> str {
+    var out: [str] = []
+    for s in b.stmts {
+        match s {
+            Stmt.Let(mutable, pat, ty, value) => out.push("(let {var_text(mutable)} {pattern_text(pat)} {opt_ty(ty)} {opt_expr(value)})")
+            Stmt.Assign(target, op, value) => out.push("(assign {op} {expr_text(target)} {expr_text(value)})")
+            Stmt.Defer(e) => out.push("(defer {expr_text(e)})")
+            Stmt.Do(e) => out.push("(do {expr_text(e)})")
+            Stmt.Item(d) => out.push(decl_text(d))
+        }
+    }
+    "{{{seq(out)} {opt_expr(b.tail)}}}"
+}
+
+fn kind_text(k: Kind) -> str {
+    match k {
+        Kind.Int(s) => "int {s}"
+        Kind.Float(s) => "float {s}"
+        Kind.Str(parts) => {
+            var out: [str] = []
+            for p in parts {
+                match p {
+                    StrPart.Text(s) => out.push(quote(s))
+                    StrPart.Value(e) => out.push(expr_text(e))
+                }
+            }
+            "str {seq(out)}"
+        }
+        Kind.Char(c) => "char {c as u32}"
+        Kind.Bool(b) => "bool {b}"
+        Kind.Name(s) => "name {s}"
+        Kind.Tuple(items) => "tuple {exprs_text(items)}"
+        Kind.Array(items) => "array {exprs_text(items)}"
+        Kind.Repeat(v, n) => "repeat {expr_text(v)} {expr_text(n)}"
+        Kind.Blk(b) => "block {block_text(b)}"
+        Kind.If(c, then, els) => "if {cond_text(c)} {block_text(then)} {opt_expr(els)}"
+        Kind.Match(scrutinee, arms) => {
+            var out: [str] = []
+            for a in arms { out.push("(arm {pattern_text(a.pat)} {opt_expr(a.guard)} {expr_text(a.body)})") }
+            "match {expr_text(scrutinee)} {seq(out)}"
+        }
+        Kind.For(pat, iter, body) => "for {pattern_text(pat)} {expr_text(iter)} {block_text(body)}"
+        Kind.While(c, body) => "while {cond_text(c)} {block_text(body)}"
+        Kind.Loop(b) => "loop {block_text(b)}"
+        Kind.Closure(params, ret, err, body) => "closure {params_text(params)} {opt_ty(ret)} {opt_ty(err)} {block_text(body)}"
+        Kind.Comptime(e) => "comptime {expr_text(e)}"
+        Kind.Unsafe(b) => "unsafe {block_text(b)}"
+        Kind.Scope(name, body) => "scope {name} {block_text(body)}"
+        Kind.With(bindings, body) => {
+            var out: [str] = []
+            for b in bindings { out.push("({b.name} {expr_text(b.value)})") }
+            "with {seq(out)} {block_text(body)}"
+        }
+        Kind.Return(v) => "return {opt_expr(v)}"
+        Kind.Break(v) => "break {opt_expr(v)}"
+        Kind.Continue => "continue"
+        Kind.Unary(op, e) => "un {op} {expr_text(e)}"
+        Kind.Binary(op, lhs, rhs) => "bin {op} {expr_text(lhs)} {expr_text(rhs)}"
+        Kind.Range(lo, hi, inclusive) => "range {opt_expr(lo)} {opt_expr(hi)} {dots(inclusive)}"
+        Kind.Cast(e, ty) => "cast {expr_text(e)} {ty_text(ty)}"
+        Kind.Call(callee, args) => {
+            var out: [str] = []
+            for a in args { out.push("(arg {opt_str(a.label)} {mode_text(a.mode)} {expr_text(a.value)})") }
+            "call {expr_text(callee)} {seq(out)}"
+        }
+        Kind.Index(base, args) => "index {expr_text(base)} {exprs_text(args)}"
+        Kind.Field(base, name) => "field {expr_text(base)} {name}"
+        Kind.Try(e) => "try {expr_text(e)}"
+        Kind.Catch(e, binding, handler) => "catch {expr_text(e)} {opt_str(binding)} {block_text(handler)}"
+    }
+}
+
+fn expr_text(e: Expr) -> str { "({e.line}:{e.col} {kind_text(e.kind)})" }
+
+fn generics_text(gs: [GenParam]) -> str {
+    var out: [str] = []
+    for g in gs {
+        match g {
+            GenParam.OfType(name, bounds) => out.push("(tparam {name} {types_text(bounds)})")
+            GenParam.Region(name) => out.push("(region {name})")
+            GenParam.Value(name, ty) => out.push("(cparam {name} {ty_text(ty)})")
+        }
+    }
+    seq(out)
+}
+
+fn decl_kind_text(k: DeclKind) -> str {
+    match k {
+        DeclKind.Fn(f) => {
+            let by = if f.by_ref { "ref" } else { "val" }
+            "(fn {f.name} {generics_text(f.generics)} {params_text(f.params)} {opt_ty(f.ret)} {by} {opt_ty(f.err)} {exprs_text(f.conds)} {opt_expr(f.body)})"
+        }
+        DeclKind.Struct(s) => {
+            var out: [str] = []
+            for f in s.fields {
+                let vis = if f.public { "pub" } else { "priv" }
+                out.push("(field {vis} {f.name} {ty_text(f.ty)} {opt_expr(f.default)})")
+            }
+            "(struct {s.name} {generics_text(s.generics)} {seq(out)})"
+        }
+        DeclKind.Enum(e) => {
+            var out: [str] = []
+            for v in e.variants {
+                var fields: [str] = []
+                for f in v.fields { fields.push("({opt_str(f.label)} {ty_text(f.ty)})") }
+                out.push("(variant {v.name} {seq(fields)} {opt_expr(v.value)})")
+            }
+            "(enum {e.name} {generics_text(e.generics)} {seq(out)})"
+        }
+        DeclKind.Trait(t) => "(trait {t.name} {generics_text(t.generics)} {types_text(t.supers)} {decls_text(t.methods)})"
+        DeclKind.Impl(i) => "(impl {generics_text(i.generics)} {opt_ty(i.of_trait)} {ty_text(i.ty)} {decls_text(i.decls)})"
+        DeclKind.Const(name, ty, value) => "(const {name} {opt_ty(ty)} {expr_text(value)})"
+        DeclKind.Alias(name, generics, ty) => "(alias {name} {generics_text(generics)} {ty_text(ty)})"
+    }
+}
+
+fn decl_text(d: Decl) -> str {
+    var attrs: [str] = []
+    for a in d.attrs { attrs.push("(attr {a.name} {exprs_text(a.args)})") }
+    let vis = if d.public { "pub" } else { "priv" }
+    "(decl {d.line}:{d.col} {seq(attrs)} {vis} {decl_kind_text(d.kind)})"
+}
+
+// The tree of a file as lines of text, in the form `mou tree` prints it.
+pub fn dump(f: File) -> [str] {
+    var out: [str] = []
+    out.push("profile {opt_str(f.profile)}")
+    for i in f.imports { out.push("(import {opt_str(i.origin)} {quote(i.path)} {opt_str(i.alias)} {decls_text(i.decls)})") }
+    for d in f.decls { out.push(decl_text(d)) }
+    out
+}

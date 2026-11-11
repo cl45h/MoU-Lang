@@ -342,6 +342,9 @@ impl Lexer {
                         let Some(c) = self.advance() else {
                             return self.err("unterminated `{` in string interpolation", espan);
                         };
+                        if c == '\n' {
+                            return self.err("a `{` in a string starts a value to insert, which has to end with `}` on the same line: for a brace alone write `{{`", espan);
+                        }
                         if c == '{' {
                             depth += 1;
                         } else if c == '}' {

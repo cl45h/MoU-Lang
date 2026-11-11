@@ -318,3 +318,225 @@ pub fn sexpr(e: &Expr) -> String {
         _ => "<expr>".to_string(),
     }
 }
+
+// ---- the tree as text ----
+//
+// One form for all of the tree, which the parser written in Mou
+// (`compiler/parser.mou`) prints too, so that the two can be compared.
+
+fn quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+}
+
+fn seq<T>(items: &[T], f: impl Fn(&T) -> String) -> String {
+    format!("[{}]", items.iter().map(f).collect::<Vec<_>>().join(" "))
+}
+
+fn opt<T>(o: &Option<T>, f: impl Fn(&T) -> String) -> String {
+    o.as_ref().map_or("_".to_string(), f)
+}
+
+fn mode_text(m: &Mode) -> &'static str {
+    match m {
+        Mode::Let => "let",
+        Mode::Mut => "mut",
+        Mode::Own => "own",
+    }
+}
+
+fn dots(inclusive: bool) -> &'static str {
+    if inclusive { "..=" } else { ".." }
+}
+
+fn var_text(mutable: bool) -> &'static str {
+    if mutable { "mut" } else { "let" }
+}
+
+fn ty_text(t: &Type) -> String {
+    match t {
+        Type::Path { path, args } => {
+            let arg = |a: &GenArg| match a {
+                GenArg::Type(t) => ty_text(t),
+                GenArg::Expr(e) => expr_text(e),
+            };
+            format!("(path {} {})", path.join("."), seq(args, arg))
+        }
+        Type::Slice(t) => format!("(slice {})", ty_text(t)),
+        Type::Array(t, n) => format!("(array {} {})", ty_text(t), expr_text(n)),
+        Type::Soa(t) => format!("(soa {})", ty_text(t)),
+        Type::Tuple(ts) => format!("(tuple {})", seq(ts, ty_text)),
+        Type::Fn { params, ret, err } => {
+            let param = |p: &(Mode, Type)| format!("({} {})", mode_text(&p.0), ty_text(&p.1));
+            format!("(fn {} {} {})", seq(params, param), opt(ret, |t| ty_text(t)), opt(err, |t| ty_text(t)))
+        }
+        Type::Ref { region, mutable, ty } => format!("(ref {} {} {})", opt(region, |r| r.clone()), var_text(*mutable), ty_text(ty)),
+        Type::Dyn(ts) => format!("(dyn {})", seq(ts, ty_text)),
+        Type::Optional(t) => format!("(opt {})", ty_text(t)),
+        Type::SelfType => "Self".to_string(),
+        Type::TypeType => "type".to_string(),
+    }
+}
+
+fn pattern_text(p: &Pattern) -> String {
+    match p {
+        Pattern::Wildcard => "_".to_string(),
+        Pattern::Literal(e) => format!("(lit {})", expr_text(e)),
+        Pattern::Range { lo, hi, inclusive } => format!("(prange {} {} {})", expr_text(lo), opt(hi, |e| expr_text(e)), dots(*inclusive)),
+        Pattern::Bind { mutable, name } => format!("(bind {} {name})", var_text(*mutable)),
+        Pattern::Ctor { path, args } => format!("(ctor {} {})", path.join("."), seq(args, pattern_text)),
+        Pattern::Struct { path, fields, rest } => {
+            let field = |f: &(String, Option<Pattern>)| format!("({} {})", f.0, opt(&f.1, pattern_text));
+            format!("(pstruct {} {} {})", path.join("."), seq(fields, field), if *rest { "rest" } else { "norest" })
+        }
+        Pattern::Tuple(ps) => format!("(ptuple {})", seq(ps, pattern_text)),
+        Pattern::Slice(ps) => format!("(pslice {})", seq(ps, pattern_text)),
+        Pattern::Rest => "..".to_string(),
+        Pattern::Or(ps) => format!("(or {})", seq(ps, pattern_text)),
+    }
+}
+
+fn cond_text(c: &Cond) -> String {
+    match c {
+        Cond::Expr(e) => expr_text(e),
+        Cond::Let(p, e) => format!("(let {} {})", pattern_text(p), expr_text(e)),
+    }
+}
+
+fn param_text(p: &Param) -> String {
+    let kind = if p.comptime { "comptime" } else { "plain" };
+    format!("(param {kind} {} {} {} {})", p.name, mode_text(&p.mode), opt(&p.ty, ty_text), opt(&p.default, expr_text))
+}
+
+fn block_text(b: &Block) -> String {
+    let stmt = |s: &Stmt| match s {
+        Stmt::Let { mutable, pat, ty, value } => {
+            format!("(let {} {} {} {})", var_text(*mutable), pattern_text(pat), opt(ty, ty_text), opt(value, expr_text))
+        }
+        Stmt::Assign { target, op, value } => format!("(assign {op} {} {})", expr_text(target), expr_text(value)),
+        Stmt::Defer(e) => format!("(defer {})", expr_text(e)),
+        Stmt::Expr(e) => format!("(do {})", expr_text(e)),
+        Stmt::Decl(d) => decl_text(d),
+    };
+    format!("{{{} {}}}", seq(&b.stmts, stmt), opt(&b.tail, |e| expr_text(e)))
+}
+
+fn expr_text(e: &Expr) -> String {
+    let some = |o: &Option<Box<Expr>>| opt(o, |e| expr_text(e));
+    let body = match &e.kind {
+        ExprKind::Int(s) => format!("int {s}"),
+        ExprKind::Float(s) => format!("float {s}"),
+        ExprKind::Str(parts) => {
+            let part = |p: &StrPart| match p {
+                StrPart::Lit(s) => quote(s),
+                StrPart::Expr(e) => expr_text(e),
+            };
+            format!("str {}", seq(parts, part))
+        }
+        ExprKind::Char(c) => format!("char {}", *c as u32),
+        ExprKind::Bool(b) => format!("bool {b}"),
+        ExprKind::Path(s) => format!("name {s}"),
+        ExprKind::Tuple(items) => format!("tuple {}", seq(items, expr_text)),
+        ExprKind::Array(items) => format!("array {}", seq(items, expr_text)),
+        ExprKind::ArrayRepeat(v, n) => format!("repeat {} {}", expr_text(v), expr_text(n)),
+        ExprKind::Block(b) => format!("block {}", block_text(b)),
+        ExprKind::If { cond, then, els } => format!("if {} {} {}", cond_text(cond), block_text(then), some(els)),
+        ExprKind::Match { scrutinee, arms } => {
+            let arm = |a: &Arm| format!("(arm {} {} {})", pattern_text(&a.pat), opt(&a.guard, expr_text), expr_text(&a.body));
+            format!("match {} {}", expr_text(scrutinee), seq(arms, arm))
+        }
+        ExprKind::For { pat, iter, body } => format!("for {} {} {}", pattern_text(pat), expr_text(iter), block_text(body)),
+        ExprKind::While { cond, body } => format!("while {} {}", cond_text(cond), block_text(body)),
+        ExprKind::Loop(b) => format!("loop {}", block_text(b)),
+        ExprKind::Closure { params, ret, err, body } => {
+            format!("closure {} {} {} {}", seq(params, param_text), opt(ret, ty_text), opt(err, ty_text), block_text(body))
+        }
+        ExprKind::Comptime(e) => format!("comptime {}", expr_text(e)),
+        ExprKind::Unsafe(b) => format!("unsafe {}", block_text(b)),
+        ExprKind::Scope { name, body } => format!("scope {name} {}", block_text(body)),
+        ExprKind::With { bindings, body } => {
+            let binding = |b: &(String, Expr)| format!("({} {})", b.0, expr_text(&b.1));
+            format!("with {} {}", seq(bindings, binding), block_text(body))
+        }
+        ExprKind::Return(v) => format!("return {}", some(v)),
+        ExprKind::Break(v) => format!("break {}", some(v)),
+        ExprKind::Continue => "continue".to_string(),
+        ExprKind::Unary { op, expr } => format!("un {op} {}", expr_text(expr)),
+        ExprKind::Binary { op, lhs, rhs } => format!("bin {op} {} {}", expr_text(lhs), expr_text(rhs)),
+        ExprKind::Range { lo, hi, inclusive } => format!("range {} {} {}", some(lo), some(hi), dots(*inclusive)),
+        ExprKind::Cast { expr, ty } => format!("cast {} {}", expr_text(expr), ty_text(ty)),
+        ExprKind::Call { callee, args } => {
+            let arg = |a: &Arg| format!("(arg {} {} {})", opt(&a.label, |l| l.clone()), mode_text(&a.mode), expr_text(&a.value));
+            format!("call {} {}", expr_text(callee), seq(args, arg))
+        }
+        ExprKind::Index { base, args } => format!("index {} {}", expr_text(base), seq(args, expr_text)),
+        ExprKind::Field { base, name } => format!("field {} {name}", expr_text(base)),
+        ExprKind::Try(e) => format!("try {}", expr_text(e)),
+        ExprKind::Catch { expr, binding, handler } => {
+            format!("catch {} {} {}", expr_text(expr), opt(binding, |b| b.clone()), block_text(handler))
+        }
+    };
+    format!("({}:{} {body})", e.span.line, e.span.col)
+}
+
+fn generics_text(gs: &[GenParam]) -> String {
+    seq(gs, |g| match g {
+        GenParam::Type { name, bounds } => format!("(tparam {name} {})", seq(bounds, ty_text)),
+        GenParam::Region(name) => format!("(region {name})"),
+        GenParam::Comptime { name, ty } => format!("(cparam {name} {})", ty_text(ty)),
+    })
+}
+
+fn decl_text(d: &Decl) -> String {
+    let attr = |a: &Attr| format!("(attr {} {})", a.name, seq(&a.args, expr_text));
+    let kind = match &d.kind {
+        DeclKind::Fn(f) => format!(
+            "(fn {} {} {} {} {} {} {} {})",
+            f.name,
+            generics_text(&f.generics),
+            seq(&f.params, param_text),
+            opt(&f.ret, ty_text),
+            if f.ret_ref { "ref" } else { "val" },
+            opt(&f.err, ty_text),
+            seq(&f.where_, expr_text),
+            opt(&f.body, expr_text)
+        ),
+        DeclKind::Struct(s) => {
+            let field = |f: &Field| {
+                format!("(field {} {} {} {})", if f.public { "pub" } else { "priv" }, f.name, ty_text(&f.ty), opt(&f.default, expr_text))
+            };
+            format!("(struct {} {} {})", s.name, generics_text(&s.generics), seq(&s.fields, field))
+        }
+        DeclKind::Enum(e) => {
+            let variant = |v: &Variant| {
+                let field = |f: &(Option<String>, Type)| format!("({} {})", opt(&f.0, |l| l.clone()), ty_text(&f.1));
+                format!("(variant {} {} {})", v.name, seq(&v.fields, field), opt(&v.value, expr_text))
+            };
+            format!("(enum {} {} {})", e.name, generics_text(&e.generics), seq(&e.variants, variant))
+        }
+        DeclKind::Trait(t) => format!("(trait {} {} {} {})", t.name, generics_text(&t.generics), seq(&t.supers, ty_text), seq(&t.methods, decl_text)),
+        DeclKind::Impl(i) => {
+            format!("(impl {} {} {} {})", generics_text(&i.generics), opt(&i.trait_, ty_text), ty_text(&i.ty), seq(&i.decls, decl_text))
+        }
+        DeclKind::Const { name, ty, value } => format!("(const {name} {} {})", opt(ty, ty_text), expr_text(value)),
+        DeclKind::TypeAlias { name, generics, ty } => format!("(alias {name} {} {})", generics_text(generics), ty_text(ty)),
+    };
+    format!("(decl {}:{} {} {} {kind})", d.span.line, d.span.col, seq(&d.attrs, attr), if d.public { "pub" } else { "priv" })
+}
+
+/// The tree of a file, or its first error, as text.
+pub fn dump(parsed: &Result<File, crate::lexer::Error>) -> String {
+    let file = match parsed {
+        Ok(f) => f,
+        Err(e) => return format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg),
+    };
+    let mut out = format!("profile {}\n", opt(&file.profile, |p| p.clone()));
+    for i in &file.imports {
+        let origin = opt(&i.origin, |o| o.clone());
+        out.push_str(&format!("(import {origin} {} {} {})\n", quote(&i.path), opt(&i.alias, |a| a.clone()), seq(&i.decls, decl_text)));
+    }
+    for d in &file.decls {
+        out.push_str(&decl_text(d));
+        out.push('\n');
+    }
+    out
+}

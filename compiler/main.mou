@@ -1,22 +1,32 @@
-// The compiler of Mou written in Mou. So far: the lexer.
+// The compiler of Mou written in Mou. So far: the lexer and the parser.
 //
 //     mou build compiler/main.mou -o mouc
-//     ./mouc file.mou        prints the tokens of the file, as `mou lex` does
+//     ./mouc lex file.mou     prints the tokens of the file, as `mou lex` does
+//     ./mouc tree file.mou    prints its syntax tree, as `mou tree` does
 
 import std.io
 import lexer
+import parser
 
 fn main() -> int ! io.Error {
     let args = io.args()
-    if args.len < 1 {
-        io.eprint("usage: mouc <file.mou>")?
+    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree") {
+        io.eprint("usage: mouc lex|tree <file.mou>")?
         return 2
     }
-    let src = io.read_file(args[0])?
-    let toks = lexer.lex(src) catch e {
+    let src = io.read_file(args[1])?
+    if args[0] == "lex" {
+        let toks = lexer.lex(src) catch e {
+            io.print("error {e.line}:{e.col} {e.msg}")?
+            return 1
+        }
+        for line in lexer.dump(toks) { io.print(line)? }
+        return 0
+    }
+    let file = parser.parse(src) catch e {
         io.print("error {e.line}:{e.col} {e.msg}")?
         return 1
     }
-    for line in lexer.dump(toks) { io.print(line)? }
+    for line in parser.dump(file) { io.print(line)? }
     0
 }
