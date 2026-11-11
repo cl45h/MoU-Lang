@@ -766,6 +766,22 @@ impl Cx {
             Rvalue::Use(a) => self.truth(a)?,
             Rvalue::Uninit | Rvalue::Moved => "0".into(),
             Rvalue::Unary(UnOp::Not, _, a) => format!("!{}", self.truth(a)?),
+            // A character against one that is written out: the common
+            // case of reading text, done without the general comparison.
+            Rvalue::Binary(op, _, Operand::Place(p), Operand::Const(Value::Char(c)))
+                if is_cmp(*op) && p.proj.is_empty() && self.reps[p.local] == Rep::Boxed =>
+            {
+                let cmp = match op {
+                    BinOp::Eq => "==",
+                    BinOp::Ne => "!=",
+                    BinOp::Lt => "<",
+                    BinOp::Le => "<=",
+                    BinOp::Gt => ">",
+                    _ => ">=",
+                };
+                let l = p.local;
+                format!("(L[{l}].tag == T_CHAR ? L[{l}].u.c {cmp} {}u : ktruth({}))", *c as u32, rvalue(self, rv)?)
+            }
             Rvalue::Binary(op, _, a, b) if is_cmp(*op) => match (self.known_int(a), self.known_int(b)) {
                 (Some(x), Some(y)) => {
                     let c = match op {
