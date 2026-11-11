@@ -1,0 +1,419 @@
+// The lexer of Mou, written in Mou: source text to tokens, with the rule
+// that says which ends of line end a statement. It follows `src/lexer.rs`
+// step by step, and `mou lex` prints what that one gives in the same form.
+
+import std.text
+
+pub enum Part { Lit(str), Expr(str, int, int) }
+
+pub enum Tok { Ident(str), Int(str), Float(str), Str([Part]), Char(char), Kw(str), P(str), Newline, Eof }
+
+pub struct Token { tok: Tok, line: int, col: int }
+
+pub struct Error { msg: str, line: int, col: int }
+
+let KEYWORDS: [str] = [
+    "as", "break", "catch", "comptime", "continue", "defer", "dyn", "else", "enum", "false", "fn",
+    "for", "if", "impl", "import", "in", "let", "loop", "match", "mut", "own", "pub", "ref",
+    "region", "return", "scope", "self", "Self", "soa", "struct", "trait", "true", "type",
+    "unsafe", "var", "where", "while", "with"
+]
+
+// Longest first, so that the first one that matches is the right one.
+let PUNCT: [str] = [
+    "<<=", ">>=", "..=", "+%", "-%", "*%", "+|", "-|", "*|", "==", "!=", "<=", ">=", "&&", "||",
+    "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "->", "=>", "..", "+", "-", "*",
+    "/", "%", "<", ">", "=", "!", "~", "&", "|", "^", ".", ",", ":", ";", "(", ")", "[", "]", "{{",
+    "}}", "?", "@"
+]
+
+// An end of line is dropped when the next line starts with one of these.
+let CONTINUES: [str] = [
+    ".", "?", "==", "!=", "<", "<=", ">", ">=", "&&", "||", "+", "*", "/", "%", "+%", "-%", "*%",
+    "+|", "-|", "*|", "&", "|", "^", "<<", ">>", "..", "..=", "=", "+=", "-=", "*=", "/=", "%=",
+    "&=", "|=", "^=", "<<=", ">>=", "->", "=>", ","
+]
+
+fn has(list: [str], s: str) -> bool {
+    for k in list {
+        if k == s { return true }
+    }
+    false
+}
+
+fn is_word(c: char) -> bool { text.is_alpha(c) || text.is_digit(c) || c == '_' }
+
+fn unescape(c: char) -> char {
+    match c {
+        'n' => '\n'
+        't' => '\t'
+        'r' => '\r'
+        '0' => '\0'
+        _ => c
+    }
+}
+
+fn is_p(t: Tok, s: str) -> bool {
+    match t {
+        Tok.P(p) => p == s
+        _ => false
+    }
+}
+
+fn is_newline(t: Tok) -> bool {
+    match t {
+        Tok.Newline => true
+        _ => false
+    }
+}
+
+struct Lexer { chars: [char], i: int, line: int, col: int, puncts: [[char]] }
+
+impl Lexer {
+    fn peek(self, n: int) -> char? { self.chars.get(self.i + n) }
+
+    fn at(self, n: int, c: char) -> bool {
+        match self.peek(n) {
+            Some(x) => x == c
+            None => false
+        }
+    }
+
+    fn digit_at(self, n: int) -> bool {
+        match self.peek(n) {
+            Some(x) => text.is_digit(x)
+            None => false
+        }
+    }
+
+    fn advance(mut self) -> char? {
+        let c = self.chars.get(self.i)
+        if let Some(ch) = c {
+            self.i += 1
+            if ch == '\n' {
+                self.line += 1
+                self.col = 1
+            } else {
+                self.col += 1
+            }
+        }
+        c
+    }
+
+    fn bump(mut self) {
+        let _ = self.advance()
+    }
+
+    fn starts_with(self, p: [char]) -> bool {
+        for k in 0..p.len {
+            if !self.at(k as int, p[k]) { return false }
+        }
+        true
+    }
+
+    fn run(mut self) -> [Token] ! Error {
+        var out: [Token] = []
+        loop {
+            let line = self.line
+            let col = self.col
+            let c = match self.peek(0) {
+                Some(c) => c
+                None => {
+                    out.push(Token(Tok.Eof, line, col))
+                    break
+                }
+            }
+            if c == '\n' {
+                self.bump()
+                out.push(Token(Tok.Newline, line, col))
+                continue
+            }
+            if text.is_space(c) {
+                self.bump()
+                continue
+            }
+            if c == '/' && self.at(1, '/') {
+                while !self.at(0, '\n') && self.i < self.chars.len as int { self.bump() }
+                continue
+            }
+            if c == '/' && self.at(1, '*') {
+                self.block_comment(line, col)?
+                continue
+            }
+            if text.is_alpha(c) || c == '_' {
+                var word: [char] = []
+                while let Some(w) = self.peek(0) {
+                    if !is_word(w) { break }
+                    word.push(w)
+                    self.bump()
+                }
+                let s = text.from_chars(word)
+                let tok = if has(KEYWORDS, s) { Tok.Kw(s) } else { Tok.Ident(s) }
+                out.push(Token(tok, line, col))
+                continue
+            }
+            if text.is_digit(c) {
+                // After a dot (`t.0.1`) a number is always a plain integer.
+                let after_dot = out.len > 0 && is_p(out[out.len - 1].tok, ".")
+                let tok = self.number(after_dot)
+                out.push(Token(tok, line, col))
+                continue
+            }
+            if c == '"' {
+                let tok = self.string(line, col)?
+                out.push(Token(tok, line, col))
+                continue
+            }
+            if c == '\'' {
+                self.bump()
+                let unterminated = Error("unterminated character literal", line, col)
+                let first = match self.advance() {
+                    Some(x) => x
+                    None => return unterminated
+                }
+                var ch = first
+                if first == '\\' {
+                    ch = match self.advance() {
+                        Some(e) => unescape(e)
+                        None => return unterminated
+                    }
+                }
+                let closed = self.at(0, '\'')
+                self.bump()
+                if !closed { return Error("expected closing `'` in character literal", line, col) }
+                out.push(Token(Tok.Char(ch), line, col))
+                continue
+            }
+            var found = false
+            for k in 0..PUNCT.len {
+                if self.starts_with(self.puncts[k]) {
+                    for _ in 0..self.puncts[k].len { self.bump() }
+                    out.push(Token(Tok.P(PUNCT[k]), line, col))
+                    found = true
+                    break
+                }
+            }
+            if !found { return Error("unexpected character `{c}`", line, col) }
+        }
+        out
+    }
+
+    fn block_comment(mut self, line: int, col: int) ! Error {
+        var depth = 0
+        loop {
+            if self.at(0, '/') && self.at(1, '*') {
+                depth += 1
+                self.bump()
+                self.bump()
+            } else if self.at(0, '*') && self.at(1, '/') {
+                depth -= 1
+                self.bump()
+                self.bump()
+                if depth == 0 { return }
+            } else {
+                match self.advance() {
+                    Some(_) => {}
+                    None => return Error("unterminated block comment", line, col)
+                }
+            }
+        }
+    }
+
+    fn digits(mut self, s: mut [char]) {
+        while let Some(c) = self.peek(0) {
+            if !(text.is_digit(c) || c == '_') { break }
+            s.push(c)
+            self.bump()
+        }
+    }
+
+    fn take(mut self, s: mut [char]) {
+        if let Some(c) = self.advance() { s.push(c) }
+    }
+
+    fn number(mut self, after_dot: bool) -> Tok {
+        var s: [char] = []
+        if !after_dot && self.at(0, '0') && (self.at(1, 'x') || self.at(1, 'b') || self.at(1, 'o')) {
+            self.take(mut s)
+            self.take(mut s)
+            while let Some(c) = self.peek(0) {
+                if !is_word(c) { break }
+                s.push(c)
+                self.bump()
+            }
+            return Tok.Int(text.from_chars(s))
+        }
+        self.digits(mut s)
+        if after_dot { return Tok.Int(text.from_chars(s)) }
+        var float = false
+        if self.at(0, '.') && self.digit_at(1) {
+            float = true
+            self.take(mut s)
+            self.digits(mut s)
+        }
+        if self.at(0, 'e') || self.at(0, 'E') {
+            let signed = self.at(1, '+') || self.at(1, '-')
+            let digit = if signed { 2 } else { 1 }
+            if self.digit_at(digit) {
+                float = true
+                for _ in 0..digit { self.take(mut s) }
+                self.digits(mut s)
+            }
+        }
+        if float { Tok.Float(text.from_chars(s)) } else { Tok.Int(text.from_chars(s)) }
+    }
+
+    fn string(mut self, line: int, col: int) -> Tok ! Error {
+        self.bump()
+        var parts: [Part] = []
+        var cur: [char] = []
+        let unterminated = Error("unterminated string literal", line, col)
+        loop {
+            let c = match self.peek(0) {
+                Some(c) => c
+                None => return unterminated
+            }
+            if c == '"' {
+                self.bump()
+                break
+            }
+            if c == '\\' {
+                self.bump()
+                match self.advance() {
+                    Some(e) => cur.push(unescape(e))
+                    None => return unterminated
+                }
+            } else if c == '{' && self.at(1, '{') {
+                self.bump()
+                self.bump()
+                cur.push('{')
+            } else if c == '}' && self.at(1, '}') {
+                self.bump()
+                self.bump()
+                cur.push('}')
+            } else if c == '{' {
+                self.bump()
+                let eline = self.line
+                let ecol = self.col
+                var depth = 1
+                var src: [char] = []
+                loop {
+                    let x = match self.advance() {
+                        Some(x) => x
+                        None => return Error("unterminated `{{` in string interpolation", eline, ecol)
+                    }
+                    if x == '{' {
+                        depth += 1
+                    } else if x == '}' {
+                        depth -= 1
+                        if depth == 0 { break }
+                    }
+                    src.push(x)
+                }
+                if cur.len > 0 {
+                    parts.push(Part.Lit(text.from_chars(cur)))
+                    cur = []
+                }
+                parts.push(Part.Expr(text.from_chars(src), eline, ecol))
+            } else {
+                self.bump()
+                cur.push(c)
+            }
+        }
+        if cur.len > 0 || parts.len == 0 { parts.push(Part.Lit(text.from_chars(cur))) }
+        Tok.Str(parts)
+    }
+}
+
+// An end of line stays only where it can end a statement: outside `()`
+// and `[]`, after a token that can end an expression, and not before a
+// token that goes on with one.
+fn filter_newlines(raw: [Token]) -> [Token] {
+    var out: [Token] = []
+    var stack: [str] = []
+    for i in 0..raw.len {
+        let t = raw[i]
+        match t.tok {
+            Tok.P(p) => {
+                if p == "(" || p == "[" || p == "{{" { stack.push(p) }
+                if p == ")" || p == "]" || p == "}}" {
+                    let _ = stack.pop()
+                }
+            }
+            _ => {}
+        }
+        if is_newline(t.tok) {
+            if stack.len > 0 && (stack[stack.len - 1] == "(" || stack[stack.len - 1] == "[") { continue }
+            if out.len == 0 { continue }
+            let dropped = match out[out.len - 1].tok {
+                Tok.Newline => true
+                Tok.P(p) => !(p == ")" || p == "]" || p == "}}" || p == "?")
+                _ => false
+            }
+            if dropped { continue }
+            var j = i + 1
+            while j < raw.len && is_newline(raw[j].tok) { j += 1 }
+            var continues = false
+            if j < raw.len {
+                continues = match raw[j].tok {
+                    Tok.P(p) => has(CONTINUES, p)
+                    Tok.Kw(k) => k == "else" || k == "catch" || k == "where" || k == "as"
+                    _ => false
+                }
+            }
+            if continues { continue }
+        }
+        out.push(t)
+    }
+    out
+}
+
+pub fn lex(src: str) -> [Token] ! Error {
+    var puncts: [[char]] = []
+    for p in PUNCT { puncts.push(text.chars(p)) }
+    var lx = Lexer(text.chars(src), 0, 1, 1, puncts)
+    let raw = lx.run()?
+    filter_newlines(raw)
+}
+
+fn escape(s: str) -> str {
+    var parts: [str] = []
+    for c in text.chars(s) {
+        if c == '\\' {
+            parts.push("\\\\")
+        } else if c == '\n' {
+            parts.push("\\n")
+        } else {
+            parts.push("{c}")
+        }
+    }
+    text.concat(parts)
+}
+
+// The tokens as lines of text, in the form `mou lex` prints them.
+pub fn dump(toks: [Token]) -> [str] {
+    var out: [str] = []
+    for t in toks {
+        let at = "{t.line}:{t.col}"
+        match t.tok {
+            Tok.Ident(s) => out.push("{at} ident {s}")
+            Tok.Int(s) => out.push("{at} int {s}")
+            Tok.Float(s) => out.push("{at} float {s}")
+            Tok.Char(c) => out.push("{at} char {c as u32}")
+            Tok.Kw(k) => out.push("{at} kw {k}")
+            Tok.P(p) => out.push("{at} p {p}")
+            Tok.Newline => out.push("{at} newline")
+            Tok.Eof => out.push("{at} eof")
+            Tok.Str(parts) => {
+                out.push("{at} str {parts.len}")
+                for part in parts {
+                    match part {
+                        Part.Lit(s) => out.push("  lit {escape(s)}")
+                        Part.Expr(s, line, col) => out.push("  expr {line}:{col} {escape(s)}")
+                    }
+                }
+            }
+        }
+    }
+    out
+}

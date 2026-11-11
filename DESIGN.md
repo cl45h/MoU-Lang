@@ -305,7 +305,7 @@ fuente -> lexer/parser -> AST
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números y `bool`. Pendiente: leer el header (vía libclang), strings, punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
-| M9 | `import cpp`, `import py`, autoalojamiento del compilador |
+| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer ya está escrito en Mou (`compiler/lexer.mou`) y da los mismos tokens que el de Rust. Faltan el parser, el verificador, el MIR y el emisor de C |
 
 Implementación inicial del compilador: Rust (seguro, buen ecosistema para compiladores), hasta que Mou pueda compilarse a sí mismo.
 
@@ -461,6 +461,26 @@ Lo que se sigue escribiendo a propósito: `mut` y `own` en la llamada, `?` en lo
 El generador cubre: enteros de siete tipos con todas las operaciones (las que comprueban, las que dan la vuelta y las que saturan), desplazamientos, conversiones con `as` y sin él, booleanos con `&&`, `||` y `!`, `f64`, variables, `if`, `for`, `while`, arrays de `int` con `push` e índices, structs con campos de distintos tipos y llamadas entre funciones. No cubre todavía: enums y `match`, opcionales, errores, strings, genéricos, traits, closures, `ref`, `comptime` ni módulos.
 
 Lo que encontró hasta ahora: un literal más grande que su tipo dentro de una operación que satura o da la vuelta se calculaba distinto en el intérprete y en el binario. Ahora es un error de compilación.
+
+### El compilador escrito en Mou
+
+La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se da por buena cuando produce exactamente lo mismo que su par de Rust sobre todos los archivos `.mou` del proyecto.
+
+| Etapa | Estado |
+|---|---|
+| Lexer | Hecho: `compiler/lexer.mou`, unas 380 líneas |
+| Parser | Pendiente |
+| Verificador de tipos | Pendiente |
+| MIR, ownership, efectos | Pendiente |
+| Emisor de C | Pendiente |
+
+`mou build compiler/main.mou -o mouc` compila lo que hay, y `./mouc archivo.mou` imprime los tokens. `mou lex archivo.mou` imprime los del lexer de Rust en el mismo formato. Un test corre el lexer de Mou en el intérprete sobre los 60 archivos del proyecto, incluido el propio lexer, y exige que coincidan; a mano se comprobó lo mismo con el binario nativo, y que los tres errores del lexer salen iguales.
+
+Diferencia conocida: el lexer de Mou solo acepta letras ASCII en los identificadores, porque los caracteres todavía no tienen métodos como `is_alphabetic`. El de Rust acepta cualquier letra Unicode.
+
+Lo que enseñó escribirlo: una llave suelta dentro de un string (`"{"`) abre una interpolación y hay que escribirla doble (`"{{"`); el mensaje de error de ese caso apunta lejos del problema y conviene mejorarlo.
+
+El compilador de Rust tiene unas 17 000 líneas. El lexer es la parte más chica: el verificador de tipos solo tiene más de 4 000. Para que el resto sea viable hace falta antes el layout propio de structs y enums, porque un compilador mueve muchísimos de esos valores.
 
 ### Formateador y sesión interactiva
 

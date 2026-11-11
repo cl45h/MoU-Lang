@@ -32,7 +32,8 @@ commands:
   mir      print the control-flow graph the interpreter runs
   parse    check that the file parses and list its declarations
   ast      print the syntax tree
-  tokens   print the token stream";
+  tokens   print the token stream
+  lex      print the tokens in the form the lexer written in Mou prints them";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -115,6 +116,10 @@ fn main() -> ExitCode {
                 println!("{:>4}:{:<3} {:?}", t.span.line, t.span.col, t.tok);
             }
         }),
+        "lex" => {
+            print!("{}", lexer::dump(&src));
+            Ok(())
+        }
         "ast" => parser::parse_file(&src).map(|file| println!("{file:#?}")),
         "parse" => parser::parse_file(&src).map(|file| {
             if let Some(p) = &file.profile {
@@ -385,5 +390,41 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
     if let Some(line) = src.lines().nth(e.span.line.saturating_sub(1) as usize) {
         eprintln!("  {line}");
         eprintln!("  {}^", " ".repeat(e.span.col.saturating_sub(1) as usize));
+    }
+}
+
+#[cfg(test)]
+mod selfhost {
+    use crate::{check, comptime, interp, lexer, load, mir, own};
+
+    /// The lexer written in Mou gives, for every file of the project, the
+    /// tokens the lexer of this compiler gives.
+    #[test]
+    fn the_lexer_in_mou_agrees_with_this_one() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let main = format!("{root}/compiler/main.mou");
+        let src = std::fs::read_to_string(&main).unwrap();
+        let file = load::load(&main, &src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let (_, info) = check::analyze(&file).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let mut program = mir::lower(&file, &info).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        assert!(own::check(&program).is_empty());
+        assert!(comptime::eval(&mut program).is_empty());
+        let mut files = Vec::new();
+        for dir in ["compiler", "examples", "std", "tests/native"] {
+            for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.extension().is_some_and(|e| e == "mou") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(files.len() > 50);
+        for path in files {
+            interp::ARGS.with(|a| *a.borrow_mut() = vec![path.display().to_string()]);
+            let mut out = Vec::new();
+            interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
+            let expected = lexer::dump(&std::fs::read_to_string(&path).unwrap());
+            assert_eq!(String::from_utf8_lossy(&out), expected, "{}", path.display());
+        }
     }
 }

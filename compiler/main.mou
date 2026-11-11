@@ -1,0 +1,22 @@
+// The compiler of Mou written in Mou. So far: the lexer.
+//
+//     mou build compiler/main.mou -o mouc
+//     ./mouc file.mou        prints the tokens of the file, as `mou lex` does
+
+import std.io
+import lexer
+
+fn main() -> int ! io.Error {
+    let args = io.args()
+    if args.len < 1 {
+        io.eprint("usage: mouc <file.mou>")?
+        return 2
+    }
+    let src = io.read_file(args[0])?
+    let toks = lexer.lex(src) catch e {
+        io.print("error {e.line}:{e.col} {e.msg}")?
+        return 1
+    }
+    for line in lexer.dump(toks) { io.print(line)? }
+    0
+}

@@ -71,6 +71,42 @@ pub const CONTINUES_LINE: &[&str] = &[
     "&=", "|=", "^=", "<<=", ">>=", "->", "=>", ",",
 ];
 
+/// The tokens of a text, one on each line, in the form the lexer written
+/// in Mou (`compiler/lexer.mou`) prints them, so that the two can be compared.
+pub fn dump(src: &str) -> String {
+    use std::fmt::Write;
+    let escape = |s: &str| s.replace('\\', "\\\\").replace('\n', "\\n");
+    let mut out = String::new();
+    let toks = match lex(src) {
+        Ok(toks) => toks,
+        Err(e) => return format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg),
+    };
+    for t in toks {
+        let at = format!("{}:{}", t.span.line, t.span.col);
+        let _ = match t.tok {
+            Tok::Ident(s) => writeln!(out, "{at} ident {s}"),
+            Tok::Int(s) => writeln!(out, "{at} int {s}"),
+            Tok::Float(s) => writeln!(out, "{at} float {s}"),
+            Tok::Char(c) => writeln!(out, "{at} char {}", c as u32),
+            Tok::Kw(k) => writeln!(out, "{at} kw {k}"),
+            Tok::P(p) => writeln!(out, "{at} p {p}"),
+            Tok::Newline => writeln!(out, "{at} newline"),
+            Tok::Eof => writeln!(out, "{at} eof"),
+            Tok::Str(parts) => {
+                let _ = writeln!(out, "{at} str {}", parts.len());
+                for part in parts {
+                    let _ = match part {
+                        StrPart::Lit(s) => writeln!(out, "  lit {}", escape(&s)),
+                        StrPart::Expr(s, at) => writeln!(out, "  expr {}:{} {}", at.line, at.col, escape(&s)),
+                    };
+                }
+                Ok(())
+            }
+        };
+    }
+    out
+}
+
 pub fn lex(src: &str) -> Result<Vec<Token>, Error> {
     lex_at(src, Span { line: 1, col: 1 })
 }

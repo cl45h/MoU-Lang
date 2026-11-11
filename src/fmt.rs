@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn every_file_of_the_project_keeps_its_meaning() {
-        for dir in ["examples", "std", "tests/native"] {
+        for dir in ["compiler", "examples", "std", "tests/native"] {
             let dir = format!("{}/{dir}", env!("CARGO_MANIFEST_DIR"));
             for entry in std::fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
