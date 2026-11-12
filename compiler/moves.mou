@@ -1,0 +1,315 @@
+// Checks that every variable holds a value where it is read, going
+// forward over the middle form of each function. It follows `src/own.rs`.
+//
+// For each variable of the program it follows whether, at each point, it
+// may hold a value, may never have been given one, or may have been moved
+// away with `own`. Reading a variable that is not sure to hold a value is
+// a mistake, and so is giving a second value to one that cannot change.
+//
+// The law of exclusivity for the arguments of a call is checked earlier,
+// on the tree, by the checker of types.
+
+import lexer
+import mir
+
+let INIT: int = 1
+let UNINIT: int = 2
+let MOVED: int = 4
+
+// Where a local was first moved away.
+struct MovedAt { local: int, line: int }
+
+fn read_operand(op: mir.Operand, out: mut [int]) {
+    match op {
+        mir.Operand.At(p) => read_place(p, mut out)
+        _ => {}
+    }
+}
+
+// The locals a place reads.
+fn read_place(p: mir.Place, out: mut [int]) {
+    out.push(p.local)
+    for pr in p.proj {
+        match pr {
+            mir.Proj.Index(i) => read_operand(i, mut out)
+            mir.Proj.Path(l) => out.push(l)
+            mir.Proj.Field(_) => {}
+        }
+    }
+}
+
+fn read_all(ops: [mir.Operand], out: mut [int]) {
+    for o in ops { read_operand(o, mut out) }
+}
+
+fn reads(rv: mir.Rvalue, out: mut [int]) {
+    match rv {
+        mir.Rvalue.Use(a) => read_operand(a, mut out)
+        mir.Rvalue.Unary(_, _, a) => read_operand(a, mut out)
+        mir.Rvalue.CastInt(a, _) => read_operand(a, mut out)
+        mir.Rvalue.CastFloat(a, _) => read_operand(a, mut out)
+        mir.Rvalue.Convert(a, _) => read_operand(a, mut out)
+        mir.Rvalue.Some(a) => read_operand(a, mut out)
+        mir.Rvalue.Ok(a) => read_operand(a, mut out)
+        mir.Rvalue.Err(a) => read_operand(a, mut out)
+        mir.Rvalue.Is(a, _) => read_operand(a, mut out)
+        mir.Rvalue.Len(a) => read_operand(a, mut out)
+        mir.Rvalue.Chars(a) => read_operand(a, mut out)
+        mir.Rvalue.RangeStart(a, _) => read_operand(a, mut out)
+        mir.Rvalue.Succ(a, _) => read_operand(a, mut out)
+        mir.Rvalue.Push(p, a) => {
+            read_place(p, mut out)
+            read_operand(a, mut out)
+        }
+        mir.Rvalue.Pop(p) => read_place(p, mut out)
+        mir.Rvalue.Binary(_, _, a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.Repeat(a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.Slice(a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.RangeHas(a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.RangeLast(a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.Get(a, b) => {
+            read_operand(a, mut out)
+            read_operand(b, mut out)
+        }
+        mir.Rvalue.Tuple(ops) => read_all(ops, mut out)
+        mir.Rvalue.Struct(_, ops) => read_all(ops, mut out)
+        mir.Rvalue.Enum(_, _, ops) => read_all(ops, mut out)
+        mir.Rvalue.Array(ops) => read_all(ops, mut out)
+        mir.Rvalue.Closure(_, ops) => read_all(ops, mut out)
+        mir.Rvalue.Format(parts) => {
+            for part in parts {
+                match part {
+                    mir.FmtPart.Val(o) => read_operand(o, mut out)
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+// What a write to a place reads: all of it when only a part is written.
+fn written(p: mir.Place, out: mut [int]) {
+    if p.proj.len > 0 { read_place(p, mut out) }
+}
+
+fn name_of(f: mir.Func, l: int) -> str? {
+    if l < 0 || l >= (f.names.len as int) { return None }
+    f.names[l]
+}
+
+fn is_once(f: mir.Func, l: int) -> bool {
+    for o in f.once {
+        if o == l { return true }
+    }
+    false
+}
+
+// Reports the locals among `ls` that are not sure to hold a value.
+fn judge(f: mir.Func, moved: [MovedAt], ls: [int], state: [int], line: int, col: int, errors: mut [lexer.Error]) {
+    for l in ls {
+        var name = ""
+        match name_of(f, l) {
+            Some(n) => {
+                name = n
+            }
+            None => continue
+        }
+        let s = state[l]
+        if (s & MOVED) != 0 {
+            var where_ = ""
+            for m in moved {
+                if m.local == l && where_ == "" { where_ = " on line {m.line & 1048575}" }
+            }
+            errors.push(lexer.Error("`{name}` is used after it was moved with `own`{where_}", line, col))
+            continue
+        }
+        if s == UNINIT {
+            errors.push(lexer.Error("`{name}` is used before it is given a value", line, col))
+            continue
+        }
+        if (s & UNINIT) != 0 { errors.push(lexer.Error("`{name}` may not have a value here: it is not assigned on every path", line, col)) }
+    }
+}
+
+// Goes through a block from the state it is entered in. Gives the blocks
+// that follow; the mistakes are only told when `report` is set, on the
+// last pass, once the states no longer change.
+fn run(f: mir.Func, moved: [MovedAt], b: int, state: mut [int], report: bool, errors: mut [lexer.Error]) -> [int] {
+    let block = f.blocks[b]
+    for st in block.stmts {
+        var ls: [int] = []
+        reads(st.rv, mut ls)
+        written(st.place, mut ls)
+        if report { judge(f, moved, ls, state, st.at.line, st.at.col, mut errors) }
+        if st.place.proj.len == 0 {
+            let l = st.place.local
+            match st.rv {
+                mir.Rvalue.Uninit => {
+                    state[l] = UNINIT
+                }
+                mir.Rvalue.Moved => {
+                    state[l] = MOVED
+                }
+                _ => {
+                    if report && is_once(f, l) {
+                        if let Some(name) = name_of(f, l) {
+                            if (state[l] & INIT) != 0 { errors.push(lexer.Error("`{name}` is immutable and may already have a value here", st.at.line, st.at.col)) }
+                        }
+                    }
+                    state[l] = INIT
+                }
+            }
+        }
+    }
+    var ls: [int] = []
+    var next: [int] = []
+    match block.term {
+        mir.Term.Goto(t) => next.push(t)
+        mir.Term.Branch(c, yes, no) => {
+            read_operand(c, mut ls)
+            next.push(yes)
+            next.push(no)
+        }
+        mir.Term.Call(callee, args, writeback, dest, after) => {
+            match callee {
+                mir.Callee.Indirect(op) => read_operand(op, mut ls)
+                _ => {}
+            }
+            read_all(args, mut ls)
+            for w in writeback { written(w.place, mut ls) }
+            written(dest, mut ls)
+            next.push(after)
+        }
+        mir.Term.Return(op) => read_operand(op, mut ls)
+        _ => {}
+    }
+    if report { judge(f, moved, ls, state, block.at.line, block.at.col, mut errors) }
+    match block.term {
+        mir.Term.Call(_, _, writeback, dest, _) => {
+            for w in writeback {
+                if w.place.proj.len == 0 { state[w.place.local] = INIT }
+            }
+            if dest.proj.len == 0 { state[dest.local] = INIT }
+        }
+        _ => {}
+    }
+    next
+}
+
+fn same_state(a: [int], b: [int]) -> bool {
+    if a.len != b.len { return false }
+    for k in 0..a.len {
+        if a[k] != b[k] { return false }
+    }
+    true
+}
+
+fn function(f: mir.Func, errors: mut [lexer.Error]) {
+    // There is nothing to follow without declarations that lack a value or moves.
+    var tracked = false
+    var moved: [MovedAt] = []
+    for b in f.blocks {
+        for st in b.stmts {
+            match st.rv {
+                mir.Rvalue.Uninit => {
+                    tracked = true
+                }
+                mir.Rvalue.Moved => {
+                    tracked = true
+                    var known = false
+                    for m in moved {
+                        if m.local == st.place.local { known = true }
+                    }
+                    if !known { moved.push(MovedAt(st.place.local, st.at.line)) }
+                }
+                _ => {}
+            }
+        }
+    }
+    if !tracked { return }
+    let count = f.blocks.len as int
+    var entry: [[int]] = []
+    var reached: [bool] = []
+    for b in 0..count {
+        entry.push([])
+        reached.push(false)
+    }
+    var first: [int] = []
+    for l in 0..f.locals { first.push(INIT) }
+    entry[0] = first
+    reached[0] = true
+    var work: [int] = []
+    work.push(0)
+    var quiet: [lexer.Error] = []
+    while work.len > 0 {
+        var b = 0
+        if let Some(x) = work.pop() { b = x }
+        if !reached[b] { continue }
+        var state = entry[b]
+        for t in run(f, moved, b, mut state, false, mut quiet) {
+            var merged = state
+            if reached[t] {
+                merged = []
+                for k in 0..state.len { merged.push(entry[t][k] | state[k]) }
+            }
+            if !reached[t] || !same_state(entry[t], merged) {
+                entry[t] = merged
+                reached[t] = true
+                work.push(t)
+            }
+        }
+    }
+    for b in 0..count {
+        if !reached[b] { continue }
+        var state = entry[b]
+        let _ = run(f, moved, b, mut state, true, mut errors)
+    }
+}
+
+fn earlier(x: lexer.Error, y: lexer.Error) -> bool {
+    if x.line != y.line { return x.line < y.line }
+    x.col < y.col
+}
+
+// The mistakes of ownership of a program, by line and column, each one once.
+pub fn check(p: mir.Program) -> [lexer.Error] {
+    var errors: [lexer.Error] = []
+    for f in p.fns { function(f, mut errors) }
+    var at: [int] = []
+    for k in 0..errors.len { at.push(k as int) }
+    for i in 1..at.len {
+        var k = i
+        while k > 0 && earlier(errors[at[k]], errors[at[k - 1]]) {
+            let moved = at[k]
+            at[k] = at[k - 1]
+            at[k - 1] = moved
+            k -= 1
+        }
+    }
+    var out: [lexer.Error] = []
+    for k in at {
+        let e = errors[k]
+        if out.len > 0 {
+            let last = out[out.len - 1]
+            if last.line == e.line && last.col == e.col && last.msg == e.msg { continue }
+        }
+        out.push(e)
+    }
+    out
+}

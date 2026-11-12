@@ -1,0 +1,52 @@
+struct B { d: [int] }
+fn take(b: own B) -> int { 0 }
+fn peek(b: B) -> int { 0 }
+
+fn fine(c: bool) -> int {
+    let x: int
+    if c { x = 1 } else { x = 2 }
+    var y: int
+    y = 1
+    y = 2
+    var b = B([1])
+    let n = take(own b)
+    b = B([2])
+    var total = 0
+    for k in 0..3 {
+        var each = B([k])
+        total += take(own each)
+    }
+    x + y + n + peek(b) + total
+}
+
+fn unset(c: bool) -> int {
+    let x: int
+    let y: int
+    if c { y = 1 }
+    var z: int
+    while c { z = 1 }
+    let w: int
+    w = 1
+    w = 2
+    var b: B
+    b.d = [1]
+    let q: int
+    let g = fn() -> int { q }
+    x + y + z + w + g()
+}
+
+fn moved(c: bool) -> int {
+    var b = B([1])
+    take(own b)
+    let first = peek(b)
+    var d = B([1])
+    let twice = take(own d) + take(own d)
+    var e = B([1])
+    if c { take(own e) }
+    var f = B([1])
+    var n = 0
+    while n < 3 { n += take(own f) }
+    first + twice + peek(e) + n
+}
+
+fn main() { }

@@ -33,7 +33,7 @@ fn main() ! io.Error {
 - Llamadas a funciones de C con números y `bool`.
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
 - Herramientas: `mou test`, `mou fmt`, `mou repl`, `mou effects` y `mou fuzz`.
-- El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C. Le faltan las comprobaciones de ownership y efectos y el cálculo de constantes al compilar.
+- El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C. Le faltan la comprobación de efectos y el cálculo de constantes al compilar.
 
 ## Qué le falta
 

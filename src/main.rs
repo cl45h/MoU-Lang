@@ -254,9 +254,9 @@ fn lower(file: &ast::File) -> Result<mir::Program, Vec<lexer::Error>> {
     }
 }
 
-/// The C of a program written straight from its MIR: nothing is checked
-/// after the types and no constant is computed while compiling. It is what
-/// the compiler written in Mou gives so far.
+/// The C of a program without what the compiler written in Mou does not do
+/// yet: its effects are not checked and no constant is computed while
+/// compiling.
 fn rawc_text(path: &str, src: &str) -> String {
     let errors = |es: Vec<lexer::Error>| es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect();
     let (sources, file) = load::load(path, src);
@@ -272,6 +272,10 @@ fn rawc_text(path: &str, src: &str) -> String {
         Ok(program) => program,
         Err(es) => return errors(es),
     };
+    let mistakes = own::check(&program);
+    if !mistakes.is_empty() {
+        return errors(mistakes);
+    }
     match cgen::emit(&program, &sources.paths()) {
         Ok(c) => c,
         Err(e) => format!("error 0:0 {e}\n"),
@@ -496,8 +500,8 @@ mod selfhost {
 
     /// The compiler written in Mou gives, stage by stage and for every file
     /// of the project, what this compiler gives: tokens, tree, modules,
-    /// declarations, types, MIR and C. `tests/decls`, `tests/types` and
-    /// `tests/lower` hold programs with mistakes, which both must report in
+    /// declarations, types, MIR and C. `tests/decls`, `tests/types`,
+    /// `tests/lower` and `tests/own` hold programs with mistakes, which both must report in
     /// the same words. At the end it compiles itself, and the compiler that
     /// comes out writes the same C again.
     ///
@@ -515,7 +519,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {

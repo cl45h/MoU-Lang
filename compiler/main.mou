@@ -25,6 +25,7 @@ import check
 import lexer
 import load
 import mir
+import moves
 import parser
 import types
 
@@ -61,6 +62,11 @@ fn main() -> int ! io.Error {
         let lowered = mir.lower(program, checked)
         if lowered.errors.len > 0 {
             for e in lowered.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 1
+        }
+        let lost = moves.check(lowered)
+        if lost.len > 0 {
+            for e in lost { io.print("error {e.line}:{e.col} {e.msg}")? }
             return 1
         }
         let runtime = io.read_file(runtime_path)?
