@@ -905,6 +905,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
     let c_type = |t: &Ty| match t {
         Ty::Int(k) | Ty::Float(k) => *k,
         Ty::Bool => "bool",
+        Ty::Str => "str",
+        Ty::Optional(inner) if **inner == Ty::Str => "str?",
         _ => "unit",
     };
     let externs = info

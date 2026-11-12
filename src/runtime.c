@@ -1571,6 +1571,20 @@ static kv kraw_mix(kv n) {
     return kint((int64_t)(z ^ (z >> 31)));
 }
 
+/* A string a C function gave, copied: null is no string. */
+static kv kstr_c_opt(const char *s) { return s ? kbox(T_SOME, kstr(s, strlen(s))) : KNONE; }
+
+static kv kstr_c(const char *s, const char *name) {
+    if (!s) {
+        ksb sb = {0};
+        ksb_str(&sb, "the C function `");
+        ksb_str(&sb, name);
+        ksb_str(&sb, "` gave no string: declare its result as `str?`");
+        kpanic(sb.p);
+    }
+    return kstr(s, strlen(s));
+}
+
 /* `n as char`: the character with that code. */
 static kv kraw_to_char(kv n) {
     i128 i = n.u.i;

@@ -1,0 +1,18 @@
+@profile(system)
+import c "stdlib.h" as stdlib {
+    fn getenv(name: str) -> str?
+    fn atoi(text: str) -> i32
+    fn abs(n: i32) -> i32
+}
+import c "string.h" as cs {
+    fn strlen(text: str) -> usize
+    fn strstr(text: str, part: str) -> str?
+    fn strerror(code: i32) -> str
+}
+
+pub fn env(name: str) -> str? { unsafe { stdlib.getenv(name) } }
+pub fn to_int(text: str) -> i32 { unsafe { stdlib.atoi(text) } }
+pub fn abs(n: i32) -> i32 { unsafe { stdlib.abs(n) } }
+pub fn length(text: str) -> usize { unsafe { cs.strlen(text) } }
+pub fn find(text: str, part: str) -> str? { unsafe { cs.strstr(text, part) } }
+pub fn error_text(code: i32) -> str { unsafe { cs.strerror(code) } }

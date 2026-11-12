@@ -44,7 +44,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Concurrencia.
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.
 - Parámetros `comptime`, tipos como valores y reflexión.
-- Punteros, strings y structs en las llamadas a C, y leer los headers en vez de declarar las funciones a mano.
+- Punteros y structs en las llamadas a C (números, `bool` y strings ya se pueden), y leer los headers en vez de declarar las funciones a mano.
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 - Los bloques `scope` y `with`, que son parte de las regiones y del contexto: se leen, pero el compilador avisa que no los soporta.
 

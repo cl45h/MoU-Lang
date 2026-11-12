@@ -551,7 +551,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own", "tests/fx", "tests/consts"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own", "tests/fx", "tests/consts", "tests/c"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {

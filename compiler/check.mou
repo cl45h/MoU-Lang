@@ -397,6 +397,13 @@ fn c_plain(t: types.Ty) -> bool {
     }
 }
 
+fn is_text(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Str => true
+        _ => false
+    }
+}
+
 fn is_unit(t: types.Ty) -> bool {
     match t {
         types.Ty.Unit => true
@@ -1103,7 +1110,7 @@ impl Checker {
 
     // Takes in the functions a module declares of a C header.
     fn foreign(mut self, module: int, alias: str, header: str, decls: [parser.Decl]) {
-        let only = "a C function can only take and return numbers of up to 64 bits and `bool` for now"
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool` and `str` for now"
         self.module = module
         for d in decls {
             let at = Span(d.line, d.col)
@@ -1121,12 +1128,20 @@ impl Checker {
                             parser.Mode.Let => true
                             _ => false
                         }
-                        if !c_plain(ty) || !by_value { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
+                        if (!c_plain(ty) && !is_text(ty)) || !by_value { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
                         params.push(types.ParamSig(p.name, parser.Mode.Let, ty, false))
                     }
                     var ret = types.Ty.Unit
                     if let Some(t) = f.ret { ret = self.resolve(t, at) }
-                    if !c_plain(ret) && !is_unit(ret) { self.err(at, "the result of `{f.name}`: {only}") }
+                    // A C string comes back as `str`, or as `str?` when it may be null.
+                    var textual = is_text(ret)
+                    match ret {
+                        types.Ty.Optional(inner) => {
+                            if is_text(inner) { textual = true }
+                        }
+                        _ => {}
+                    }
+                    if !c_plain(ret) && !is_unit(ret) && !textual { self.err(at, "the result of `{f.name}`: {only}") }
                     self.set_extern_id(module, alias, f.name, self.externs.len as int)
                     self.externs.push(Extern(f.name, header, types.Sig(params, ret)))
                 }

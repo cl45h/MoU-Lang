@@ -1448,7 +1448,7 @@ impl<'a> Checker<'a> {
     /// Takes in the functions a module declares of a C header.
     fn foreign(&mut self, module: usize, alias: &str, header: &str, decls: &'a [Decl]) {
         let plain = |t: &Ty| matches!(t, Ty::Float(_) | Ty::Bool) || matches!(t, Ty::Int(k) if !k.ends_with("128"));
-        let only = "a C function can only take and return numbers of up to 64 bits and `bool` for now";
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool` and `str` for now";
         self.module = module;
         for d in decls {
             let DeclKind::Fn(f) = &d.kind else {
@@ -1465,7 +1465,7 @@ impl<'a> Checker<'a> {
                     Some(t) => self.resolve(t, d.span),
                     None => Ty::Unknown,
                 };
-                if !plain(&ty) || p.mode != Mode::Let {
+                if (!plain(&ty) && ty != Ty::Str) || p.mode != Mode::Let {
                     self.err(d.span, format!("the parameter `{}` of `{}`: {only}", p.name, f.name));
                 }
                 params.push(ParamSig { name: p.name.clone(), mode: Mode::Let, ty, optional: false });
@@ -1474,7 +1474,9 @@ impl<'a> Checker<'a> {
                 Some(t) => self.resolve(t, d.span),
                 None => Ty::Unit,
             };
-            if !plain(&ret) && ret != Ty::Unit {
+            // A C string comes back as `str`, or as `str?` when it may be null.
+            let text = ret == Ty::Str || ret == Ty::Optional(Box::new(Ty::Str));
+            if !plain(&ret) && ret != Ty::Unit && !text {
                 self.err(d.span, format!("the result of `{}`: {only}", f.name));
             }
             self.extern_ids.insert((module, alias.to_string(), f.name.clone()), self.externs.len());

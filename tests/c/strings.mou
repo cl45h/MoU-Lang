@@ -1,0 +1,9 @@
+import std.io
+import libc
+
+fn main() -> int ! io.Error {
+    let message = libc.error_text(0)
+    io.print("{libc.to_int("1234")} {libc.length("hola mundo")} {libc.find("uno dos tres", "dos")} {libc.find("uno", "x")}")?
+    io.print("{libc.env("MOU_NO_SUCH_VARIABLE")} {message.len > 0} {libc.abs(-5)} {libc.length("ñandú")}")?
+    0
+}

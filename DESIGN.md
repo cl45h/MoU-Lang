@@ -303,7 +303,7 @@ fuente -> lexer/parser -> AST
 | M4 | Emisor de C: binarios nativos con `mou build` (hecho, en `src/cgen.rs` y `src/runtime.c`). Los enteros de hasta 64 bits, los booleanos y los `f64` ya son variables de máquina, y los arrays de escalares y de structs de escalares guardan sus datos sin etiqueta. Pendiente: structs sueltos, enums y strings con layout propio, y structs con campos que no son escalares |
 | M5 | Efectos y perfiles (hechos en `src/effects.rs`: `alloc`, `panic` e `io` inferidos, `@noalloc`, `@nopanic`, `@noio`, prueba de rangos, y `system` sin alocador). Pendiente: el contexto (`with alloc = arena`), los efectos `block` y `unsafe`, y el resto de las reglas de los perfiles |
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
-| M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números y `bool`. Pendiente: leer el header (vía libclang), strings, punteros, structs con layout de C y callbacks |
+| M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números, `bool` y strings. Pendiente: leer el header (vía libclang), punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
 | M9 | Autoalojamiento del compilador: hecho. El compilador entero está escrito en Mou (`compiler/`), da el mismo C que el de Rust y se compila a sí mismo; `./bootstrap.sh` lo construye solo con un compilador de C, a partir de `seed/mouc.c.gz`. Pendiente: `import cpp`, `import py` |
 
@@ -437,12 +437,13 @@ pub fn root(x: f64) -> f64 { unsafe { m.sqrt(x) } }
 ```
 
 - El compilador no lee el header: confía en la declaración. Por eso la llamada solo se acepta dentro de `unsafe { }`, y `unsafe` solo se acepta en un módulo `system`. Lo normal es un módulo `system` chico que envuelve las funciones de C en funciones seguras, y el resto del programa usa esas.
-- Parámetros y resultado: enteros de hasta 64 bits, `f32`, `f64` y `bool`, o ningún resultado. Los argumentos se verifican contra la declaración como en cualquier llamada.
+- Parámetros y resultado: enteros de hasta 64 bits, `f32`, `f64`, `bool` y `str`, o ningún resultado. Los argumentos se verifican contra la declaración como en cualquier llamada.
+- Un `str` se pasa a C como `const char *` terminado en cero, sin copiarlo, y vale mientras dura la llamada. Un resultado `str` se copia a un string de Mou; si la función puede devolver un puntero nulo se declara `str?` y el nulo es `None` (con `str`, un nulo es un panic). Mou no libera lo que devuelve C: una función que devuelve memoria que hay que liberar todavía no se puede usar sin perderla.
 - El binario incluye el header y llama a la función directamente. `mou build archivo.mou -l sqlite3` enlaza una librería.
 - Una función que llega a una de C tiene el efecto `unsafe`, que `mou effects` muestra. De lo que hace la función de C (alocar, entrada y salida) responde quien escribió el `unsafe`.
 - El intérprete no puede llamar a C: `mou run`, `mou test`, el `repl` y `comptime` se detienen con un panic que lo dice cuando llegan a una. Un programa que usa C se prueba compilado.
 
-Faltan: leer el header en vez de declarar a mano, strings, punteros, structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
+Faltan: leer el header en vez de declarar a mano, punteros, structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
 
 ### Facilidad de uso: lo que el compilador deduce
 

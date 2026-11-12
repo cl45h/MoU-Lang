@@ -767,6 +767,13 @@ fn c_type(t: types.Ty) -> str {
         types.Ty.Int(k) => k
         types.Ty.Float(k) => k
         types.Ty.Bool => "bool"
+        types.Ty.Str => "str"
+        types.Ty.Optional(inner) => {
+            match inner {
+                types.Ty.Str => "str?"
+                _ => "unit"
+            }
+        }
         _ => "unit"
     }
 }

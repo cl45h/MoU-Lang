@@ -1151,8 +1151,16 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                 } else if let Callee::Extern(x) = callee {
                     let x = &externs[*x];
                     let mut parts = Vec::new();
-                    for (a, t) in args.iter().zip(&x.params) {
+                    // The strings it is given are held until it returns.
+                    let mut held = Vec::new();
+                    for (k, (a, t)) in args.iter().zip(&x.params).enumerate() {
                         let v = operand(cx, a)?;
+                        if *t == "str" {
+                            writeln!(out, "        kv e{k} = {v};").unwrap();
+                            parts.push(format!("kbytes(e{k})"));
+                            held.push(k);
+                            continue;
+                        }
                         parts.push(match *t {
                             "bool" => format!("({v}).u.t"),
                             "f64" => format!("({v}).u.f"),
@@ -1166,9 +1174,14 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         "bool" => format!("kbool({call})"),
                         "f64" => format!("kf64({call})"),
                         "f32" => format!("kf32({call})"),
+                        "str" => format!("kstr_c({call}, {})", quote(&x.name)),
+                        "str?" => format!("kstr_c_opt({call})"),
                         _ => format!("kint((i128)({call}))"),
                     };
                     writeln!(out, "        kv r = {r};").unwrap();
+                    for k in held {
+                        writeln!(out, "        krelease(e{k});").unwrap();
+                    }
                 } else if let Callee::Native(name) = callee {
                     let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
                     writeln!(out, "        kv r = k{}({});", name.replace('.', "_"), parts?.join(", ")).unwrap();

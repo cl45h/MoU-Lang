@@ -1626,10 +1626,18 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                     mir.Callee.Extern(x) => {
                         let ext = externs[x]
                         var parts: [str] = []
+                        // The strings it is given are held until it returns.
+                        var held: [int] = []
                         for k in 0..(args.len as int) {
                             if k >= (ext.params.len as int) { break }
                             let v = cx.operand(args[k])?
                             let t = ext.params[k]
+                            if t == "str" {
+                                line(mut out, "        kv e{k} = {v};")
+                                parts.push("kbytes(e{k})")
+                                held.push(k)
+                                continue
+                            }
                             if t == "bool" {
                                 parts.push("({v}).u.t")
                             } else {
@@ -1650,7 +1658,10 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if ext.ret == "bool" { r = "kbool({call})" }
                         if ext.ret == "f64" { r = "kf64({call})" }
                         if ext.ret == "f32" { r = "kf32({call})" }
+                        if ext.ret == "str" { r = "kstr_c({call}, {quote(ext.name)})" }
+                        if ext.ret == "str?" { r = "kstr_c_opt({call})" }
                         line(mut out, "        kv r = {r};")
+                        for k in held { line(mut out, "        krelease(e{k});") }
                     }
                     mir.Callee.Native(name) => {
                         var parts: [str] = []
