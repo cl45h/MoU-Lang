@@ -2511,10 +2511,10 @@ impl<'a> Lower<'a> {
                 let run = self.closure_of(span, &t, &[], Err(&a.value));
                 self.finish_call(Callee::Native("task.spawn"), vec![run], Vec::new(), span)
             }
-            Some(Res::Builtin("task.wait")) => {
+            Some(Res::Builtin(name @ ("task.wait" | "task.cancel"))) => {
                 let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
                 let task = self.expr(base);
-                self.finish_call(Callee::Native("task.wait"), vec![task], Vec::new(), span)
+                self.finish_call(Callee::Native(name), vec![task], Vec::new(), span)
             }
             Some(Res::Builtin("mutex.update")) => {
                 // The value is taken out, changed and put back: nothing

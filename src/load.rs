@@ -23,7 +23,7 @@ const STD: &[(&str, &str)] = &[
 ];
 
 /// Modules the compiler provides directly.
-const BUILTIN: &[&str] = &["std.io", "std.raw"];
+const BUILTIN: &[&str] = &["std.io", "std.raw", "std.task"];
 
 pub struct Source {
     pub path: String,

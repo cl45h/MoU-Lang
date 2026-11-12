@@ -1454,6 +1454,7 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
         ("std.io", "read_file") => ("io.read_file", vec![param("path", Ty::Str)], fails(Ty::Str)),
         ("std.io", "write_file") => ("io.write_file", vec![param("path", Ty::Str), param("text", Ty::Str)], fails(Ty::Unit)),
         ("std.io", "args") => ("io.args", vec![], list(Ty::Str)),
+        ("std.task", "cancelled") => ("task.cancelled", vec![], Ty::Bool),
         ("std.raw", "concat") => ("raw.concat", vec![param("parts", list(Ty::Str))], Ty::Str),
         ("std.raw", "from_chars") => ("raw.from_chars", vec![param("chars", list(Ty::Char))], Ty::Str),
         ("std.raw", "hash") => ("raw.hash", vec![param("text", Ty::Str)], int),
@@ -4734,6 +4735,10 @@ impl<'a> Checker<'a> {
                         self.array_method(e, base, &bt, name, args, span)
                     }
                     Ty::Builtin("scope") if name == "spawn" => self.spawn(e, args, span),
+                    Ty::Task(_) if name == "cancel" => {
+                        self.res.insert((self.inst, id(e)), Res::Builtin("task.cancel"));
+                        self.apply(&Sig { params: Vec::new(), ret: Ty::Unit }, args, span)
+                    }
                     Ty::Task(t) if name == "wait" => {
                         self.res.insert((self.inst, id(e)), Res::Builtin("task.wait"));
                         self.apply(&Sig { params: Vec::new(), ret: (**t).clone() }, args, span)

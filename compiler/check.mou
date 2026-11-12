@@ -4770,6 +4770,9 @@ fn native(module: str, name: str) -> Native? {
         if name == "write_file" { return Some(Native("io.write_file", types.Sig([param("path", types.Ty.Str), param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "args" { return Some(Native("io.args", types.Sig([], types.Ty.Slice(types.Ty.Str)))) }
     }
+    if module == "std.task" {
+        if name == "cancelled" { return Some(Native("task.cancelled", types.Sig([], types.Ty.Bool))) }
+    }
     if module == "std.raw" {
         if name == "concat" { return Some(Native("raw.concat", types.Sig([param("parts", types.Ty.Slice(types.Ty.Str))], types.Ty.Str))) }
         if name == "from_chars" { return Some(Native("raw.from_chars", types.Sig([param("chars", types.Ty.Slice(types.Ty.Char))], types.Ty.Str))) }
@@ -5108,6 +5111,10 @@ impl Checker {
                 if name == "wait" {
                     self.set_res(e, Res.Builtin("task.wait"))
                     return self.apply(types.Sig([], t), args, at)
+                }
+                if name == "cancel" {
+                    self.set_res(e, Res.Builtin("task.cancel"))
+                    return self.apply(types.Sig([], types.Ty.Unit), args, at)
                 }
                 self.args_unchecked(args)
                 self.err(at, "type `{self.show(bt)}` has no method `{name}`")

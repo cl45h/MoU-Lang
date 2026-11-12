@@ -3024,11 +3024,11 @@ impl Lower {
                         _ => return self.unsupported(at, "this `spawn`")
                     }
                 }
-                if name == "task.wait" {
+                if name == "task.wait" || name == "task.cancel" {
                     match callee.kind {
                         parser.Kind.Field(base, _) => {
                             let task = self.expr(base)
-                            return self.finish_call(Callee.Native("task.wait"), [task], [], at)
+                            return self.finish_call(Callee.Native(name), [task], [], at)
                         }
                         _ => return self.unsupported(at, "this call")
                     }

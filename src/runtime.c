@@ -1749,12 +1749,53 @@ static kv kcall(kv f, kv *args);
 
 /* ---- tasks ----
  *
- * A task is a block of two items: its result, and whether it is done. A
- * scope is a mark in the list of the tasks its thread started: closing it
- * waits for the ones after the mark. One lock covers every task. */
+ * A task is a block of four items: its result, whether it is done,
+ * whether it was asked to stop, and the task that started it (0 when the
+ * program itself did, or once it is done). A scope is a mark in the list
+ * of the tasks its thread started: closing it waits for the ones after
+ * the mark. One lock covers every task.
+ *
+ * At most KTHREADS_MAX tasks have a thread of their own at a time (the
+ * variable MOU_THREADS changes it); one started beyond that runs where it
+ * is started, before going on. */
 #ifdef KTHREADS
+enum { KTHREADS_MAX = 256 };
 static pthread_mutex_t ktask_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ktask_done = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t kchan_moved = PTHREAD_COND_INITIALIZER;
+static int64_t kthreads_live, kthreads_max;
+/* The task this thread runs, when it runs one. */
+static KLOCAL kv ktask_self;
+static KLOCAL bool ktask_inside;
+
+/* Whether the task that runs here, or one that started it, was asked to
+ * stop. With the lock taken. */
+static bool ktask_stop(void) {
+    if (!ktask_inside) return false;
+    kv t = ktask_self;
+    while (t.tag == T_TUPLE) {
+        if (ITEMS(t.u.o)[2].u.i != 0) return true;
+        t = ITEMS(t.u.o)[3];
+    }
+    return false;
+}
+
+static kv ktask_cancelled(void) {
+    pthread_mutex_lock(&ktask_lock);
+    bool stop = ktask_stop();
+    pthread_mutex_unlock(&ktask_lock);
+    return kbool(stop);
+}
+
+static kv ktask_cancel(kv task) {
+    pthread_mutex_lock(&ktask_lock);
+    ITEMS(task.u.o)[2] = kint(1);
+    /* Whoever waits on a channel looks again. */
+    pthread_cond_broadcast(&kchan_moved);
+    pthread_mutex_unlock(&ktask_lock);
+    krelease(task);
+    return KUNIT;
+}
 static KLOCAL kv *ktasks;
 static KLOCAL int64_t ktask_len, ktask_cap;
 
@@ -1764,8 +1805,12 @@ static void ktask_finish(kv task, kv result) {
     pthread_mutex_lock(&ktask_lock);
     ITEMS(task.u.o)[0] = result;
     ITEMS(task.u.o)[1] = kint(1);
+    /* It lets go of who started it: a result may hold tasks. */
+    kv parent = ITEMS(task.u.o)[3];
+    ITEMS(task.u.o)[3] = kint(0);
     pthread_cond_broadcast(&ktask_done);
     pthread_mutex_unlock(&ktask_lock);
+    krelease(parent);
 }
 
 static kv ktask_close(kv mark) {
@@ -1785,6 +1830,8 @@ static void *ktask_main(void *arg) {
     char base;
     free(arg);
     kstack_base = &base;
+    ktask_self = task;
+    ktask_inside = true;
     kv A[1] = {KUNIT};
     kv result = kcall(ITEMS(task.u.o)[0], A);
     /* The tasks it started on a scope of another thread end before it does. */
@@ -1793,12 +1840,15 @@ static void *ktask_main(void *arg) {
     ktask_finish(task, result);
     krelease(task);
     kpool_drop();
+    pthread_mutex_lock(&ktask_lock);
+    kthreads_live--;
+    pthread_mutex_unlock(&ktask_lock);
     return NULL;
 }
 
 static kv ktask_spawn(kv run) {
-    kv items[2] = {run, kint(0)};
-    kv task = kagg(T_TUPLE, 0, 0, 2, items);
+    kv items[4] = {run, kint(0), kint(0), ktask_inside ? kretain(ktask_self) : kint(0)};
+    kv task = kagg(T_TUPLE, 0, 0, 4, items);
     if (ktask_len == ktask_cap) {
         ktask_cap = ktask_cap ? ktask_cap * 2 : 8;
         ktasks = (kv *)realloc(ktasks, (size_t)ktask_cap * sizeof(kv));
@@ -1809,19 +1859,44 @@ static kv ktask_spawn(kv run) {
     pthread_attr_t attr;
     pthread_t thread;
     bool started = false;
-    if (arg && pthread_attr_init(&attr) == 0) {
+    pthread_mutex_lock(&ktask_lock);
+    if (kthreads_max == 0) {
+        const char *asked = getenv("MOU_THREADS");
+        long n = asked ? strtol(asked, NULL, 10) : 0;
+        kthreads_max = n > 0 ? n : KTHREADS_MAX;
+    }
+    bool room = kthreads_live < kthreads_max;
+    if (room) kthreads_live++;
+    pthread_mutex_unlock(&ktask_lock);
+    if (room && !(arg && pthread_attr_init(&attr) == 0)) {
+        pthread_mutex_lock(&ktask_lock);
+        kthreads_live--;
+        pthread_mutex_unlock(&ktask_lock);
+    } else if (room) {
         *arg = kretain(task);
         pthread_attr_setstacksize(&attr, (size_t)KSTACK_LIMIT + 2 * 1024 * 1024);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
         started = pthread_create(&thread, &attr, ktask_main, arg) == 0;
         pthread_attr_destroy(&attr);
-        if (!started) krelease(task);
+        if (!started) {
+            krelease(task);
+            pthread_mutex_lock(&ktask_lock);
+            kthreads_live--;
+            pthread_mutex_unlock(&ktask_lock);
+        }
     }
     if (!started) {
         /* No thread to be had: the task runs here, before going on. */
         free(arg);
+        kv outer = ktask_self;
+        bool was = ktask_inside;
+        ktask_self = task;
+        ktask_inside = true;
         kv A[1] = {KUNIT};
-        ktask_finish(task, kcall(run, A));
+        kv result = kcall(run, A);
+        ktask_self = outer;
+        ktask_inside = was;
+        ktask_finish(task, result);
     }
     return task;
 }
@@ -1839,6 +1914,9 @@ static kv ktask_wait(kv task) {
 static kv ktask_open(void) { return kint(0); }
 static kv ktask_close(kv mark) { (void)mark; return KUNIT; }
 static kv ktask_wait(kv task) { return task; }
+static kv ktask_cancel(kv task) { krelease(task); return KUNIT; }
+static kv ktask_cancelled(void) { return kbool(false); }
+static bool ktask_stop(void) { return false; }
 #endif
 
 /* ---- channels ----
@@ -1848,7 +1926,6 @@ static kv ktask_wait(kv task) { return task; }
  * the values, in a ring. The lock of the tasks covers every channel. A
  * program that starts no tasks has nobody to wait for. */
 #ifdef KTHREADS
-static pthread_cond_t kchan_moved = PTHREAD_COND_INITIALIZER;
 #define KCHAN_LOCK() pthread_mutex_lock(&ktask_lock)
 #define KCHAN_UNLOCK() pthread_mutex_unlock(&ktask_lock)
 #define KCHAN_WAIT(what) pthread_cond_wait(&kchan_moved, &ktask_lock)
@@ -1946,7 +2023,16 @@ static kv kchan_new(kv cap) {
 static kv kchan_send(kv chan, kv value) {
     kv *it = ITEMS(chan.u.o);
     KCHAN_LOCK();
-    while (it[KCHAN_LEN].u.i == it[KCHAN_CAP].u.i && it[KCHAN_CLOSED].u.i == 0) KCHAN_WAIT("`send`");
+    while (it[KCHAN_LEN].u.i == it[KCHAN_CAP].u.i && it[KCHAN_CLOSED].u.i == 0) {
+        if (ktask_stop()) {
+            /* A task asked to stop does not wait: what it sends is dropped. */
+            KCHAN_UNLOCK();
+            krelease(value);
+            krelease(chan);
+            return KUNIT;
+        }
+        KCHAN_WAIT("`send`");
+    }
     if (it[KCHAN_CLOSED].u.i != 0) {
         KCHAN_UNLOCK();
         kpanic("`send` on a closed channel");
@@ -1963,7 +2049,8 @@ static kv kchan_send(kv chan, kv value) {
 static kv kchan_recv(kv chan) {
     kv *it = ITEMS(chan.u.o);
     KCHAN_LOCK();
-    while (it[KCHAN_LEN].u.i == 0 && it[KCHAN_CLOSED].u.i == 0) KCHAN_WAIT("`recv`");
+    /* A task asked to stop does not wait: it finds the channel empty. */
+    while (it[KCHAN_LEN].u.i == 0 && it[KCHAN_CLOSED].u.i == 0 && !ktask_stop()) KCHAN_WAIT("`recv`");
     bool got = it[KCHAN_LEN].u.i > 0;
     kv value = KUNIT;
     if (got) {

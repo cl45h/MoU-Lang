@@ -9,7 +9,7 @@ import lexer
 import parser
 
 // Modules the compiler provides directly.
-let BUILTIN: [str] = ["std.io", "std.raw"]
+let BUILTIN: [str] = ["std.io", "std.raw", "std.task"]
 
 // Lines of module `n` are numbered from `n << FILE_SHIFT`, so that a
 // position alone says which file it is in.

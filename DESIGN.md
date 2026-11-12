@@ -471,7 +471,17 @@ fn both(xs: [int]) -> int {
 
 Medido en `tests/native/tasks.mou` y con cuatro tareas de cálculo en una máquina de 32 hilos: 0,63 s en serie, 0,17 s con tareas. Verificado con los sanitizers de hilos y de memoria.
 
-Faltan: cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
+Falta la entrada y salida sin bloquear.
+
+### Cancelar y limitar: qué hay
+
+- `t.cancel()` le pide a una tarea que termine. No la corta: la tarea se entera preguntando `task.cancelled()` (de `import std.task`) y decide qué devolver. El pedido alcanza también a las tareas que ella lanzó.
+- Una tarea a la que se le pidió terminar no espera en un canal: su `recv` da `None` si no hay nada y su `send` descarta el valor si el canal está lleno. Así una tarea trabada en un canal que nadie cierra se puede soltar.
+- Fuera de una tarea `task.cancelled()` da `false`. Cancelar una tarea que ya terminó no cambia nada.
+- A lo sumo 256 tareas tienen hilo propio a la vez; la variable de entorno `MOU_THREADS` cambia ese número. Una tarea lanzada cuando no queda lugar corre en el lugar, antes de seguir, igual que cuando el sistema no da un hilo. Con canales eso puede trabar un programa donde el que recibe corre en el lugar y el que manda todavía no arrancó.
+- Con `mou run` y `mou test` una tarea ya terminó cuando se la puede cancelar, así que `cancel` no hace nada y `task.cancelled()` da siempre `false`. Un bucle que solo termina cuando lo cancelan no termina ahí.
+
+Verificado con una tarea que gira hasta que la cancelan, una trabada en `recv` y una que lanzó otras dos trabadas, 40 corridas seguidas y bajo los sanitizers de hilos y de memoria. Una corrida con el sanitizer de memoria no mostró salida antes del límite de 60 s y no se repitió en 37 corridas más; no encontré la causa.
 
 ### Canales: qué hay
 

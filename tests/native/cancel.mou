@@ -1,0 +1,34 @@
+import std.io
+import std.task
+
+// Stops early when it is asked to.
+fn count(limit: int) -> int {
+    var n = 0
+    for i in 0..limit {
+        if task.cancelled() { return 0 - 1 }
+        n += 1
+    }
+    n
+}
+
+// More tasks than threads a program is given: the rest run in place.
+fn many(n: int) -> int {
+    scope s {
+        var ts: [Task[int]] = []
+        for i in 0..n { ts.push(s.spawn(i)) }
+        var sum = 0
+        for t in ts { sum += t.wait() }
+        sum
+    }
+}
+
+fn main() ! io.Error {
+    io.print("{task.cancelled()} {many(2000)}")?
+    scope s {
+        let a = s.spawn(count(500))
+        let done = a.wait()
+        // It is done already: asking it to stop changes nothing.
+        a.cancel()
+        io.print("{done} {a.wait()}")?
+    }
+}
