@@ -834,6 +834,22 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                     _ => {}
                 }
             }
+            // An array of numbers goes as the address of the numbers.
+            match q.ty {
+                types.Ty.Slice(item) => {
+                    let how = if changed { "mutbuf" } else { "buf" }
+                    match item {
+                        types.Ty.Int(k) => {
+                            kind = "{how} {k}"
+                        }
+                        types.Ty.Float(k) => {
+                            kind = "{how} {k}"
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
             params.push(kind)
         }
         externs.push(Extern(x.name, x.header, params, c_type(x.sig.ret)))

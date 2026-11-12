@@ -1479,7 +1479,7 @@ impl<'a> Checker<'a> {
     /// Takes in the functions a module declares of a C header.
     fn foreign(&mut self, module: usize, alias: &str, header: &str, decls: &'a [Decl]) {
         let plain = |t: &Ty| matches!(t, Ty::Float(_) | Ty::Bool) || matches!(t, Ty::Int(k) if !k.ends_with("128"));
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr` and structs marked `@c`";
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers";
         // An address goes as `ptr`, or as `ptr?` when it may be null.
         let address = |t: &Ty| *t == Ty::Builtin("ptr") || *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
         self.module = module;
@@ -1499,7 +1499,9 @@ impl<'a> Checker<'a> {
                     None => Ty::Unknown,
                 };
                 // A struct of C goes by value, or as its address when it is `mut`.
-                let record = matches!(&ty, Ty::Struct(i, targs) if targs.is_empty() && self.cstructs.contains_key(i));
+                // So does an array of numbers: C is given where they are.
+                let record = matches!(&ty, Ty::Struct(i, targs) if targs.is_empty() && self.cstructs.contains_key(i))
+                    || matches!(&ty, Ty::Slice(t) if matches!(&**t, Ty::Float(_)) || matches!(&**t, Ty::Int(k) if !k.ends_with("128")));
                 let fits = if record { matches!(p.mode, Mode::Let | Mode::Mut) } else { p.mode == Mode::Let && (plain(&ty) || ty == Ty::Str || address(&ty)) };
                 if !fits {
                     self.err(d.span, format!("the parameter `{}` of `{}`: {only}", p.name, f.name));
@@ -5057,7 +5059,11 @@ mod tests {
         bad(&f("unsafe { m.sqrt(x, x) }"), "expected 1 arguments, found 2");
         bad(&f("unsafe { m.sqrt(true) }"), "expected `f64`");
         bad("import c \"math.h\" as m { fn sqrt(x: f64) -> f64 }\nfn f() -> f64 { unsafe { m.sqrt(1.0) } }", "`unsafe` is only allowed in a module that starts with `@profile(system)`");
-        bad("import c \"s.h\" as s { fn len(t: [int]) -> usize }", "a C function can only take and return numbers");
+        bad("import c \"s.h\" as s { fn len(t: [str]) -> usize }", "a C function can only take and return numbers");
+        bad("import c \"s.h\" as s { fn all() -> [int] }", "a C function can only take and return numbers");
+        bad("import c \"s.h\" as s { fn f(n: mut i32) }", "a C function can only take and return numbers");
+        bad("@c(\"a;b\")\nstruct S { a: i32 }", "`@c` takes the name of the type in C");
+        bad("@c(\"s\")\nstruct S { a: str }", "a struct of C can only have fields");
         bad("import c \"s.h\" as s { fn one() -> int { 1 } }", "is a C function: it is declared with its parameters and its result");
     }
 

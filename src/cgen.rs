@@ -87,6 +87,15 @@ fn constant(v: &Value) -> Result<String, String> {
     })
 }
 
+/// The C type of a number an array lent to C holds.
+fn buf_type(kind: &str) -> String {
+    match kind {
+        "f64" => "double".into(),
+        "f32" => "float".into(),
+        k => c_int(k),
+    }
+}
+
 /// The C type of an integer type of the language.
 fn c_int(kind: &str) -> String {
     match kind {
@@ -1324,8 +1333,20 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     let mut held = Vec::new();
                     // The structs it changes: the argument and the struct.
                     let mut changed = Vec::new();
+                    // The arrays it is lent, and for the ones it may change, how
+                    // their numbers are read back.
+                    let mut lent: Vec<(usize, Option<String>)> = Vec::new();
                     for (k, (a, t)) in args.iter().zip(&x.params).enumerate() {
                         let v = operand(cx, a)?;
+                        if let Some((how, kind)) = t.split_once(' ').filter(|(how, _)| matches!(*how, "buf" | "mutbuf")) {
+                            let (code, ctype) = (format!("KB_{}", kind.to_uppercase()), buf_type(kind));
+                            writeln!(out, "        kv e{k} = {v};").unwrap();
+                            writeln!(out, "        void *b{k} = kbuf_make(e{k}, {code});").unwrap();
+                            parts.push(format!("({}{ctype} *)b{k}", if how == "buf" { "const " } else { "" }));
+                            held.push(k);
+                            lent.push((k, (how == "mutbuf").then_some(code)));
+                            continue;
+                        }
                         if let Some(i) = t.strip_prefix("struct ") {
                             writeln!(out, "        kv e{k} = {v};").unwrap();
                             parts.push(format!("KX{i}_get(e{k})"));
@@ -1368,6 +1389,12 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         _ => format!("kint((i128)({call}))"),
                     };
                     writeln!(out, "        kv r = {r};").unwrap();
+                    for (k, back) in lent {
+                        if let (Some(code), Some((_, place))) = (back, writeback.iter().find(|(w, _)| *w == k)) {
+                            writeln!(out, "        {}", cx.take(place, &format!("kbuf_back(b{k}, klen(e{k}), {code})"))?).unwrap();
+                        }
+                        writeln!(out, "        free(b{k});").unwrap();
+                    }
                     for k in held {
                         writeln!(out, "        krelease(e{k});").unwrap();
                     }

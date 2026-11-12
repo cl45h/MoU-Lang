@@ -963,6 +963,11 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
     // A `mut` one goes as its address.
     let c_param = |p: &crate::check::ParamSig| match (&p.ty, p.mode) {
         (Ty::Struct(i, _), Mode::Mut) => &*Box::leak(format!("mut {i}").into_boxed_str()),
+        // An array of numbers goes as the address of the numbers.
+        (Ty::Slice(t), mode) => match &**t {
+            Ty::Int(k) | Ty::Float(k) => &*Box::leak(format!("{} {k}", if mode == Mode::Mut { "mutbuf" } else { "buf" }).into_boxed_str()),
+            _ => "unit",
+        },
         _ => c_type(&p.ty),
     };
     let mut cstructs: Vec<(usize, String, Vec<&'static str>)> =

@@ -1,0 +1,19 @@
+import std.io
+import cbuf
+
+fn main() ! io.Error {
+    let a: [u8] = [1, 2, 250]
+    let b: [u8] = [1, 2, 250]
+    let c: [u8] = [1, 2, 251]
+    let none: [u8] = []
+    io.print("{cbuf.same(a, b)} {cbuf.same(a, c)} {cbuf.same(none, none)}")?
+    var xs: [i32] = [1, 2, 3]
+    cbuf.ones(mut xs)
+    io.print("{xs[0]} {xs[2]} {xs.len}")?
+    var e: [i32] = [0]
+    let frac = cbuf.exponent(48.0, mut e)
+    io.print("{frac} {e[0]}")?
+    var text: [u8] = [0; 16]
+    let n = cbuf.shown(3.14159, mut text)
+    io.print("{n} {text[0]} {text[1]} {text[4]} {text[5]}")?
+}

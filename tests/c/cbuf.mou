@@ -1,0 +1,19 @@
+@profile(system)
+
+import c "string.h" as s {
+    fn memcmp(a: [u8], b: [u8], n: usize) -> i32
+    fn memset(a: mut [i32], c: i32, n: usize) -> ptr
+}
+import c "stdlib.h" as lib { fn qsort(base: mut [f64], n: usize, size: usize, cmp: ptr) }
+import c "math.h" as m { fn frexp(x: f64, e: mut [i32]) -> f64 }
+import c "stdio.h" as io {
+    fn snprintf(out: mut [u8], n: usize, fmt: str, x: f64) -> i32
+}
+
+pub fn same(a: [u8], b: [u8]) -> bool { a.len == b.len && unsafe { s.memcmp(a, b, a.len) } == 0 }
+
+pub fn ones(xs: mut [i32]) { unsafe { s.memset(mut xs, 255, xs.len * 4) } }
+
+pub fn exponent(x: f64, out: mut [i32]) -> f64 { unsafe { m.frexp(x, mut out) } }
+
+pub fn shown(x: f64, out: mut [u8]) -> i32 { unsafe { io.snprintf(mut out, out.len, "%.3f", x) } }

@@ -193,6 +193,29 @@ fn constants(vs: [mir.Value]) -> str ! Fail {
 // A struct a C function changes: the argument, and the number of the struct.
 struct Changed { arg: int, index: str }
 
+// The C type of a number an array lent to C holds.
+fn buf_type(kind: str) -> str {
+    if kind == "f64" { return "double" }
+    if kind == "f32" { return "float" }
+    c_int(kind)
+}
+
+// How the runtime names that kind of number.
+fn buf_code(kind: str) -> str {
+    if kind == "i8" { return "KB_I8" }
+    if kind == "i16" { return "KB_I16" }
+    if kind == "i32" { return "KB_I32" }
+    if kind == "i64" { return "KB_I64" }
+    if kind == "isize" { return "KB_ISIZE" }
+    if kind == "u8" { return "KB_U8" }
+    if kind == "u16" { return "KB_U16" }
+    if kind == "u32" { return "KB_U32" }
+    if kind == "u64" { return "KB_U64" }
+    if kind == "usize" { return "KB_USIZE" }
+    if kind == "f32" { return "KB_F32" }
+    "KB_F64"
+}
+
 // A text without its first `n` characters.
 fn rest(t: str, n: int) -> str {
     let cs = text.chars(t)
@@ -1990,10 +2013,29 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         var held: [int] = []
                         // The structs it changes: the argument and the struct.
                         var changed: [Changed] = []
+                        // The arrays it is lent, and for the ones it may change, how
+                        // their numbers are read back.
+                        var lent: [Changed] = []
                         for k in 0..(args.len as int) {
                             if k >= (ext.params.len as int) { break }
                             let v = cx.operand(args[k])?
                             let t = ext.params[k]
+                            if text.starts_with(t, "buf ") || text.starts_with(t, "mutbuf ") {
+                                let taken = text.starts_with(t, "buf ")
+                                let kind = if taken { rest(t, 4) } else { rest(t, 7) }
+                                let code = buf_code(kind)
+                                line(mut out, "        kv e{k} = {v};")
+                                line(mut out, "        void *b{k} = kbuf_make(e{k}, {code});")
+                                if taken {
+                                    parts.push("(const {buf_type(kind)} *)b{k}")
+                                    lent.push(Changed(k, ""))
+                                } else {
+                                    parts.push("({buf_type(kind)} *)b{k}")
+                                    lent.push(Changed(k, code))
+                                }
+                                held.push(k)
+                                continue
+                            }
                             if text.starts_with(t, "struct ") {
                                 line(mut out, "        kv e{k} = {v};")
                                 parts.push("KX{rest(t, 7)}_get(e{k})")
@@ -2045,6 +2087,18 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if ext.ret == "ptr?" { r = "kptr_v_opt({call})" }
                         if text.starts_with(ext.ret, "struct ") { r = "KX{rest(ext.ret, 7)}_box({call})" }
                         line(mut out, "        kv r = {r};")
+                        for b in lent {
+                            if b.index != "" {
+                                for w in writeback {
+                                    if w.arg == b.arg {
+                                        let back = cx.take(w.place, "kbuf_back(b{b.arg}, klen(e{b.arg}), {b.index})")?
+                                        line(mut out, "        {back}")
+                                        break
+                                    }
+                                }
+                            }
+                            line(mut out, "        free(b{b.arg});")
+                        }
                         for k in held { line(mut out, "        krelease(e{k});") }
                         // What C left in a struct goes back to where it came from.
                         for ch in changed {

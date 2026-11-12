@@ -421,6 +421,20 @@ fn c_name(args: [parser.Expr]) -> str? {
     }
 }
 
+// Whether a type is an array of numbers of up to 64 bits.
+fn is_numbers(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Slice(item) => {
+            match item {
+                types.Ty.Float(_) => true
+                types.Ty.Int(k) => !text.ends_with(k, "128")
+                _ => false
+            }
+        }
+        _ => false
+    }
+}
+
 fn c_plain(t: types.Ty) -> bool {
     match t {
         types.Ty.Float(_) => true
@@ -1185,7 +1199,7 @@ impl Checker {
     }
 
     fn foreign(mut self, module: int, alias: str, header: str, decls: [parser.Decl]) {
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr` and structs marked `@c`"
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers"
         self.module = module
         for d in decls {
             let at = Span(d.line, d.col)
@@ -1208,7 +1222,8 @@ impl Checker {
                             _ => false
                         }
                         // A struct of C goes by value, or as its address when it is `mut`.
-                        let record = self.is_cstruct(ty)
+                        // So does an array of numbers: C is given where they are.
+                        let record = self.is_cstruct(ty) || is_numbers(ty)
                         var fits = by_value && (c_plain(ty) || is_text(ty) || is_address(ty))
                         if record { fits = by_value || changed }
                         if !fits { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }

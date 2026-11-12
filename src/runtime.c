@@ -2100,6 +2100,75 @@ static kv kchan_close(kv chan) {
     return KUNIT;
 }
 
+/* ---- arrays lent to C ----
+ *
+ * A C function is given an array of numbers as the address of a copy of
+ * them, laid out as C has them; what it leaves there is read back into a
+ * new array when it may change them. */
+enum { KB_I8, KB_I16, KB_I32, KB_I64, KB_ISIZE, KB_U8, KB_U16, KB_U32, KB_U64, KB_USIZE, KB_F32, KB_F64 };
+
+static size_t kbuf_size(int kind) {
+    switch (kind) {
+    case KB_I8: case KB_U8: return 1;
+    case KB_I16: case KB_U16: return 2;
+    case KB_I32: case KB_U32: case KB_F32: return 4;
+    case KB_ISIZE: return sizeof(ptrdiff_t);
+    case KB_USIZE: return sizeof(size_t);
+    default: return 8;
+    }
+}
+
+static void *kbuf_make(kv a, int kind) {
+    int64_t n = klen(a);
+    size_t size = kbuf_size(kind);
+    char *buf = (char *)malloc((size_t)n * size + 8);
+    if (!buf) kpanic("out of memory");
+    for (int64_t i = 0; i < n; i++) {
+        kv v = kelem(a.u.o, i);
+        char *at = buf + (size_t)i * size;
+        switch (kind) {
+        case KB_F64: { double x = v.u.f; memcpy(at, &x, sizeof x); break; }
+        case KB_F32: { float x = v.u.g; memcpy(at, &x, sizeof x); break; }
+        case KB_I8: case KB_U8: { uint8_t x = (uint8_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        case KB_I16: case KB_U16: { uint16_t x = (uint16_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        case KB_I32: case KB_U32: { uint32_t x = (uint32_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        case KB_ISIZE: { ptrdiff_t x = (ptrdiff_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        case KB_USIZE: { size_t x = (size_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        default: { uint64_t x = (uint64_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        }
+    }
+    return buf;
+}
+
+/* The `n` numbers at `buf` as an array. */
+static kv kbuf_back(const void *buf, int64_t n, int kind) {
+    size_t size = kbuf_size(kind);
+    kv *items = (kv *)malloc((size_t)n * sizeof(kv) + 1);
+    if (!items) kpanic("out of memory");
+    for (int64_t i = 0; i < n; i++) {
+        const char *at = (const char *)buf + (size_t)i * size;
+        kv v = kmk(T_INT);
+        switch (kind) {
+        case KB_F64: { double x; memcpy(&x, at, sizeof x); v = kmk(T_F64); v.u.f = x; break; }
+        case KB_F32: { float x; memcpy(&x, at, sizeof x); v = kmk(T_F32); v.u.g = x; break; }
+        case KB_I8: { int8_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_U8: { uint8_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_I16: { int16_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_U16: { uint16_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_I32: { int32_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_U32: { uint32_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_I64: { int64_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_ISIZE: { ptrdiff_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
+        case KB_USIZE: { size_t x; memcpy(&x, at, sizeof x); v.u.i = (i128)x; break; }
+        default: { uint64_t x; memcpy(&x, at, sizeof x); v.u.i = (i128)x; break; }
+        }
+        items[i] = v;
+    }
+    kv r = kagg(T_ARRAY, 0, 0, n, items);
+    free(items);
+    return r;
+}
+
 /* Calls a function value. Takes ownership of `f`; the callee leaves the
  * final values of its parameters in `args`. */
 static kv kcall(kv f, kv *args) {
