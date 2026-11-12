@@ -207,6 +207,9 @@ pub struct Program {
     externs: [Extern]
     // The structs that are a type of a C header.
     cstructs: [CShape]
+    // For each enum: how it is kept as a struct of C (see `sum_kinds`),
+    // or nothing when it is not.
+    sums: [[int]]
     errors: [lexer.Error]
 }
 
@@ -281,8 +284,40 @@ fn plain_field(t: types.Ty) -> bool {
     }
 }
 
-fn scalar_of(structs: [check.StructInfo], t: types.Ty) -> Scalar? {
+// How an enum is kept as a struct of C, when it can be: 6 for which
+// variant it is, and then the kind of the field at each position. It can
+// when all its fields are plain and every variant has the same kind of
+// field at the same position (so that a field is read without knowing
+// the variant), and some variant has a field. Its number as a struct of
+// C comes after the ones of the structs.
+fn sum_kinds(enums: [check.EnumInfo], e: int) -> [int] {
+    if e < 0 || e >= (enums.len as int) { return [] }
+    let en = enums[e]
+    if en.generic || en.tparams.len > 0 { return [] }
+    var kinds = [6]
+    for v in en.variants {
+        for k in 0..(v.fields.len as int) {
+            let t = v.fields[k].ty
+            if !plain_field(t) { return [] }
+            let kind = field_kind(t)
+            if k + 1 < (kinds.len as int) {
+                if kinds[k + 1] != kind { return [] }
+            } else {
+                kinds.push(kind)
+            }
+        }
+    }
+    if kinds.len > 1 && kinds.len <= 7 { return kinds }
+    []
+}
+
+fn scalar_of(c: check.Checker, t: types.Ty) -> Scalar? {
+    let structs = c.structs
     match t {
+        types.Ty.Enum(e, args) => {
+            if args.len == 0 && sum_kinds(c.enums, e).len > 0 { return Some(Scalar.Rec(c.structs.len as int + c.traits.len as int + e)) }
+            None
+        }
         types.Ty.Int(k) => Some(Scalar.Int(k))
         types.Ty.Bool => Some(Scalar.Bool)
         types.Ty.Float(k) => {
@@ -781,7 +816,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
     }
     // The receiver of a method is kept like any parameter of its type.
     for r in receivers {
-        if fns[r.job].scalars.len > 0 { fns[r.job].scalars[0] = scalar_of(c.structs, r.ty) }
+        if fns[r.job].scalars.len > 0 { fns[r.job].scalars[0] = scalar_of(c, r.ty) }
     }
     for f in lw.extra { fns.push(f) }
     var structs: [StructShape] = []
@@ -902,6 +937,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
         }
         externs.push(Extern(x.name, x.header, params, c_type(x.sig.ret)))
     }
+    var sums: [[int]] = []
+    for e in 0..(c.enums.len as int) { sums.push(sum_kinds(c.enums, e)) }
     // By the number of the struct.
     var cstructs: [CShape] = []
     for i in 0..(c.structs.len as int) {
@@ -913,7 +950,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
             }
         }
     }
-    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, cstructs, sorted_errors(lw.errors))
+    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, cstructs, sums, sorted_errors(lw.errors))
 }
 
 fn c_type(t: types.Ty) -> str {
@@ -1142,11 +1179,22 @@ impl Lower {
     fn typed(mut self, e: parser.Expr, value: Operand) -> Operand {
         match value {
             Operand.At(p) => {
-                if let Some(s) = scalar_of(self.c.structs, self.ty(e)) { self.hints.push(Hint(p.local, s)) }
+                if let Some(s) = scalar_of(self.c, self.ty(e)) { self.hints.push(Hint(p.local, s)) }
             }
             _ => {}
         }
         value
+    }
+
+    // Says that a temporary holds a value kept as a struct of C, when its
+    // type is one of those: a value that goes through it is not made
+    // into a block and back.
+    fn kept(mut self, l: int, ty: types.Ty) {
+        match scalar_of(self.c, ty) {
+            Some(Scalar.Rec(i)) => self.hints.push(Hint(l, Scalar.Rec(i)))
+            Some(Scalar.Opt(k)) => self.hints.push(Hint(l, Scalar.Opt(k)))
+            _ => {}
+        }
     }
 
     fn ty(self, e: parser.Expr) -> types.Ty {
@@ -1225,7 +1273,7 @@ impl Lower {
     fn read_as(mut self, place: Place, ty: types.Ty) -> Operand {
         let t = self.temp()
         self.emit(at_local(t), Rvalue.Use(Operand.At(place)))
-        if let Some(s) = scalar_of(self.c.structs, ty) { self.hints.push(Hint(t, s)) }
+        if let Some(s) = scalar_of(self.c, ty) { self.hints.push(Hint(t, s)) }
         local_op(t)
     }
 
@@ -1527,7 +1575,7 @@ impl Lower {
         for p in sig.params {
             let l = self.temp()
             self.declare(p.name, l)
-            scalars.push(scalar_of(self.c.structs, p.ty))
+            scalars.push(scalar_of(self.c, p.ty))
         }
         let params = self.locals
         self.ret = sig.ret
@@ -1568,7 +1616,7 @@ impl Lower {
         var func = self.finish(name, params)
         func.scalars = scalars
         func.ret = None
-        if !path { func.ret = scalar_of(self.c.structs, sig.ret) }
+        if !path { func.ret = scalar_of(self.c, sig.ret) }
         func.body = body_start
         func
     }
@@ -1680,10 +1728,10 @@ impl Lower {
                 }
                 // A part of a value: the result is worked out as a number
                 // of the machine and then stored.
-                if place.proj.len > 0 && is_scalar(scalar_of(self.c.structs, tt)) && same_scalar(scalar_of(self.c.structs, tt), scalar_of(self.c.structs, j)) {
+                if place.proj.len > 0 && is_scalar(scalar_of(self.c, tt)) && same_scalar(scalar_of(self.c, tt), scalar_of(self.c, j)) {
                     let t = self.temp()
                     self.emit(at_local(t), Rvalue.Binary(bin, num_of(j), cur, v))
-                    if let Some(sc) = scalar_of(self.c.structs, tt) { self.hints.push(Hint(t, sc)) }
+                    if let Some(sc) = scalar_of(self.c, tt) { self.hints.push(Hint(t, sc)) }
                     self.emit(place, Rvalue.Use(local_op(t)))
                     return
                 }
@@ -1953,7 +2001,7 @@ impl Lower {
                     }
                 }
                 if l < 0 { l = self.temp() }
-                if let Some(s) = scalar_of(self.c.structs, ty) { self.hints.push(Hint(l, s)) }
+                if let Some(s) = scalar_of(self.c, ty) { self.hints.push(Hint(l, s)) }
                 self.set(l, here)
                 self.declare(name, l)
             }
@@ -2316,6 +2364,7 @@ impl Lower {
                 let else_bb = self.new_block()
                 let end = self.new_block()
                 let res = self.temp()
+                self.kept(res, j)
                 self.scopes.push(Scope([], [], -1))
                 self.cond(cond, else_bb)
                 let tv = self.block(then)
@@ -2348,7 +2397,9 @@ impl Lower {
                 let j = self.ty(e)
                 let v = self.expr(scrutinee)
                 let place = self.stash(v)
+                if place.proj.len == 0 { self.kept(place.local, st) }
                 let res = self.temp()
+                self.kept(res, j)
                 let end = self.new_block()
                 for arm in arms {
                     let next = self.new_block()
@@ -3013,7 +3064,8 @@ impl Lower {
             }
             Some(check.Res.Variant(en, v)) => {
                 let ops = self.arg_ops(args)
-                self.tmp(Rvalue.Enum(en, v, ops))
+                let made = self.tmp(Rvalue.Enum(en, v, ops))
+                self.typed(e, made)
             }
             Some(check.Res.Fn(i)) => {
                 let f = find_id(self.fn_ids, i)
@@ -3610,5 +3662,11 @@ pub fn dump(p: Program) -> [str] {
     out.push("dyn_from {p.dyn_from}")
     for x in p.externs { out.push("extern {x.name} {x.header} ({text.join(x.params, ", ")}) -> {x.ret}") }
     for cs in p.cstructs { out.push("cstruct {cs.index} {cs.name} ({text.join(cs.kinds, ", ")})") }
+    for e in 0..(p.sums.len as int) {
+        if p.sums[e].len == 0 { continue }
+        var kinds: [str] = []
+        for k in p.sums[e] { kinds.push("{k}") }
+        out.push("sum {e} ({text.join(kinds, ", ")})")
+    }
     out
 }

@@ -366,6 +366,34 @@ pub fn tuple_kinds(i: usize) -> Vec<u8> {
     kinds
 }
 
+/// How an enum is kept as a struct of C, when it can be: 6 for which
+/// variant it is, and then the kind of the field at each position. It can
+/// when all its fields are plain and every variant has the same kind of
+/// field at the same position (so that a field is read without knowing
+/// the variant), and some variant has a field. Its number as a struct of
+/// C comes after the ones of the structs.
+fn sum_kinds(info: &Info, e: usize) -> Option<Vec<u8>> {
+    let en = info.enums.get(e)?;
+    if en.generic || !en.tparams.is_empty() {
+        return None;
+    }
+    let mut kinds: Vec<u8> = vec![6];
+    for v in &en.variants {
+        for (k, (_, t)) in v.fields.iter().enumerate() {
+            if !plain_field(t) {
+                return None;
+            }
+            let kind = field_kind(t) as u8;
+            match kinds.get(k + 1) {
+                Some(have) if *have != kind => return None,
+                Some(_) => {}
+                None => kinds.push(kind),
+            }
+        }
+    }
+    (kinds.len() > 1 && kinds.len() <= 7).then_some(kinds)
+}
+
 fn field_kind(t: &Ty) -> usize {
     match t {
         Ty::Bool => 1,
@@ -395,6 +423,7 @@ fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
             let code = ts.iter().rev().fold(0, |code, t| code * 6 + field_kind(t));
             Some(Scalar::Rec(TUPLE_BASE + code))
         }
+        Ty::Enum(e, args) if args.is_empty() && sum_kinds(info, *e).is_some() => Some(Scalar::Rec(info.structs.len() + info.traits.len() + e)),
         Ty::Struct(i, args) if args.is_empty() => {
             let s = &info.structs[*i];
             let plain = !s.fields.is_empty() && s.tparams.is_empty() && !s.generic && s.fields.iter().all(|f| plain_field(&f.ty));
@@ -430,6 +459,9 @@ pub struct Program {
     /// The structs that are a type of a C header: the struct, the name of
     /// that type, and the type of each field as C takes it.
     pub cstructs: Vec<(usize, String, Vec<&'static str>)>,
+    /// For each enum: how it is kept as a struct of C (see `sum_kinds`),
+    /// or nothing when it is not.
+    pub sums: Vec<Vec<u8>>,
 }
 
 /// Whether a value of type `t` holds, without an array in between, a value
@@ -645,6 +677,10 @@ pub fn dump(p: &Program) -> String {
     }
     for (i, name, kinds) in &p.cstructs {
         let _ = writeln!(out, "cstruct {i} {name} ({})", kinds.join(", "));
+    }
+    for (e, kinds) in p.sums.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
+        let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
+        let _ = writeln!(out, "sum {e} ({})", kinds.join(", "));
     }
     out
 }
@@ -1019,7 +1055,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         })
         .collect();
     let values = vec![None; lw.const_ids.len()];
-    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs })
+    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs, sums: (0..info.enums.len()).map(|e| sum_kinds(info, e).unwrap_or_default()).collect() })
 }
 
 impl<'a> Lower<'a> {
@@ -1105,6 +1141,15 @@ impl<'a> Lower<'a> {
             self.hints.push((p.local, s));
         }
         value
+    }
+
+    /// Says that a temporary holds a value kept as a struct of C, when its
+    /// type is one of those: a value that goes through it is not made
+    /// into a block and back.
+    fn kept(&mut self, l: Local, ty: &Ty) {
+        if let Some(s @ (Scalar::Rec(_) | Scalar::Opt(_))) = scalar_of(self.info, ty) {
+            self.hints.push((l, s));
+        }
     }
 
     fn ty(&self, e: &Expr) -> Ty {
@@ -2036,6 +2081,7 @@ impl<'a> Lower<'a> {
                 let j = self.ty(e);
                 let (else_bb, end) = (self.new_block(), self.new_block());
                 let res = self.temp();
+                self.kept(res, &j);
                 self.scopes.push(Scope::default());
                 self.cond(cond, else_bb);
                 let tv = self.block(then);
@@ -2064,7 +2110,11 @@ impl<'a> Lower<'a> {
                 let (st, j) = (self.ty(scrutinee), self.ty(e));
                 let v = self.expr(scrutinee);
                 let place = self.stash(v);
+                if place.proj.is_empty() {
+                    self.kept(place.local, &st);
+                }
                 let res = self.temp();
+                self.kept(res, &j);
                 let end = self.new_block();
                 for arm in arms {
                     let next = self.new_block();
@@ -2492,7 +2542,8 @@ impl<'a> Lower<'a> {
             }
             Some(Res::Variant(en, v)) => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();
-                self.tmp(Rvalue::Enum(*en, *v, ops))
+                let made = self.tmp(Rvalue::Enum(*en, *v, ops));
+                self.typed(e, made)
             }
             Some(Res::Fn(i)) => match self.fn_ids.get(i).copied() {
                 Some(f) => self.invoke(Callee::Fn(pick(self, f)), None, &info.fns[*i].sig, self.fn_decls.get(&f).copied(), 0, args, span),

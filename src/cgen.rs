@@ -339,7 +339,11 @@ fn opt_of(r: Rep) -> Option<u8> {
 /// struct, or what an optional holds.
 fn part(reps: &[Rep], recs: &[Vec<u8>], p: &Place) -> Option<Rep> {
     match (reps[p.local], p.proj.as_slice()) {
-        (Rep::Rec(i), [Proj::Field(k)]) => Some(field_rep(kinds_of(recs, i)[*k])),
+        (Rep::Rec(i), [Proj::Field(k)]) => {
+            let kinds = kinds_of(recs, i);
+            // The fields of an enum come after which variant it is.
+            Some(field_rep(kinds[*k + (kinds[0] == 6) as usize]))
+        }
         (Rep::Opt(k), [Proj::Field(0)]) => Some(opt_inner(k)),
         _ => None,
     }
@@ -771,6 +775,7 @@ impl Cx<'_> {
     fn name(&self, p: &Place) -> String {
         match (self.reps[p.local], p.proj.as_slice()) {
             (Rep::Opt(_), [Proj::Field(_)]) => format!("s{}.v", p.local),
+            (Rep::Rec(i), [Proj::Field(k)]) if kinds_of(self.recs, i)[0] == 6 => format!("s{}.f{}", p.local, k + 1),
             (_, [Proj::Field(k)]) => format!("s{}.f{k}", p.local),
             _ => format!("s{}", p.local),
         }
@@ -1021,6 +1026,10 @@ impl Cx<'_> {
             Rvalue::Is(Operand::Place(p), tag) if matches!(self.rep(p), Rep::Opt(_)) => {
                 format!("({}s{}.has)", if *tag == 1 { "" } else { "!" }, p.local)
             }
+            // Which variant an enum kept as a struct of C is.
+            Rvalue::Is(Operand::Place(p), tag) if p.proj.is_empty() && matches!(self.rep(p), Rep::Rec(_)) => {
+                format!("(s{}.f0 == {tag})", p.local)
+            }
             // A character against one that is written out: the common
             // case of reading text, done without the general comparison.
             Rvalue::Binary(op, _, Operand::Place(p), Operand::Const(Value::Char(c)))
@@ -1119,6 +1128,17 @@ impl Cx<'_> {
                             parts.push(self.machine(field_rep(*kind), op)?);
                         }
                         Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                    }
+                    Rvalue::Enum(_, v, ops) if kinds_of(self.recs, i)[0] == 6 => {
+                        let kinds = kinds_of(self.recs, i);
+                        let mut parts = vec![v.to_string()];
+                        for (op, kind) in ops.iter().zip(&kinds[1..]) {
+                            parts.push(self.machine(field_rep(*kind), op)?);
+                        }
+                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                    }
+                    Rvalue::Use(Operand::Const(Value::Enum(_, v, items))) if items.is_empty() && kinds_of(self.recs, i)[0] == 6 => {
+                        Ok(format!("s{l} = (struct KS{i}){{{v}}};"))
                     }
                     Rvalue::Tuple(ops) if i >= TUPLE_BASE && ops.len() == tuple_kinds(i).len() => {
                         let mut parts = Vec::new();
@@ -1628,6 +1648,38 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
         writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
     }
+    // The enums kept as structs of C: which variant, and a field for
+    // each position. How many fields a variant has says how many are read
+    // from a tagged value and put in one.
+    let recs_all: Vec<Vec<u8>> = p.records.iter().chain(&p.sums).cloned().collect();
+    for (e, kinds) in p.sums.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
+        let i = p.records.len() + e;
+        let fields: Vec<String> = kinds.iter().enumerate().map(|(f, k)| format!("{} f{f};", rep_type(field_rep(*k)))).collect();
+        writeln!(out, "struct KS{i} {{ {} }};", fields.join(" ")).unwrap();
+        writeln!(out, "static struct KS{i} KS{i}_get(kv v) {{").unwrap();
+        writeln!(out, "    struct KS{i} r = {{0}};").unwrap();
+        writeln!(out, "    int64_t n = v.u.o ? v.u.o->len : 0;").unwrap();
+        writeln!(out, "    const kv *it = n ? ITEMS(v.u.o) : 0;").unwrap();
+        writeln!(out, "    r.f0 = v.b;").unwrap();
+        for (f, k) in kinds.iter().enumerate().skip(1) {
+            let read = match k {
+                1 => format!("it[{}].u.t", f - 1),
+                3 => format!("it[{}].u.f", f - 1),
+                5 => format!("(uint64_t)it[{}].u.i", f - 1),
+                _ => format!("(int64_t)it[{}].u.i", f - 1),
+            };
+            writeln!(out, "    if (n > {}) r.f{f} = {read};", f - 1).unwrap();
+        }
+        writeln!(out, "    return r;").unwrap();
+        writeln!(out, "}}").unwrap();
+        writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
+        let counts: Vec<String> = p.enums[e].1.iter().map(|(_, fields)| fields.len().to_string()).collect();
+        let made: Vec<String> = kinds.iter().enumerate().skip(1).map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
+        writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{").unwrap();
+        writeln!(out, "    static const int8_t count[] = {{{}}};", counts.join(", ")).unwrap();
+        writeln!(out, "    return kagg(T_ENUM, {e}, (uint32_t)s.f0, count[s.f0], (kv[]){{{}}});", made.join(", ")).unwrap();
+        writeln!(out, "}}").unwrap();
+    }
     // The functions C is given to call: each as a function of C that
     // makes tagged values of what it gets and calls the one of the program.
     let mut callbacks: Vec<(usize, &str)> = Vec::new();
@@ -1717,14 +1769,14 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "}}").unwrap();
         writeln!(out, "static kv KX{i}_box(KX{i}_t c) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
     }
-    let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns, &p.records)).collect();
+    let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns, &recs_all)).collect();
     for (i, sig) in direct.iter().enumerate() {
         if let Some((params, ret)) = sig {
             writeln!(out, "{};", direct_head(i, params, *ret)).unwrap();
         }
     }
     for (i, f) in p.fns.iter().enumerate() {
-        function(&mut out, i, f, &p.fns, &p.externs, &direct, &p.records).map_err(|e| format!("{}: {e}", f.name))?;
+        function(&mut out, i, f, &p.fns, &p.externs, &direct, &recs_all).map_err(|e| format!("{}: {e}", f.name))?;
     }
     writeln!(out, "int main(int argc, char **argv) {{").unwrap();
     writeln!(out, "    char base;").unwrap();

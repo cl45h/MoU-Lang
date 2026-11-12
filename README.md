@@ -40,7 +40,7 @@ fn main() ! io.Error {
 
 El núcleo del lenguaje está completo y el compilador se compila a sí mismo. Lo que sigue está diseñado en [DESIGN.md](DESIGN.md) pero no hecho; cada punto es un trabajo grande por sí solo:
 
-- Rendimiento parejo con C: hoy iguala en bucles, cálculo numérico y structs de campos simples (números y `bool`) y opcionales de números, que ya van sin bloque de memoria. Sigue siendo varias veces más lento con enums, strings y structs que guardan otros valores, porque esos todavía van en bloques de memoria con etiqueta.
+- Rendimiento parejo con C: hoy iguala en bucles, cálculo numérico, y structs, tuplas, opcionales y enums de números y `bool`, que ya van sin bloque de memoria. Sigue siendo varias veces más lento con strings y con structs y enums que guardan otros valores, porque esos todavía van en bloques de memoria con etiqueta.
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida sin bloquear (tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.

@@ -503,7 +503,12 @@ fn part(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep {
     match p.proj[0] {
         mir.Proj.Field(k) => {
             let i = rec_of(reps[p.local])
-            if i >= 0 { return field_rep(kinds_of(recs, i)[k]) }
+            if i >= 0 {
+                let kinds = kinds_of(recs, i)
+                // The fields of an enum come after which variant it is.
+                if kinds[0] == 6 { return field_rep(kinds[k + 1]) }
+                return field_rep(kinds[k])
+            }
             opt_inner(opt_kind(reps[p.local]))
         }
         _ => Rep.Boxed
@@ -1205,6 +1210,10 @@ impl Cx {
             match p.proj[0] {
                 mir.Proj.Field(k) => {
                     if opt_kind(self.reps[p.local]) > 0 { return "s{p.local}.v" }
+                    let i = rec_of(self.reps[p.local])
+                    if i >= 0 {
+                        if kinds_of(self.recs, i)[0] == 6 { return "s{p.local}.f{k + 1}" }
+                    }
                     return "s{p.local}.f{k}"
                 }
                 _ => {}
@@ -1694,6 +1703,8 @@ impl Cx {
                             if tag == 1 { return "(s{p.local}.has)" }
                             return "(!s{p.local}.has)"
                         }
+                        // Which variant an enum kept as a struct of C is.
+                        if p.proj.len == 0 && rec_of(self.rep(p)) >= 0 { return "(s{p.local}.f0 == {tag})" }
                     }
                     _ => {}
                 }
@@ -1810,7 +1821,25 @@ impl Cx {
                             mir.Operand.At(q) => {
                                 if rec_of(self.rep(q)) == i { return "s{l} = s{q.local};" }
                             }
-                            _ => {}
+                            mir.Operand.Const(c) => {
+                                match c {
+                                    mir.Value.Enum(_, v) => {
+                                        if kinds_of(self.recs, i)[0] == 6 { return "s{l} = (struct KS{i}){{{v}}};" }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    mir.Rvalue.Enum(_, v, ops) => {
+                        let kinds = kinds_of(self.recs, i)
+                        if kinds[0] == 6 {
+                            var parts = ["{v}"]
+                            for k in 0..(ops.len as int) {
+                                if k + 1 >= (kinds.len as int) { break }
+                                parts.push(self.machine(field_rep(kinds[k + 1]), ops[k])?)
+                            }
+                            return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
                         }
                     }
                     mir.Rvalue.Tuple(ops) => {
@@ -2601,16 +2630,54 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
         line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
     }
+    // The enums kept as structs of C: which variant, and a field for
+    // each position. How many fields a variant has says how many are read
+    // from a tagged value and put in one.
+    var recs_all: [[int]] = []
+    for r in p.records { recs_all.push(r) }
+    for r in p.sums { recs_all.push(r) }
+    for e in 0..(p.sums.len as int) {
+        let kinds = p.sums[e]
+        if kinds.len == 0 { continue }
+        let i = p.records.len as int + e
+        var fields: [str] = []
+        for f in 0..(kinds.len as int) { fields.push("{rep_type(field_rep(kinds[f]))} f{f};") }
+        line(mut out, "struct KS{i} {{ {text.join(fields, " ")} }};")
+        line(mut out, "static struct KS{i} KS{i}_get(kv v) {{")
+        line(mut out, "    struct KS{i} r = {{0}};")
+        line(mut out, "    int64_t n = v.u.o ? v.u.o->len : 0;")
+        line(mut out, "    const kv *it = n ? ITEMS(v.u.o) : 0;")
+        line(mut out, "    r.f0 = v.b;")
+        var made: [str] = []
+        for f in 1..(kinds.len as int) {
+            let k = kinds[f]
+            var read = "(int64_t)it[{f - 1}].u.i"
+            if k == 1 { read = "it[{f - 1}].u.t" }
+            if k == 3 { read = "it[{f - 1}].u.f" }
+            if k == 5 { read = "(uint64_t)it[{f - 1}].u.i" }
+            line(mut out, "    if (n > {f - 1}) r.f{f} = {read};")
+            made.push(tagged(field_rep(k), "s.f{f}"))
+        }
+        line(mut out, "    return r;")
+        line(mut out, "}}")
+        line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
+        var counts: [str] = []
+        for v in p.enums[e].variants { counts.push("{v.fields.len}") }
+        line(mut out, "static kv KS{i}_box(struct KS{i} s) {{")
+        line(mut out, "    static const int8_t count[] = {{{text.join(counts, ", ")}}};")
+        line(mut out, "    return kagg(T_ENUM, {e}, (uint32_t)s.f0, count[s.f0], (kv[]){{{text.join(made, ", ")}}});")
+        line(mut out, "}}")
+    }
     c_callbacks(mut out, p)
     c_structs(mut out, p)
     var direct: [Direct?] = []
-    for f in p.fns { direct.push(direct_sig(f, p.fns, p.records)) }
+    for f in p.fns { direct.push(direct_sig(f, p.fns, recs_all)) }
     for i in 0..(direct.len as int) {
         if let Some(d) = direct[i] { line(mut out, "{direct_head(i, d.params, d.ret)};") }
     }
     for i in 0..(p.fns.len as int) {
         let f = p.fns[i]
-        let _ = function(mut out, i, f, p.fns, p.externs, direct, p.records) catch e { return Fail("{f.name}: {e.msg}") }
+        let _ = function(mut out, i, f, p.fns, p.externs, direct, recs_all) catch e { return Fail("{f.name}: {e.msg}") }
     }
     line(mut out, "int main(int argc, char **argv) {{")
     line(mut out, "    char base;")
