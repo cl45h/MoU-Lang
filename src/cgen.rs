@@ -340,6 +340,7 @@ fn field_rep(kind: u8) -> Rep {
     match kind {
         1 => Rep::Bool,
         3 => Rep::F64,
+        5 => Rep::Int("u64"),
         _ => Rep::Int("i64"),
     }
 }
@@ -1511,6 +1512,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
             .map(|(f, k)| match k {
                 1 => format!("it[{f}].u.t"),
                 3 => format!("it[{f}].u.f"),
+                5 => format!("(uint64_t)it[{f}].u.i"),
                 _ => format!("(int64_t)it[{f}].u.i"),
             })
             .collect();

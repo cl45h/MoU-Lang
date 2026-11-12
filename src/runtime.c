@@ -357,6 +357,10 @@ static int kpack_of(kv v) {
     }
 }
 
+/* How a field is kept, besides the packings of single values: an integer
+   without sign of 64 bits, whose slot holds its bits. */
+enum { KF_U64 = 5 };
+
 /* Field `f` of item `i` of an array of structs kept in line. */
 static inline kv krec_field(const kobj *o, int64_t i, int64_t f) {
     int s = (int)(o->pack - P_REC);
@@ -366,6 +370,7 @@ static inline kv krec_field(const kobj *o, int64_t i, int64_t f) {
     case P_BOOL: v = kmk(T_BOOL); v.u.t = *slot != 0; return v;
     case P_F64: v = kmk(T_F64); memcpy(&v.u.f, slot, 8); return v;
     case P_CHAR: v = kmk(T_CHAR); v.u.c = (uint32_t)*slot; return v;
+    case KF_U64: v = kmk(T_INT); v.u.i = (i128)(uint64_t)*slot; return v;
     default: v = kmk(T_INT); v.u.i = *slot; return v;
     }
 }
@@ -844,7 +849,8 @@ static inline i128 kitem_field_int(kv *v, i128 i, int64_t f) {
     int64_t k = kat(v, i);
     const kobj *o = v->u.o;
     if (KRARE(o->pack < P_REC)) return kitem_field_slow(v, k, f, false)->u.i;
-    return ((const int64_t *)(o + 1))[k * KREC_N[o->pack - P_REC] + f];
+    int64_t bits = ((const int64_t *)(o + 1))[k * KREC_N[o->pack - P_REC] + f];
+    return KREC_K[o->pack - P_REC][f] == KF_U64 ? (i128)(uint64_t)bits : (i128)bits;
 }
 
 static inline bool kitem_field_bool(kv *v, i128 i, int64_t f) {

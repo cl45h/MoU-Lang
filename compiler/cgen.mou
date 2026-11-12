@@ -214,6 +214,7 @@ enum Rep {
 fn field_rep(kind: int) -> Rep {
     if kind == 1 { return Rep.Bool }
     if kind == 3 { return Rep.F64 }
+    if kind == 5 { return Rep.Int("u64") }
     Rep.Int("i64")
 }
 
@@ -2245,7 +2246,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
             if k == 1 {
                 read.push("it[{f}].u.t")
             } else {
-                if k == 3 { read.push("it[{f}].u.f") } else { read.push("(int64_t)it[{f}].u.i") }
+                if k == 3 { read.push("it[{f}].u.f") } else { if k == 5 { read.push("(uint64_t)it[{f}].u.i") } else { read.push("(int64_t)it[{f}].u.i") } }
             }
             made.push(tagged(field_rep(k), "s.f{f}"))
         }

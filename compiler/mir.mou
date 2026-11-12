@@ -239,7 +239,7 @@ fn is_bin_op(op: str) -> bool {
 fn plain_field(t: types.Ty) -> bool {
     match t {
         types.Ty.Bool => true
-        types.Ty.Int(k) => k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "u8" || k == "u16" || k == "u32"
+        types.Ty.Int(k) => k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" || k == "u64" || k == "usize"
         types.Ty.Float(k) => k == "f64"
         _ => false
     }
@@ -751,7 +751,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                     kind = 1
                 }
                 types.Ty.Int(k) => {
-                    if k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "u8" || k == "u16" || k == "u32" { kind = 2 }
+                    if k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" { kind = 2 }
+                    if k == "u64" || k == "usize" { kind = 5 }
                 }
                 types.Ty.Float(k) => {
                     if k == "f64" { kind = 3 }

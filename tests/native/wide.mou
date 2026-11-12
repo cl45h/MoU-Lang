@@ -1,0 +1,24 @@
+import std.io
+
+struct Span { lo: usize, hi: usize, id: u64, off: isize }
+
+fn wider(s: Span, by: usize) -> Span { Span(s.lo, s.hi + by, s.id, s.off - 1) }
+fn size(s: Span) -> usize { s.hi - s.lo }
+fn shift(s: mut Span) { s.off = s.off * 2 }
+
+fn main() ! io.Error {
+    let big: u64 = 18446744073709551615
+    var s = Span(3, 10, big, 0 - 5)
+    s = wider(s, 4)
+    shift(mut s)
+    io.print("{size(s)} {s.id} {s.off} {s.id / 2} {s.id > 9223372036854775807}")?
+    var all: [Span] = []
+    for i in 0..5 { all.push(Span(i as usize, (i * 3) as usize, big - (i as u64), 0 - i as isize)) }
+    all[2].id = all[2].id - 10
+    all[3].off -= 7
+    var sum: u64 = 0
+    for a in all { sum = sum +% a.id }
+    io.print("{all[2].id} {all[4].id} {all[3].off} {sum} {all[1].id > 9223372036854775807} {size(all[4])}")?
+    let t = all[0]
+    io.print("{t.id} {wider(all[1], 1).hi} {t == all[0]}")?
+}

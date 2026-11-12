@@ -351,7 +351,7 @@ pub enum Scalar {
 
 /// Whether a field of that type can be a member of a struct of C.
 fn plain_field(t: &Ty) -> bool {
-    matches!(t, Ty::Bool | Ty::Int("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32") | Ty::Float("f64"))
+    matches!(t, Ty::Bool | Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize") | Ty::Float("f64"))
 }
 
 fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
@@ -910,7 +910,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
                 .iter()
                 .map(|f| match &f.ty {
                     Ty::Bool => Some(1),
-                    Ty::Int("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32") => Some(2),
+                    Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32") => Some(2),
+                    Ty::Int("u64" | "usize") => Some(5),
                     Ty::Float("f64") => Some(3),
                     Ty::Char => Some(4),
                     _ => None,
