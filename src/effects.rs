@@ -24,7 +24,9 @@ pub const ALLOC: u8 = NOALLOC;
 pub const PANIC: u8 = NOPANIC;
 pub const IO: u8 = NOIO;
 /// It runs code the compiler does not check: a function of C.
-pub const UNSAFE: u8 = 16;
+pub const UNSAFE: u8 = NOUNSAFE;
+/// It can wait: for a task, or for input.
+pub const BLOCK: u8 = NOBLOCK;
 
 const MIN: i128 = i128::MIN;
 const MAX: i128 = i128::MAX;
@@ -864,7 +866,7 @@ impl Walk<'_> {
                     }
                     Callee::Indirect(op) => {
                         reads(&st, op, &mut notes);
-                        notes.push((ALLOC | PANIC | IO, "a function value or a method of a `dyn` value is called here, and what it does is not known".into()));
+                        notes.push((ALLOC | PANIC | IO | UNSAFE | BLOCK, "a function value or a method of a `dyn` value is called here, and what it does is not known".into()));
                     }
                     Callee::Extern(x) => {
                         let name = &self.p.externs[*x].name;
@@ -896,8 +898,14 @@ impl Walk<'_> {
                                         found.calls.push((block.span, f));
                                     }
                                 }
-                                None => notes.push((ALLOC | PANIC | IO, "a task is started here, and what it does is not known".into())),
+                                None => notes.push((ALLOC | PANIC | IO | UNSAFE | BLOCK, "a task is started here, and what it does is not known".into())),
                             }
+                        }
+                        match *name {
+                            "task.wait" => notes.push((BLOCK, "`wait` waits for a task".into())),
+                            "task.close" => notes.push((BLOCK, "a `scope` waits for its tasks where it ends".into())),
+                            "io.read_line" => notes.push((BLOCK, "`io.read_line` waits for input".into())),
+                            _ => {}
                         }
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
@@ -1134,7 +1142,7 @@ fn shown(name: &str) -> &str {
 }
 
 pub fn names(effects: u8) -> String {
-    let all = [(ALLOC, "alloc"), (PANIC, "panic"), (IO, "io"), (UNSAFE, "unsafe")];
+    let all = [(ALLOC, "alloc"), (PANIC, "panic"), (IO, "io"), (UNSAFE, "unsafe"), (BLOCK, "block")];
     let on: Vec<&str> = all.iter().filter(|(e, _)| effects & e != 0).map(|(_, n)| *n).collect();
     if on.is_empty() { "none".to_string() } else { on.join(" ") }
 }
@@ -1154,6 +1162,8 @@ pub fn check(p: &Program) -> Vec<Error> {
             (ALLOC, if f.limits & SYSTEM != 0 { "in a `system` module, which has no allocator" } else { "`@noalloc`" }, "allocates"),
             (PANIC, "`@nopanic`", "can panic"),
             (IO, "`@noio`", "does input or output"),
+            (BLOCK, "`@noblock`", "can wait"),
+            (UNSAFE, "`@nounsafe`", "runs code the compiler does not check"),
         ];
         for (effect, rule, does) in rules {
             if f.limits & effect == 0 {

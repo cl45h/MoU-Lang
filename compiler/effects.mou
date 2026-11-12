@@ -27,6 +27,8 @@ pub let PANIC: int = 2
 pub let IO: int = 4
 // It runs code the compiler does not check: a function of C.
 pub let UNSAFE: int = 16
+// It can wait: for a task, or for input.
+pub let BLOCK: int = 32
 
 let WHERE: str = "a `where` condition of"
 
@@ -1260,7 +1262,7 @@ impl Walk {
                     }
                     mir.Callee.Indirect(op) => {
                         reads(st, op, mut notes)
-                        notes.push(Note(ALLOC | PANIC | IO, "a function value or a method of a `dyn` value is called here, and what it does is not known"))
+                        notes.push(Note(ALLOC | PANIC | IO | UNSAFE | BLOCK, "a function value or a method of a `dyn` value is called here, and what it does is not known"))
                     }
                     mir.Callee.Extern(x) => {
                         // What it does is up to who wrote the `unsafe` around it.
@@ -1299,9 +1301,12 @@ impl Walk {
                             if run >= 0 {
                                 if report { found.calls.push(CallSite(here, run)) }
                             } else {
-                                notes.push(Note(ALLOC | PANIC | IO, "a task is started here, and what it does is not known"))
+                                notes.push(Note(ALLOC | PANIC | IO | UNSAFE | BLOCK, "a task is started here, and what it does is not known"))
                             }
                         }
+                        if name == "task.wait" { notes.push(Note(BLOCK, "`wait` waits for a task")) }
+                        if name == "task.close" { notes.push(Note(BLOCK, "a `scope` waits for its tasks where it ends")) }
+                        if name == "io.read_line" { notes.push(Note(BLOCK, "`io.read_line` waits for input")) }
                         if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
                         if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
                             let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }
@@ -1602,6 +1607,7 @@ pub fn names(effects: int) -> str {
     if (effects & PANIC) != 0 { on.push("panic") }
     if (effects & IO) != 0 { on.push("io") }
     if (effects & UNSAFE) != 0 { on.push("unsafe") }
+    if (effects & BLOCK) != 0 { on.push("block") }
     if on.len == 0 { return "none" }
     text.join(on, " ")
 }
@@ -1626,11 +1632,11 @@ pub fn check(p: mir.Program) -> [lexer.Error] {
     for i in 0..(p.fns.len as int) {
         let f = p.fns[i]
         if text.ends_with(f.name, " (place)") { continue }
-        let effects = [ALLOC, PANIC, IO]
+        let effects = [ALLOC, PANIC, IO, BLOCK, UNSAFE]
         let first = if (f.limits & mir.SYSTEM) != 0 { "in a `system` module, which has no allocator" } else { "`@noalloc`" }
-        let rules = [first, "`@nopanic`", "`@noio`"]
-        let does = ["allocates", "can panic", "does input or output"]
-        for r in 0..3 {
+        let rules = [first, "`@nopanic`", "`@noio`", "`@noblock`", "`@nounsafe`"]
+        let does = ["allocates", "can panic", "does input or output", "can wait", "runs code the compiler does not check"]
+        for r in 0..5 {
             let effect = effects[r]
             if (f.limits & effect) == 0 { continue }
             let head = "`{f.name}` is {rules[r]}, but "

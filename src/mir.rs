@@ -329,6 +329,8 @@ pub struct Func {
 pub const NOALLOC: u8 = 1;
 pub const NOPANIC: u8 = 2;
 pub const NOIO: u8 = 4;
+pub const NOUNSAFE: u8 = 16;
+pub const NOBLOCK: u8 = 32;
 /// With `NOALLOC`: it comes from the profile of the module, not from an annotation.
 pub const SYSTEM: u8 = 8;
 
@@ -937,8 +939,10 @@ impl<'a> Lower<'a> {
                 "noalloc" => limits |= NOALLOC,
                 "nopanic" => limits |= NOPANIC,
                 "noio" => limits |= NOIO,
+                "noblock" => limits |= NOBLOCK,
+                "nounsafe" => limits |= NOUNSAFE,
                 other => {
-                    let msg = format!("unknown annotation `@{other}`: a function takes `@noalloc`, `@nopanic` and `@noio`");
+                    let msg = format!("unknown annotation `@{other}`: a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`");
                     self.errors.push(Error { msg, span: d.span });
                 }
             }

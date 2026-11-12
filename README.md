@@ -28,7 +28,7 @@ fn main() ! io.Error {
 
 - Verificador de tipos con genéricos, traits y `dyn`.
 - Ownership sin lifetimes: las referencias no se guardan, así que no hace falta anotarlas.
-- Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
+- Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`, `block`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
 - Constantes y expresiones `comptime` calculadas al compilar.
 - Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
 - Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.

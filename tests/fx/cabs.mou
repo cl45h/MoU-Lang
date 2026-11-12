@@ -1,0 +1,6 @@
+@profile(system)
+import c "stdlib.h" as lib {
+    fn abs(n: i32) -> i32
+}
+
+pub fn magnitude(n: i32) -> i32 { unsafe { lib.abs(n) } }

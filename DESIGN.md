@@ -301,7 +301,7 @@ fuente -> lexer/parser -> AST
 | M2 | Intérprete de MIR: corren programas reales con `mou run` (hecho, en `src/mir.rs` y `src/interp.rs`); `repl` (hecho, en `src/repl.rs`) |
 | M3 | Verificador de ownership y exclusividad (hecho: exclusividad en `src/check.rs`, inicialización y movimientos en `src/own.rs`). `ref` y `ref mut` de retorno (hechos). Pendiente: regiones explícitas y referencias guardadas en structs |
 | M4 | Emisor de C: binarios nativos con `mou build` (hecho, en `src/cgen.rs` y `src/runtime.c`). Los enteros de hasta 64 bits, los booleanos y los `f64` ya son variables de máquina, y los arrays de escalares y de structs de escalares guardan sus datos sin etiqueta. Pendiente: structs sueltos, enums y strings con layout propio, y structs con campos que no son escalares |
-| M5 | Efectos y perfiles (hechos en `src/effects.rs`: `alloc`, `panic` e `io` inferidos, `@noalloc`, `@nopanic`, `@noio`, prueba de rangos, y `system` sin alocador). Pendiente: el contexto (`with alloc = arena`), los efectos `block` y `unsafe`, y el resto de las reglas de los perfiles |
+| M5 | Efectos y perfiles (hechos en `src/effects.rs`: `alloc`, `panic`, `io`, `unsafe` y `block` inferidos, `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`, prueba de rangos, y `system` sin alocador). Pendiente: el contexto (`with alloc = arena`) y el resto de las reglas de los perfiles |
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números, `bool` y strings. Pendiente: leer el header (vía libclang), punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
@@ -409,7 +409,8 @@ Límites conocidos:
 - La prueba no relaciona dos variables entre sí salvo con el largo de un array: no prueba `xs[i]` con `i < n` y `n <= xs.len`, ni un bucle que cuenta hacia atrás, ni índices en arrays anidados (`m[i][j]`), ni búsqueda binaria. En esos casos hay que usar `get` o comparar con el largo.
 - Toda recursión cuenta como `panic`, aunque termine.
 - Quedarse sin memoria aborta el programa y no es el efecto `panic`.
-- Falta el efecto `block` (no hay todavía operaciones que lo tengan), una anotación que prohíba `unsafe`, el contexto (`with alloc = arena`) y las demás reglas de los perfiles: tipos obligatorios en firmas, copias explícitas en `app`, y regiones solo en `system` (`unsafe` solo en `system` ya se verifica).
+- `block` es poder quedarse esperando: `wait` de una tarea, el final de un `scope` y `io.read_line`. `@noblock` lo prohíbe, y `@nounsafe` prohíbe llegar a una función de C. Como una llamada a un valor función no se sabe a qué llama, cuenta también como `block` y `unsafe`.
+- Falta el contexto (`with alloc = arena`) y las demás reglas de los perfiles: tipos obligatorios en firmas, copias explícitas en `app`, y regiones solo en `system` (`unsafe` solo en `system` ya se verifica).
 
 ### Ejecución en compilación: qué hay
 

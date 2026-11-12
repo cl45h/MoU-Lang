@@ -1,0 +1,43 @@
+// `@noblock` rules out waiting, and `@nounsafe` what the compiler does not check.
+import std.io
+import cabs
+
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n -% 1) +% fib(n -% 2) }
+}
+
+@noblock
+fn starts() -> Task[int] {
+    var kept: [Task[int]] = []
+    scope s {
+        kept.push(s.spawn(fib(10)))
+    }
+    kept[0]
+}
+
+@noblock
+fn waits(t: Task[int]) -> int { t.wait() }
+
+@noblock
+fn reads() -> str {
+    let line = io.read_line() catch e { None }
+    match line {
+        Some(l) => l
+        None => ""
+    }
+}
+
+@noblock
+@nounsafe
+fn calls(f: fn(int) -> int) -> int { f(1) }
+
+@noblock
+@nounsafe
+fn pure(n: int) -> int { fib(n) }
+
+@nounsafe
+fn foreign(n: i32) -> i32 { cabs.magnitude(n) }
+
+fn main() ! io.Error {
+    io.print("{waits(starts())} {reads()} {calls(pure)} {foreign(-3)}")?
+}

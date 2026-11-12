@@ -165,6 +165,8 @@ pub struct Func {
 pub let NOALLOC: int = 1
 pub let NOPANIC: int = 2
 pub let NOIO: int = 4
+pub let NOUNSAFE: int = 16
+pub let NOBLOCK: int = 32
 // With `NOALLOC`: it comes from the profile of the module, not from an annotation.
 pub let SYSTEM: int = 8
 
@@ -855,7 +857,15 @@ impl Lower {
                     if a.name == "noio" {
                         limits = limits | NOIO
                     } else {
-                        self.fail(check.Span(d.line, d.col), "unknown annotation `@{a.name}`: a function takes `@noalloc`, `@nopanic` and `@noio`")
+                        if a.name == "noblock" {
+                            limits = limits | NOBLOCK
+                        } else {
+                            if a.name == "nounsafe" {
+                                limits = limits | NOUNSAFE
+                            } else {
+                                self.fail(check.Span(d.line, d.col), "unknown annotation `@{a.name}`: a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`")
+                            }
+                        }
                     }
                 }
             }
