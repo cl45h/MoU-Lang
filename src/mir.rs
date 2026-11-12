@@ -340,13 +340,26 @@ pub enum Scalar {
     Int(&'static str),
     Bool,
     F64,
+    /// A struct whose fields are all booleans, integers of up to 64 bits
+    /// or `f64`: it is kept as a struct of C, by its number.
+    Rec(usize),
 }
 
-fn scalar_of(t: &Ty) -> Option<Scalar> {
+/// Whether a field of that type can be a member of a struct of C.
+fn plain_field(t: &Ty) -> bool {
+    matches!(t, Ty::Bool | Ty::Int("i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32") | Ty::Float("f64"))
+}
+
+fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
     match t {
         Ty::Int(k) => Some(Scalar::Int(k)),
         Ty::Bool => Some(Scalar::Bool),
         Ty::Float("f64") => Some(Scalar::F64),
+        Ty::Struct(i, args) if args.is_empty() => {
+            let s = &info.structs[*i];
+            let plain = !s.fields.is_empty() && s.tparams.is_empty() && !s.generic && s.fields.iter().all(|f| plain_field(&f.ty));
+            plain.then_some(Scalar::Rec(*i))
+        }
         _ => None,
     }
 }
@@ -523,6 +536,7 @@ pub fn dump(p: &Program) -> String {
             Option::Some(Scalar::Int(k)) => k.to_string(),
             Option::Some(Scalar::Bool) => "bool".to_string(),
             Option::Some(Scalar::F64) => "f64".to_string(),
+            Option::Some(Scalar::Rec(i)) => format!("rec{i}"),
             Option::None => "_".to_string(),
         }
     }
@@ -1082,7 +1096,7 @@ impl<'a> Lower<'a> {
     /// The same, for a place whose type is known.
     fn read_as(&mut self, place: Place, ty: &Ty) -> Operand {
         let op = self.tmp(Rvalue::Use(Operand::Place(place)));
-        if let (Operand::Place(p), Some(s)) = (&op, scalar_of(ty)) {
+        if let (Operand::Place(p), Some(s)) = (&op, scalar_of(self.info, ty)) {
             self.hints.push((p.local, s));
         }
         op
@@ -1356,7 +1370,7 @@ impl<'a> Lower<'a> {
         for p in &sig.params {
             let l = self.temp();
             self.declare(&p.name, l);
-            scalars.push(scalar_of(&p.ty));
+            scalars.push(scalar_of(self.info, &p.ty));
         }
         let params = self.locals;
         (self.ret, self.err) = match &sig.ret {
@@ -1389,7 +1403,7 @@ impl<'a> Lower<'a> {
         }
         let mut func = self.finish(name, params);
         func.scalars = scalars;
-        func.ret = if path { None } else { scalar_of(&sig.ret) };
+        func.ret = if path { None } else { scalar_of(self.info, &sig.ret) };
         func.body = body_start;
         func
     }
@@ -1484,9 +1498,9 @@ impl<'a> Lower<'a> {
                 match BinOp::parse(op) {
                     // A part of a value: the result is computed as a
                     // number of the machine and then stored.
-                    Some(b) if !place.proj.is_empty() && scalar_of(&tt).is_some() && scalar_of(&tt) == scalar_of(&j) => {
+                    Some(b) if !place.proj.is_empty() && scalar_of(self.info, &tt).is_some() && scalar_of(self.info, &tt) == scalar_of(self.info, &j) => {
                         let r = self.tmp(Rvalue::Binary(b, num_of(&j), cur, v));
-                        if let (Operand::Place(p), Some(s)) = (&r, scalar_of(&tt)) {
+                        if let (Operand::Place(p), Some(s)) = (&r, scalar_of(self.info, &tt)) {
                             self.hints.push((p.local, s));
                         }
                         self.emit(place, Rvalue::Use(r));
@@ -1652,7 +1666,7 @@ impl<'a> Lower<'a> {
             Pattern::Bind { name, .. } => {
                 let reused = if self.or_depth > 0 { self.scopes.last().and_then(|s| s.vars.get(name)).copied() } else { None };
                 let l = reused.unwrap_or_else(|| self.temp());
-                if let Some(s) = scalar_of(ty) {
+                if let Some(s) = scalar_of(self.info, ty) {
                     self.hints.push((l, s));
                 }
                 self.set(l, here);

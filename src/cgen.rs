@@ -111,7 +111,7 @@ fn steps(cx: &Cx, p: &Place) -> Result<(usize, String), String> {
         parts.push(match pr {
             Proj::Field(k) => format!("{{0, {k}}}"),
             Proj::Index(Operand::Const(Value::Int(i))) => format!("{{1, kidxc({i})}}"),
-            Proj::Index(Operand::Place(i)) if matches!(cx.rep(i), Rep::Int(_)) => format!("{{1, kidxc((i128)s{})}}", i.local),
+            Proj::Index(Operand::Place(i)) if matches!(cx.rep(i), Rep::Int(_)) => format!("{{1, kidxc((i128){})}}", cx.name(i)),
             Proj::Index(Operand::Place(i)) if i.proj.is_empty() => format!("{{1, kidx(&L[{}])}}", i.local),
             Proj::Index(_) => return Err("the C backend needs an index to be a local or a constant".into()),
             Proj::Path(_) => return Err("the C backend cannot follow the result of a `ref mut` function here".into()),
@@ -134,6 +134,7 @@ fn operand(cx: &Cx, op: &Operand) -> Result<String, String> {
     match op {
         Operand::Const(v) => constant(v),
         Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] != Rep::Boxed => Ok(cx.boxed(p.local)),
+        Operand::Place(p) if rec_field(&cx.reps, p).is_some() => Ok(tagged(cx.rep(p), &cx.name(p))),
         Operand::Place(p) if p.proj.is_empty() => Ok(format!("kretain(L[{}])", p.local)),
         Operand::Place(p) => {
             if let Some((base, i)) = cx.item(p, false)? {
@@ -284,11 +285,34 @@ enum Rep {
     Int(&'static str),
     Bool,
     F64,
+    /// A struct of plain fields, kept as a struct of C: its number.
+    Rec(usize),
     /// A tagged value, in `L`.
     Boxed,
 }
 
-struct Cx {
+/// How a field of a struct kept as a struct of C is stored, by the kind
+/// the program gives for it: 1 a boolean, 2 an integer, 3 an `f64`.
+fn field_rep(kind: u8) -> Rep {
+    match kind {
+        1 => Rep::Bool,
+        3 => Rep::F64,
+        _ => Rep::Int("i64"),
+    }
+}
+
+/// The struct a place is a field of and the number of the field, when the
+/// struct is kept as a struct of C.
+fn rec_field(reps: &[Rep], p: &Place) -> Option<(usize, usize)> {
+    match (reps[p.local], p.proj.as_slice()) {
+        (Rep::Rec(i), [Proj::Field(k)]) => Some((i, *k)),
+        _ => None,
+    }
+}
+
+struct Cx<'a> {
+    /// The kinds of the fields of each struct an array keeps in line.
+    recs: &'a [Vec<u8>],
     reps: Vec<Rep>,
     /// Temporaries a call takes as an argument and nothing else reads:
     /// the call takes the value itself, not a copy of it.
@@ -411,12 +435,13 @@ pub fn spent(f: &Func) -> Vec<bool> {
         .collect()
 }
 
-fn rep_type(r: Rep) -> &'static str {
+fn rep_type(r: Rep) -> String {
     match r {
-        Rep::Int(k) => ctype(k),
-        Rep::F64 => "double",
-        Rep::Boxed => "kv",
-        _ => "bool",
+        Rep::Int(k) => ctype(k).to_string(),
+        Rep::F64 => "double".to_string(),
+        Rep::Boxed => "kv".to_string(),
+        Rep::Rec(i) => format!("struct KS{i}"),
+        _ => "bool".to_string(),
     }
 }
 
@@ -426,6 +451,7 @@ fn tagged(r: Rep, value: &str) -> String {
         Rep::Int(_) => format!("kint((i128)({value}))"),
         Rep::F64 => format!("kf64({value})"),
         Rep::Boxed => value.to_string(),
+        Rep::Rec(i) => format!("KS{i}_box({value})"),
         _ => format!("kbool({value})"),
     }
 }
@@ -433,7 +459,7 @@ fn tagged(r: Rep, value: &str) -> String {
 /// The machine signature of a function, when all of its parameters and its
 /// result are integers or booleans and it never changes a parameter (so
 /// there is nothing to hand back to the caller).
-fn direct_sig(f: &Func, fns: &[Func]) -> Option<(Vec<Rep>, Rep)> {
+fn direct_sig(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Option<(Vec<Rep>, Rep)> {
     // A function called with its arguments as they are, instead of through
     // an array of tagged values: one that leaves its parameters alone (so
     // that a tagged argument can be lent to it, without counting it) and
@@ -442,7 +468,7 @@ fn direct_sig(f: &Func, fns: &[Func]) -> Option<(Vec<Rep>, Rep)> {
     if f.scalars.len() != f.params {
         return None;
     }
-    let reps = infer(f, fns);
+    let reps = infer(f, fns, recs);
     let params: Vec<Rep> = reps[..f.params].to_vec();
     let changes = |rv: &Rvalue| match rv {
         Rvalue::Push(p, _) | Rvalue::Pop(p) => p.local < f.params,
@@ -498,6 +524,7 @@ fn scalar_rep(s: Option<Scalar>) -> Rep {
         Some(Scalar::Int(k)) if machine(k) => Rep::Int(k),
         Some(Scalar::Bool) => Rep::Bool,
         Some(Scalar::F64) => Rep::F64,
+        Some(Scalar::Rec(i)) => Rep::Rec(i),
         _ => Rep::Boxed,
     }
 }
@@ -517,7 +544,7 @@ fn is_cmp(op: BinOp) -> bool {
 }
 
 /// What an rvalue produces, given what is known about the locals.
-fn rep_of(rv: &Rvalue, reps: &[Rep]) -> Rep {
+fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
     use Rep::*;
     let int = |n: &Num| match n {
         Num::Int(k) if machine(k) => Int(k),
@@ -530,6 +557,12 @@ fn rep_of(rv: &Rvalue, reps: &[Rep]) -> Rep {
         Rvalue::Binary(op, Num::F64, _, _) if !is_cmp(*op) => F64,
         Rvalue::Unary(UnOp::Neg, Num::F64, _) | Rvalue::CastFloat(_, false) | Rvalue::Convert(_, Conv::ToFloat(false)) => F64,
         Rvalue::Use(Operand::Place(p)) if p.proj.is_empty() => reps[p.local],
+        Rvalue::Use(Operand::Place(p)) if rec_field(reps, p).is_some() => match rec_field(reps, p) {
+            Some((i, k)) => field_rep(recs[i][k]),
+            None => Boxed,
+        },
+        // A struct of plain fields is made in place, without a block.
+        Rvalue::Struct(i, ops) if !recs[*i].is_empty() && !recs[*i].contains(&4) && recs[*i].len() == ops.len() => Rec(*i),
         Rvalue::Binary(op, _, _, _) if is_cmp(*op) => Bool,
         Rvalue::Binary(_, n, _, _) | Rvalue::Unary(UnOp::Neg | UnOp::BitNot, n, _) => int(n),
         Rvalue::Unary(UnOp::Not, _, _) | Rvalue::Is(..) | Rvalue::RangeHas(..) | Rvalue::RangeLast(..) => Bool,
@@ -542,7 +575,7 @@ fn rep_of(rv: &Rvalue, reps: &[Rep]) -> Rep {
 }
 
 /// Decides how every local of a function is stored.
-fn infer(f: &Func, fns: &[Func]) -> Vec<Rep> {
+fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
     let mut reps = vec![Rep::Top; f.locals];
     for l in 0..f.params.min(f.locals) {
         reps[l] = scalar_rep(f.scalars.get(l).copied().flatten());
@@ -564,7 +597,8 @@ fn infer(f: &Func, fns: &[Func]) -> Vec<Rep> {
         }
     }
     fn through(p: &Place, reps: &mut [Rep]) {
-        if !p.proj.is_empty() {
+        // A field of a struct of C is read and written where it is.
+        if !p.proj.is_empty() && rec_field(reps, p).is_none() {
             reps[p.local] = Rep::Boxed;
         }
         for pr in &p.proj {
@@ -596,13 +630,26 @@ fn infer(f: &Func, fns: &[Func]) -> Vec<Rep> {
             _ => {}
         }
     }
+    // A parameter kept as a struct of C is read from the block of the
+    // caller and never handed back: one that is written to stays tagged.
+    for b in &f.blocks {
+        let mut written = |l: usize| {
+            if l < f.params && matches!(reps[l], Rep::Rec(_)) {
+                reps[l] = Rep::Boxed;
+            }
+        };
+        b.stmts.iter().for_each(|st| written(st.place.local));
+        if let Term::Call { dest, .. } = &b.term {
+            written(dest.local);
+        }
+    }
     loop {
         let before = reps.clone();
         for b in &f.blocks {
             for st in &b.stmts {
                 if st.place.proj.is_empty() && !typed[st.place.local] {
                     let l = st.place.local;
-                    reps[l] = join(reps[l], rep_of(&st.rv, &reps));
+                    reps[l] = join(reps[l], rep_of(&st.rv, &reps, recs));
                 }
             }
             if let Term::Call { callee, dest, .. } = &b.term {
@@ -648,12 +695,23 @@ fn each_operand(rv: &Rvalue, visit: &mut dyn FnMut(&Operand)) {
     }
 }
 
-impl Cx {
+impl Cx<'_> {
     fn rep(&self, p: &Place) -> Rep {
         if p.proj.is_empty() {
-            self.reps[p.local]
-        } else {
-            Rep::Boxed
+            return self.reps[p.local];
+        }
+        match rec_field(&self.reps, p) {
+            Some((i, k)) => field_rep(self.recs[i][k]),
+            None => Rep::Boxed,
+        }
+    }
+
+    /// The C name of a place that holds a machine value: a local, or a
+    /// field of a struct of C.
+    fn name(&self, p: &Place) -> String {
+        match p.proj.as_slice() {
+            [Proj::Field(k)] => format!("s{}.f{k}", p.local),
+            _ => format!("s{}", p.local),
         }
     }
 
@@ -726,7 +784,7 @@ impl Cx {
     fn known_int(&self, op: &Operand) -> Option<String> {
         match op {
             Operand::Const(Value::Int(i)) if i64::try_from(*i).is_ok() || u64::try_from(*i).is_ok() => Some(wide(*i)),
-            Operand::Place(p) if matches!(self.rep(p), Rep::Int(_)) => Some(format!("s{}", p.local)),
+            Operand::Place(p) if matches!(self.rep(p), Rep::Int(_)) => Some(self.name(p)),
             _ => None,
         }
     }
@@ -736,7 +794,7 @@ impl Cx {
     fn known_bool(&self, op: &Operand) -> Option<String> {
         match op {
             Operand::Const(Value::Bool(b)) => Some((*b as u8).to_string()),
-            Operand::Place(p) if self.rep(p) == Rep::Bool => Some(format!("s{}", p.local)),
+            Operand::Place(p) if self.rep(p) == Rep::Bool => Some(self.name(p)),
             _ => None,
         }
     }
@@ -747,7 +805,7 @@ impl Cx {
         match op {
             Operand::Const(Value::Float(f)) if f.is_finite() => Some(format!("({f:?})")),
             Operand::Const(Value::Float(f)) => Some(format!("kdbl(0x{:016x}ULL)", f.to_bits())),
-            Operand::Place(p) if self.rep(p) == Rep::F64 => Some(format!("s{}", p.local)),
+            Operand::Place(p) if self.rep(p) == Rep::F64 => Some(self.name(p)),
             _ => None,
         }
     }
@@ -823,7 +881,7 @@ impl Cx {
     fn truth(&self, op: &Operand) -> Result<String, String> {
         match op {
             Operand::Const(Value::Bool(b)) => Ok((*b as u8).to_string()),
-            Operand::Place(p) if self.rep(p) == Rep::Bool => Ok(format!("s{}", p.local)),
+            Operand::Place(p) if self.rep(p) == Rep::Bool => Ok(self.name(p)),
             Operand::Place(p) if !p.proj.is_empty() => {
                 if let Some((base, i)) = self.item(p, false)? {
                     return Ok(format!("kitem_bool({base}, {i})"));
@@ -955,9 +1013,24 @@ impl Cx {
     /// The statement that gives a local its value.
     fn assign(&self, place: &Place, rv: &Rvalue) -> Result<String, String> {
         match self.rep(place) {
-            Rep::Int(k) => Ok(format!("s{} = {};", place.local, self.int_rvalue(rv, k)?)),
-            Rep::Bool => Ok(format!("s{} = {};", place.local, self.bool_rvalue(rv)?)),
-            Rep::F64 => Ok(format!("s{} = {};", place.local, self.f64_rvalue(rv)?)),
+            Rep::Int(k) => Ok(format!("{} = {};", self.name(place), self.int_rvalue(rv, k)?)),
+            Rep::Bool => Ok(format!("{} = {};", self.name(place), self.bool_rvalue(rv)?)),
+            Rep::F64 => Ok(format!("{} = {};", self.name(place), self.f64_rvalue(rv)?)),
+            Rep::Rec(i) => {
+                let l = place.local;
+                match rv {
+                    Rvalue::Struct(j, ops) if *j == i && ops.len() == self.recs[i].len() => {
+                        let mut parts = Vec::new();
+                        for (op, kind) in ops.iter().zip(&self.recs[i]) {
+                            parts.push(self.machine(field_rep(*kind), op)?);
+                        }
+                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                    }
+                    Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Rec(i) => Ok(format!("s{l} = s{};", q.local)),
+                    Rvalue::Uninit | Rvalue::Moved => Ok(format!("s{l} = (struct KS{i}){{0}};")),
+                    _ => Ok(format!("s{l} = KS{i}_take({});", rvalue(self, rv)?)),
+                }
+            }
             _ => {
                 // A machine value goes into an array without being tagged.
                 if let (Rvalue::Use(op), Some((base, i))) = (rv, self.item(place, true)?) {
@@ -990,9 +1063,10 @@ impl Cx {
     /// Stores a tagged value the runtime produced.
     fn take(&self, place: &Place, value: &str) -> Result<String, String> {
         match self.rep(place) {
-            Rep::Int(k) => Ok(format!("s{} = ({})({value}).u.i;", place.local, ctype(k))),
-            Rep::Bool => Ok(format!("s{} = ktruth({value});", place.local)),
-            Rep::F64 => Ok(format!("s{} = ({value}).u.f;", place.local)),
+            Rep::Int(k) => Ok(format!("{} = ({})({value}).u.i;", self.name(place), ctype(k))),
+            Rep::Bool => Ok(format!("{} = ktruth({value});", self.name(place))),
+            Rep::F64 => Ok(format!("{} = ({value}).u.f;", self.name(place))),
+            Rep::Rec(i) => Ok(format!("s{} = KS{i}_take({value});", place.local)),
             _ => store(self, place, value),
         }
     }
@@ -1002,6 +1076,10 @@ impl Cx {
         match r {
             Rep::Int(k) => Ok(format!("({})({})", ctype(k), self.int(op)?)),
             Rep::F64 => self.float(op),
+            Rep::Rec(i) => match op {
+                Operand::Place(p) if self.rep(p) == r => Ok(format!("s{}", p.local)),
+                _ => Ok(format!("KS{i}_take({})", operand(self, op)?)),
+            },
             _ => self.truth(op),
         }
     }
@@ -1009,8 +1087,9 @@ impl Cx {
     /// Stores a machine value a direct call produced.
     fn take_machine(&self, place: &Place, r: Rep, value: &str) -> Result<String, String> {
         match (self.rep(place), r) {
-            (Rep::Int(k), Rep::Int(_)) => Ok(format!("s{} = ({})({value});", place.local, ctype(k))),
-            (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) => Ok(format!("s{} = {value};", place.local)),
+            (Rep::Int(k), Rep::Int(_)) => Ok(format!("{} = ({})({value});", self.name(place), ctype(k))),
+            (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) => Ok(format!("{} = {value};", self.name(place))),
+            (Rep::Rec(i), Rep::Rec(j)) if i == j => Ok(format!("s{} = {value};", place.local)),
             _ => self.take(place, &tagged(r, value)),
         }
     }
@@ -1021,6 +1100,7 @@ impl Cx {
             Rep::Int(_) => format!("kint((i128)s{l})"),
             Rep::Bool => format!("kbool(s{l})"),
             Rep::F64 => format!("kf64(s{l})"),
+            Rep::Rec(i) => format!("KS{i}_box(s{l})"),
             _ => format!("L[{l}]"),
         }
     }
@@ -1032,8 +1112,8 @@ fn direct_head(i: usize, params: &[Rep], ret: Rep) -> String {
     format!("static {} g{i}({})", rep_type(ret), if ps.is_empty() { "void".to_string() } else { ps.join(", ") })
 }
 
-fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>]) -> Result<(), String> {
-    let cx = &Cx { reps: infer(f, fns), spent: spent(f) };
+fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>], recs: &[Vec<u8>]) -> Result<(), String> {
+    let cx = &Cx { recs, reps: infer(f, fns, recs), spent: spent(f) };
     let n = f.locals.max(1);
     let mine = direct[i].as_ref();
     // The name of the function in the program, for whoever reads the C.
@@ -1052,6 +1132,9 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
             Rep::Bool => writeln!(out, "    bool s{l} = false;").unwrap(),
             Rep::F64 if l < f.params => writeln!(out, "    double s{l} = a[{l}].u.f;").unwrap(),
             Rep::F64 => writeln!(out, "    double s{l} = 0;").unwrap(),
+            // The caller keeps the block the argument came in.
+            Rep::Rec(r) if l < f.params => writeln!(out, "    struct KS{r} s{l} = KS{r}_get(a[{l}]);").unwrap(),
+            Rep::Rec(r) => writeln!(out, "    struct KS{r} s{l} = {{0}};").unwrap(),
             _ => {}
         }
     }
@@ -1245,7 +1328,9 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     if l < f.params && mine.is_some() {
                         continue;
                     }
-                    if l < f.params {
+                    if l < f.params && matches!(cx.reps[l], Rep::Rec(_)) {
+                        // It was read from the block of the caller, which is still there.
+                    } else if l < f.params {
                         writeln!(out, "        a[{l}] = {};", cx.boxed(l)).unwrap();
                     } else if cx.reps.get(l) == Some(&Rep::Boxed) {
                         writeln!(out, "        krelease(L[{l}]);").unwrap();
@@ -1260,7 +1345,12 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     }
     match mine {
         Some((params, ret)) => {
-            writeln!(out, "    return {};", if *ret == Rep::Boxed { "KUNIT" } else { "0" }).unwrap();
+            let nothing = match ret {
+                Rep::Boxed => "KUNIT".to_string(),
+                Rep::Rec(r) => format!("(struct KS{r}){{0}}"),
+                _ => "0".to_string(),
+            };
+            writeln!(out, "    return {nothing};").unwrap();
             writeln!(out, "}}\n").unwrap();
             // The tagged entry, for calls through a function value.
             let unboxed: Vec<String> = params
@@ -1270,6 +1360,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
                     Rep::F64 => format!("a[{l}].u.f"),
                     Rep::Boxed => format!("a[{l}]"),
+                    Rep::Rec(r) => format!("KS{r}_get(a[{l}])"),
                     _ => format!("a[{l}].u.t"),
                 })
                 .collect();
@@ -1346,14 +1437,34 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     }
     writeln!(out, "static kv (*const KFN[])(kv *, kv) = {{{}0}};", names(&mut (0..p.fns.len()).map(|i| format!("f{i}")))).unwrap();
     writeln!(out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}\n").unwrap();
-    let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns)).collect();
+    // The structs kept as structs of C: how each is read from a tagged
+    // value and made into one.
+    for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| !k.is_empty() && !k.contains(&4)) {
+        let member = |k: &u8| rep_type(field_rep(*k));
+        let fields: Vec<String> = kinds.iter().enumerate().map(|(f, k)| format!("{} f{f};", member(k))).collect();
+        writeln!(out, "struct KS{i} {{ {} }};", fields.join(" ")).unwrap();
+        let read: Vec<String> = kinds
+            .iter()
+            .enumerate()
+            .map(|(f, k)| match k {
+                1 => format!("it[{f}].u.t"),
+                3 => format!("it[{f}].u.f"),
+                _ => format!("(int64_t)it[{f}].u.i"),
+            })
+            .collect();
+        writeln!(out, "static struct KS{i} KS{i}_get(kv v) {{ const kv *it = ITEMS(v.u.o); return (struct KS{i}){{{}}}; }}", read.join(", ")).unwrap();
+        writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
+        let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
+        writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+    }
+    let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns, &p.records)).collect();
     for (i, sig) in direct.iter().enumerate() {
         if let Some((params, ret)) = sig {
             writeln!(out, "{};", direct_head(i, params, *ret)).unwrap();
         }
     }
     for (i, f) in p.fns.iter().enumerate() {
-        function(&mut out, i, f, &p.fns, &p.externs, &direct).map_err(|e| format!("{}: {e}", f.name))?;
+        function(&mut out, i, f, &p.fns, &p.externs, &direct, &p.records).map_err(|e| format!("{}: {e}", f.name))?;
     }
     writeln!(out, "int main(int argc, char **argv) {{").unwrap();
     writeln!(out, "    char base;").unwrap();

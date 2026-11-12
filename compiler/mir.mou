@@ -138,7 +138,9 @@ pub struct Stmt { place: Place, rv: Rvalue, at: check.Span }
 pub struct Block { stmts: [Stmt], term: Term, at: check.Span, done: bool }
 
 // A type the C that is written can keep in a register.
-pub enum Scalar { Int(str), Bool, F64 }
+// `Rec`: a struct whose fields are all booleans, integers of up to 64
+// bits or `f64`: it is kept as a struct of C, by its number.
+pub enum Scalar { Int(str), Bool, F64, Rec(int) }
 
 pub struct Func {
     name: str
@@ -230,13 +232,32 @@ fn is_bin_op(op: str) -> bool {
     false
 }
 
-fn scalar_of(t: types.Ty) -> Scalar? {
+// Whether a field of that type can be a member of a struct of C.
+fn plain_field(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Bool => true
+        types.Ty.Int(k) => k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "u8" || k == "u16" || k == "u32"
+        types.Ty.Float(k) => k == "f64"
+        _ => false
+    }
+}
+
+fn scalar_of(structs: [check.StructInfo], t: types.Ty) -> Scalar? {
     match t {
         types.Ty.Int(k) => Some(Scalar.Int(k))
         types.Ty.Bool => Some(Scalar.Bool)
         types.Ty.Float(k) => {
             if k == "f64" { return Some(Scalar.F64) }
             None
+        }
+        types.Ty.Struct(i, args) => {
+            if args.len > 0 { return None }
+            let s = structs[i]
+            if s.fields.len == 0 || s.tparams.len > 0 || s.generic { return None }
+            for f in s.fields {
+                if !plain_field(f.ty) { return None }
+            }
+            Some(Scalar.Rec(i))
         }
         _ => None
     }
@@ -247,6 +268,7 @@ fn same_scalar(a: Scalar?, b: Scalar?) -> bool {
         (Some(Scalar.Int(x)), Some(Scalar.Int(y))) => x == y
         (Some(Scalar.Bool), Some(Scalar.Bool)) => true
         (Some(Scalar.F64), Some(Scalar.F64)) => true
+        (Some(Scalar.Rec(x)), Some(Scalar.Rec(y))) => x == y
         (None, None) => true
         _ => false
     }
@@ -1061,7 +1083,7 @@ impl Lower {
     fn read_as(mut self, place: Place, ty: types.Ty) -> Operand {
         let t = self.temp()
         self.emit(at_local(t), Rvalue.Use(Operand.At(place)))
-        if let Some(s) = scalar_of(ty) { self.hints.push(Hint(t, s)) }
+        if let Some(s) = scalar_of(self.c.structs, ty) { self.hints.push(Hint(t, s)) }
         local_op(t)
     }
 
@@ -1363,7 +1385,7 @@ impl Lower {
         for p in sig.params {
             let l = self.temp()
             self.declare(p.name, l)
-            scalars.push(scalar_of(p.ty))
+            scalars.push(scalar_of(self.c.structs, p.ty))
         }
         let params = self.locals
         self.ret = sig.ret
@@ -1404,7 +1426,7 @@ impl Lower {
         var func = self.finish(name, params)
         func.scalars = scalars
         func.ret = None
-        if !path { func.ret = scalar_of(sig.ret) }
+        if !path { func.ret = scalar_of(self.c.structs, sig.ret) }
         func.body = body_start
         func
     }
@@ -1516,10 +1538,10 @@ impl Lower {
                 }
                 // A part of a value: the result is worked out as a number
                 // of the machine and then stored.
-                if place.proj.len > 0 && is_scalar(scalar_of(tt)) && same_scalar(scalar_of(tt), scalar_of(j)) {
+                if place.proj.len > 0 && is_scalar(scalar_of(self.c.structs, tt)) && same_scalar(scalar_of(self.c.structs, tt), scalar_of(self.c.structs, j)) {
                     let t = self.temp()
                     self.emit(at_local(t), Rvalue.Binary(bin, num_of(j), cur, v))
-                    if let Some(sc) = scalar_of(tt) { self.hints.push(Hint(t, sc)) }
+                    if let Some(sc) = scalar_of(self.c.structs, tt) { self.hints.push(Hint(t, sc)) }
                     self.emit(place, Rvalue.Use(local_op(t)))
                     return
                 }
@@ -1789,7 +1811,7 @@ impl Lower {
                     }
                 }
                 if l < 0 { l = self.temp() }
-                if let Some(s) = scalar_of(ty) { self.hints.push(Hint(l, s)) }
+                if let Some(s) = scalar_of(self.c.structs, ty) { self.hints.push(Hint(l, s)) }
                 self.set(l, here)
                 self.declare(name, l)
             }
@@ -3312,6 +3334,7 @@ fn scalar_text(s: Scalar?) -> str {
                 Scalar.Int(k) => k
                 Scalar.Bool => "bool"
                 Scalar.F64 => "f64"
+                Scalar.Rec(i) => "rec{i}"
             }
         }
         None => "_"

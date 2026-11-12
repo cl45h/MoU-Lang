@@ -199,8 +199,45 @@ enum Rep {
     Int(str)
     Bool
     F64
+    // A struct of plain fields, kept as a struct of C: its number.
+    Rec(int)
     // A tagged value, in `L`.
     Boxed
+}
+
+// How a field of a struct kept as a struct of C is stored, by the kind
+// the program gives for it: 1 a boolean, 2 a whole number, 3 an `f64`.
+fn field_rep(kind: int) -> Rep {
+    if kind == 1 { return Rep.Bool }
+    if kind == 3 { return Rep.F64 }
+    Rep.Int("i64")
+}
+
+// The number of the struct a local is kept as, or -1.
+fn rec_of(r: Rep) -> int {
+    match r {
+        Rep.Rec(i) => i
+        _ => -1
+    }
+}
+
+// The number of the field a place is, when it is a field of a local kept
+// as a struct of C; -1 otherwise.
+fn rec_field(reps: [Rep], p: mir.Place) -> int {
+    if rec_of(reps[p.local]) < 0 || p.proj.len != 1 { return -1 }
+    match p.proj[0] {
+        mir.Proj.Field(k) => k
+        _ => -1
+    }
+}
+
+// Whether a struct can be kept as a struct of C.
+fn rec_ok(recs: [[int]], i: int) -> bool {
+    if recs[i].len == 0 { return false }
+    for k in recs[i] {
+        if k == 4 { return false }
+    }
+    true
 }
 
 fn same_rep(a: Rep, b: Rep) -> bool {
@@ -210,6 +247,7 @@ fn same_rep(a: Rep, b: Rep) -> bool {
         (Rep.Int(x), Rep.Int(y)) => x == y
         (Rep.Bool, Rep.Bool) => true
         (Rep.F64, Rep.F64) => true
+        (Rep.Rec(x), Rep.Rec(y)) => x == y
         (Rep.Boxed, Rep.Boxed) => true
         _ => false
     }
@@ -230,6 +268,8 @@ fn is_int_rep(r: Rep) -> bool {
 }
 
 struct Cx {
+    // The kinds of the fields of each struct an array keeps in line.
+    recs: [[int]]
     reps: [Rep]
     // Temporaries a call takes as an argument and nothing else reads: the
     // call takes the value itself, not a copy of it.
@@ -456,6 +496,7 @@ fn rep_type(r: Rep) -> str {
         Rep.Int(k) => ctype(k)
         Rep.F64 => "double"
         Rep.Boxed => "kv"
+        Rep.Rec(i) => "struct KS{i}"
         _ => "bool"
     }
 }
@@ -466,6 +507,7 @@ fn tagged(r: Rep, value: str) -> str {
         Rep.Int(_) => "kint((i128)({value}))"
         Rep.F64 => "kf64({value})"
         Rep.Boxed => value
+        Rep.Rec(i) => "KS{i}_box({value})"
         _ => "kbool({value})"
     }
 }
@@ -475,10 +517,10 @@ struct Direct { params: [Rep], ret: Rep }
 // The signature a function has for the machine, when it leaves its
 // parameters alone (so that a tagged argument can be lent to it without
 // counting it) and captures nothing.
-fn direct_sig(f: mir.Func, fns: [mir.Func]) -> Direct? {
+fn direct_sig(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> Direct? {
     let ret = scalar_rep(f.ret)
     if (f.scalars.len as int) != f.params { return None }
-    let reps = infer(f, fns)
+    let reps = infer(f, fns, recs)
     var params: [Rep] = []
     for l in 0..f.params { params.push(reps[l]) }
     for b in f.blocks {
@@ -553,6 +595,7 @@ fn scalar_rep(s: mir.Scalar?) -> Rep {
                 }
                 mir.Scalar.Bool => Rep.Bool
                 mir.Scalar.F64 => Rep.F64
+                mir.Scalar.Rec(i) => Rep.Rec(i)
             }
         }
         None => Rep.Boxed
@@ -592,7 +635,7 @@ fn is_f64_num(n: mir.Num) -> bool {
 }
 
 // What an rvalue gives, from what is known about the locals.
-fn rep_of(rv: mir.Rvalue, reps: [Rep]) -> Rep {
+fn rep_of(rv: mir.Rvalue, reps: [Rep], recs: [[int]]) -> Rep {
     match rv {
         mir.Rvalue.Use(op) => {
             match op {
@@ -609,6 +652,8 @@ fn rep_of(rv: mir.Rvalue, reps: [Rep]) -> Rep {
                 }
                 mir.Operand.At(p) => {
                     if p.proj.len == 0 { return reps[p.local] }
+                    let k = rec_field(reps, p)
+                    if k >= 0 { return field_rep(recs[rec_of(reps[p.local])][k]) }
                     Rep.Boxed
                 }
             }
@@ -657,6 +702,11 @@ fn rep_of(rv: mir.Rvalue, reps: [Rep]) -> Rep {
         mir.Rvalue.Succ(_, n) => int_rep(n)
         mir.Rvalue.Uninit => Rep.Top
         mir.Rvalue.Moved => Rep.Top
+        // A struct of plain fields is made in place, without a block.
+        mir.Rvalue.Struct(i, ops) => {
+            if rec_ok(recs, i) && recs[i].len == ops.len { return Rep.Rec(i) }
+            Rep.Boxed
+        }
         _ => Rep.Boxed
     }
 }
@@ -670,7 +720,8 @@ fn mark_projected(reps: mut [Rep], op: mir.Operand) {
 
 // A local with fields or items is a tagged value.
 fn mark_through(reps: mut [Rep], p: mir.Place) {
-    if p.proj.len > 0 { reps[p.local] = Rep.Boxed }
+    // A field of a struct of C is read and written where it is.
+    if p.proj.len > 0 && rec_field(reps, p) < 0 { reps[p.local] = Rep.Boxed }
     for pr in p.proj {
         match pr {
             mir.Proj.Index(i) => mark_projected(mut reps, i)
@@ -684,7 +735,7 @@ fn mark_through(reps: mut [Rep], p: mir.Place) {
 }
 
 // Decides how every local of a function is kept.
-fn infer(f: mir.Func, fns: [mir.Func]) -> [Rep] {
+fn infer(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> [Rep] {
     var reps: [Rep] = []
     var typed: [bool] = []
     for l in 0..f.locals {
@@ -733,13 +784,28 @@ fn infer(f: mir.Func, fns: [mir.Func]) -> [Rep] {
             _ => {}
         }
     }
+    // A parameter kept as a struct of C is read from the block of the
+    // caller and never handed back: one that is written to stays tagged.
+    for b in f.blocks {
+        for st in b.stmts {
+            let l = st.place.local
+            if l < f.params && rec_of(reps[l]) >= 0 { reps[l] = Rep.Boxed }
+        }
+        match b.term {
+            mir.Term.Call(_, _, _, dest, _) => {
+                let l = dest.local
+                if l < f.params && rec_of(reps[l]) >= 0 { reps[l] = Rep.Boxed }
+            }
+            _ => {}
+        }
+    }
     loop {
         var changed = false
         for b in f.blocks {
             for st in b.stmts {
                 if st.place.proj.len == 0 && !typed[st.place.local] {
                     let l = st.place.local
-                    let next = join(reps[l], rep_of(st.rv, reps))
+                    let next = join(reps[l], rep_of(st.rv, reps, recs))
                     if !same_rep(next, reps[l]) {
                         reps[l] = next
                         changed = true
@@ -817,7 +883,21 @@ fn fits_64(i: i128) -> bool { i >= i64_min() && i <= i64_max() * 2 + 1 }
 impl Cx {
     fn rep(self, p: mir.Place) -> Rep {
         if p.proj.len == 0 { return self.reps[p.local] }
+        let k = rec_field(self.reps, p)
+        if k >= 0 { return field_rep(self.recs[rec_of(self.reps[p.local])][k]) }
         Rep.Boxed
+    }
+
+    // The C name of a place that holds a value of the machine: a local,
+    // or a field of a struct of C.
+    fn name(self, p: mir.Place) -> str {
+        if p.proj.len == 1 {
+            match p.proj[0] {
+                mir.Proj.Field(k) => return "s{p.local}.f{k}"
+                _ => {}
+            }
+        }
+        "s{p.local}"
     }
 
     // A C pointer to the tagged value a place holds.
@@ -920,7 +1000,7 @@ impl Cx {
                 }
             }
             mir.Operand.At(p) => {
-                if is_int_rep(self.rep(p)) { return Some("s{p.local}") }
+                if is_int_rep(self.rep(p)) { return Some(self.name(p)) }
                 None
             }
         }
@@ -936,7 +1016,7 @@ impl Cx {
             }
             mir.Operand.At(p) => {
                 match self.rep(p) {
-                    Rep.Bool => Some("s{p.local}")
+                    Rep.Bool => Some(self.name(p))
                     _ => None
                 }
             }
@@ -953,7 +1033,7 @@ impl Cx {
             }
             mir.Operand.At(p) => {
                 match self.rep(p) {
-                    Rep.F64 => Some("s{p.local}")
+                    Rep.F64 => Some(self.name(p))
                     _ => None
                 }
             }
@@ -1027,7 +1107,7 @@ impl Cx {
                         }
                         mir.Operand.At(i) => {
                             if is_int_rep(self.rep(i)) {
-                                parts.push("{{1, kidxc((i128)s{i.local})}}")
+                                parts.push("{{1, kidxc((i128){self.name(i)})}}")
                             } else {
                                 if i.proj.len > 0 { return Fail("the C backend needs an index to be a local or a constant") }
                                 parts.push("{{1, kidx(&L[{i.local}])}}")
@@ -1057,6 +1137,7 @@ impl Cx {
                     if !is_boxed(self.reps[p.local]) { return self.boxed(p.local) }
                     return "kretain(L[{p.local}])"
                 }
+                if rec_field(self.reps, p) >= 0 { return tagged(self.rep(p), self.name(p)) }
                 if let Some(it) = self.item(p, false)? { return "kitem({it.base}, {it.index})" }
                 if let Some(fi) = self.field_item(p, false)? { return "kitem_field({fi.base}, {fi.index}, {fi.field})" }
                 if let Some(ptr) = self.ptr(p.local, p.proj, false) { return "kretain(*{ptr})" }
@@ -1349,9 +1430,33 @@ impl Cx {
     // The statement that gives a local its value.
     fn assign(self, place: mir.Place, rv: mir.Rvalue) -> str ! Fail {
         match self.rep(place) {
-            Rep.Int(k) => return "s{place.local} = {self.int_rvalue(rv, k)?};"
-            Rep.Bool => return "s{place.local} = {self.bool_rvalue(rv)?};"
-            Rep.F64 => return "s{place.local} = {self.f64_rvalue(rv)?};"
+            Rep.Int(k) => return "{self.name(place)} = {self.int_rvalue(rv, k)?};"
+            Rep.Bool => return "{self.name(place)} = {self.bool_rvalue(rv)?};"
+            Rep.F64 => return "{self.name(place)} = {self.f64_rvalue(rv)?};"
+            Rep.Rec(i) => {
+                let l = place.local
+                match rv {
+                    mir.Rvalue.Struct(j, ops) => {
+                        if j == i && ops.len == self.recs[i].len {
+                            var parts: [str] = []
+                            for k in 0..ops.len { parts.push(self.machine(field_rep(self.recs[i][k]), ops[k])?) }
+                            return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
+                        }
+                    }
+                    mir.Rvalue.Use(op) => {
+                        match op {
+                            mir.Operand.At(q) => {
+                                if rec_of(self.rep(q)) == i { return "s{l} = s{q.local};" }
+                            }
+                            _ => {}
+                        }
+                    }
+                    mir.Rvalue.Uninit => return "s{l} = (struct KS{i}){{0}};"
+                    mir.Rvalue.Moved => return "s{l} = (struct KS{i}){{0}};"
+                    _ => {}
+                }
+                return "s{l} = KS{i}_take({self.rvalue(rv)?});"
+            }
             _ => {}
         }
         // A value of the machine goes into an array without being tagged.
@@ -1377,9 +1482,10 @@ impl Cx {
     // Keeps a tagged value the runtime gave.
     fn take(self, place: mir.Place, value: str) -> str ! Fail {
         match self.rep(place) {
-            Rep.Int(k) => "s{place.local} = ({ctype(k)})({value}).u.i;"
-            Rep.Bool => "s{place.local} = ktruth({value});"
-            Rep.F64 => "s{place.local} = ({value}).u.f;"
+            Rep.Int(k) => "{self.name(place)} = ({ctype(k)})({value}).u.i;"
+            Rep.Bool => "{self.name(place)} = ktruth({value});"
+            Rep.F64 => "{self.name(place)} = ({value}).u.f;"
+            Rep.Rec(i) => "s{place.local} = KS{i}_take({value});"
             _ => self.store(place, value)?
         }
     }
@@ -1389,6 +1495,15 @@ impl Cx {
         match r {
             Rep.Int(k) => "({ctype(k)})({self.int(op)?})"
             Rep.F64 => self.float(op)?
+            Rep.Rec(i) => {
+                match op {
+                    mir.Operand.At(p) => {
+                        if rec_of(self.rep(p)) == i { return "s{p.local}" }
+                    }
+                    _ => {}
+                }
+                "KS{i}_take({self.operand(op)?})"
+            }
             _ => self.truth(op)?
         }
     }
@@ -1396,9 +1511,13 @@ impl Cx {
     // Keeps a value of the machine a direct call gave.
     fn take_machine(self, place: mir.Place, r: Rep, value: str) -> str ! Fail {
         match (self.rep(place), r) {
-            (Rep.Int(k), Rep.Int(_)) => "s{place.local} = ({ctype(k)})({value});"
-            (Rep.Bool, Rep.Bool) => "s{place.local} = {value};"
-            (Rep.F64, Rep.F64) => "s{place.local} = {value};"
+            (Rep.Int(k), Rep.Int(_)) => "{self.name(place)} = ({ctype(k)})({value});"
+            (Rep.Bool, Rep.Bool) => "{self.name(place)} = {value};"
+            (Rep.F64, Rep.F64) => "{self.name(place)} = {value};"
+            (Rep.Rec(i), Rep.Rec(j)) => {
+                if i == j { return "s{place.local} = {value};" }
+                self.take(place, tagged(r, value))?
+            }
             _ => self.take(place, tagged(r, value))?
         }
     }
@@ -1409,6 +1528,7 @@ impl Cx {
             Rep.Int(_) => "kint((i128)s{l})"
             Rep.Bool => "kbool(s{l})"
             Rep.F64 => "kf64(s{l})"
+            Rep.Rec(i) => "KS{i}_box(s{l})"
             _ => "L[{l}]"
         }
     }
@@ -1458,8 +1578,8 @@ fn safe_name(name: str) -> str {
     text.from_chars(out)
 }
 
-fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.Extern], direct: [Direct?]) -> bool ! Fail {
-    let cx = Cx(infer(f, fns), spent(f))
+fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.Extern], direct: [Direct?], recs: [[int]]) -> bool ! Fail {
+    let cx = Cx(recs, infer(f, fns, recs), spent(f))
     var n = f.locals
     if n < 1 { n = 1 }
     let mine = direct[i]
@@ -1501,6 +1621,14 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                     line(mut out, "    double s{l} = a[{l}].u.f;")
                 } else {
                     line(mut out, "    double s{l} = 0;")
+                }
+            }
+            Rep.Rec(r) => {
+                if l < f.params {
+                    // The caller keeps the block the argument came in.
+                    line(mut out, "    struct KS{r} s{l} = KS{r}_get(a[{l}]);")
+                } else {
+                    line(mut out, "    struct KS{r} s{l} = {{0}};")
                 }
             }
             _ => {}
@@ -1760,7 +1888,8 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                 for l in 0..n {
                     if l < f.params && is_direct { continue }
                     if l < f.params {
-                        line(mut out, "        a[{l}] = {cx.boxed(l)};")
+                        // A struct of C was read from the block of the caller, which is still there.
+                        if rec_of(cx.reps[l]) < 0 { line(mut out, "        a[{l}] = {cx.boxed(l)};") }
                     } else {
                         if l < (cx.reps.len as int) {
                             if is_boxed(cx.reps[l]) { line(mut out, "        krelease(L[{l}]);") }
@@ -1775,7 +1904,9 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
         }
     }
     if is_direct {
-        let last = if is_boxed(my_ret) { "KUNIT" } else { "0" }
+        var last = "0"
+        if is_boxed(my_ret) { last = "KUNIT" }
+        if rec_of(my_ret) >= 0 { last = "(struct KS{rec_of(my_ret)}){{0}}" }
         line(mut out, "    return {last};")
         line(mut out, "}}")
         line(mut out, "")
@@ -1786,6 +1917,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                 Rep.Int(k) => unboxed.push("({ctype(k)})a[{l}].u.i")
                 Rep.F64 => unboxed.push("a[{l}].u.f")
                 Rep.Boxed => unboxed.push("a[{l}]")
+                Rep.Rec(r) => unboxed.push("KS{r}_get(a[{l}])")
                 _ => unboxed.push("a[{l}].u.t")
             }
         }
@@ -1961,14 +2093,37 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
     line(mut out, "static kv (*const KFN[])(kv *, kv) = {{{listed(fn_table)}0}};")
     line(mut out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}")
     line(mut out, "")
+    // The structs kept as structs of C: how each is read from a tagged
+    // value and made into one.
+    for i in 0..(p.records.len as int) {
+        if !rec_ok(p.records, i) { continue }
+        let kinds = p.records[i]
+        var fields: [str] = []
+        var read: [str] = []
+        var made: [str] = []
+        for f in 0..(kinds.len as int) {
+            let k = kinds[f]
+            fields.push("{rep_type(field_rep(k))} f{f};")
+            if k == 1 {
+                read.push("it[{f}].u.t")
+            } else {
+                if k == 3 { read.push("it[{f}].u.f") } else { read.push("(int64_t)it[{f}].u.i") }
+            }
+            made.push(tagged(field_rep(k), "s.f{f}"))
+        }
+        line(mut out, "struct KS{i} {{ {text.join(fields, " ")} }};")
+        line(mut out, "static struct KS{i} KS{i}_get(kv v) {{ const kv *it = ITEMS(v.u.o); return (struct KS{i}){{{text.join(read, ", ")}}}; }}")
+        line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
+        line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
+    }
     var direct: [Direct?] = []
-    for f in p.fns { direct.push(direct_sig(f, p.fns)) }
+    for f in p.fns { direct.push(direct_sig(f, p.fns, p.records)) }
     for i in 0..(direct.len as int) {
         if let Some(d) = direct[i] { line(mut out, "{direct_head(i, d.params, d.ret)};") }
     }
     for i in 0..(p.fns.len as int) {
         let f = p.fns[i]
-        let _ = function(mut out, i, f, p.fns, p.externs, direct) catch e { return Fail("{f.name}: {e.msg}") }
+        let _ = function(mut out, i, f, p.fns, p.externs, direct, p.records) catch e { return Fail("{f.name}: {e.msg}") }
     }
     line(mut out, "int main(int argc, char **argv) {{")
     line(mut out, "    char base;")

@@ -276,6 +276,29 @@ static kv kfn(uint32_t id) {
     return v;
 }
 
+/* The blocks of structs, enums, tuples and the like are small and die
+   young: one that is let go is kept, by its number of items, for the next
+   one of that size, instead of going back to `malloc`. Each thread keeps
+   its own. Under the address sanitizer every block is given back, so that
+   it can see a block used after it was let go. */
+#if defined(__SANITIZE_ADDRESS__) || defined(KNOPOOL)
+#define KPOOL_MAX 0
+#else
+#define KPOOL_MAX 8
+#endif
+static KLOCAL kobj *kpool[KPOOL_MAX + 1];
+#define KPOOL_NEXT(o) (*(kobj **)((o) + 1))
+
+static void kpool_drop(void) {
+    for (int n = 0; n <= KPOOL_MAX; n++) {
+        while (kpool[n]) {
+            kobj *o = kpool[n];
+            kpool[n] = KPOOL_NEXT(o);
+            free(o);
+        }
+    }
+}
+
 static bool kheap(kv v) { return v.tag >= T_STR && v.tag != T_NONE && v.tag != T_FN && v.u.o != NULL; }
 
 static kv kretain(kv v) {
@@ -287,7 +310,14 @@ static void krelease(kv v) {
     if (!kheap(v) || KDEC(v.u.o) > 0) return;
     if (v.tag != T_STR && v.u.o->pack == P_NONE)
         for (int64_t i = 0; i < v.u.o->len; i++) krelease(ITEMS(v.u.o)[i]);
-    free(v.u.o);
+    kobj *o = v.u.o;
+    if (v.tag != T_STR && v.tag != T_ARRAY && o->len > 0 && o->len <= KPOOL_MAX) {
+        int64_t n = o->len;
+        KPOOL_NEXT(o) = kpool[n];
+        kpool[n] = o;
+        return;
+    }
+    free(o);
 }
 
 static void kset(kv *slot, kv v) {
@@ -437,6 +467,17 @@ static kv kagg(int tag, uint32_t a, uint32_t b, int64_t n, const kv *items) {
     kv v = kmk(tag);
     v.a = a;
     v.b = b;
+    if (tag != T_ARRAY && n > 0 && n <= KPOOL_MAX && kpool[n]) {
+        kobj *o = kpool[n];
+        kpool[n] = KPOOL_NEXT(o);
+        o->rc = 1;
+        o->len = n;
+        o->cap = n;
+        o->pack = P_NONE;
+        memcpy(ITEMS(o), items, (size_t)n * sizeof(kv));
+        v.u.o = o;
+        return v;
+    }
     if (n > 0 || tag == T_ARRAY) {
         v.u.o = kalloc((size_t)n * sizeof(kv), n);
         if (n > 0) memcpy(ITEMS(v.u.o), items, (size_t)n * sizeof(kv));
@@ -1732,6 +1773,7 @@ static void *ktask_main(void *arg) {
     free(ktasks);
     ktask_finish(task, result);
     krelease(task);
+    kpool_drop();
     return NULL;
 }
 
