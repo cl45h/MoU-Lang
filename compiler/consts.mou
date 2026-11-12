@@ -885,6 +885,7 @@ fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir
 // the program do not get here: a constant cannot do input or output.
 fn native(name: str, args: [mir.Value]) -> mir.Value ! Oops {
     if text.starts_with(name, "chan.") { return panic_of("a channel cannot be used while the program is compiled") }
+    if text.starts_with(name, "mutex.") { return panic_of("a `Mutex` cannot be used while the program is compiled") }
     if name == "task.open" { return mir.Value.Int(0) }
     if name == "task.close" { return mir.Value.Unit }
     if name == "task.wait" {

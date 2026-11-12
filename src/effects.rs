@@ -912,6 +912,11 @@ impl Walk<'_> {
                                     notes.push((PANIC, "this capacity is not proved to be between 1 and 16777216".into()));
                                 }
                             }
+                            "mutex.new" => notes.push((ALLOC, "a `Mutex` is created on the heap".into())),
+                            "mutex.get" | "mutex.set" | "mutex.take" => {
+                                notes.push((BLOCK, "this waits while another task updates the `Mutex`".into()));
+                                notes.push((PANIC, "this panics inside an `update` of the same `Mutex`".into()));
+                            }
                             "chan.send" => {
                                 notes.push((BLOCK, "`send` waits while the channel is full".into()));
                                 notes.push((PANIC, "`send` panics on a closed channel".into()));

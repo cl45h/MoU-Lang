@@ -51,6 +51,8 @@ pub enum Ty {
     Task(Box<Ty>),
     /// A channel between tasks, of values of that type.
     Chan(Box<Ty>),
+    /// A value shared between tasks, that one of them changes at a time.
+    Mutex(Box<Ty>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -744,6 +746,7 @@ fn plain_text(t: &Ty) -> String {
         Range(t) => format!("range {}", text(t)),
         Task(t) => format!("task {}", text(t)),
         Chan(t) => format!("chan {}", text(t)),
+        Mutex(t) => format!("mutex {}", text(t)),
         Optional(t) => format!("{}?", text(t)),
         Result(t, e) => format!("{} ! {}", text(t), text(e)),
         Param(n) => format!("'{n}"),
@@ -862,7 +865,7 @@ fn same(a: &Ty, b: &Ty) -> bool {
         (Never | Unknown, _) | (_, Never | Unknown) => true,
         (Struct(i, x), Struct(j, y)) | (Enum(i, x), Enum(j, y)) => i == j && same_args(x, y),
         (Tuple(x), Tuple(y)) => same_args(x, y),
-        (Slice(x), Slice(y)) | (Array(x), Array(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) | (Task(x), Task(y)) | (Chan(x), Chan(y)) => same(x, y),
+        (Slice(x), Slice(y)) | (Array(x), Array(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) | (Task(x), Task(y)) | (Chan(x), Chan(y)) | (Mutex(x), Mutex(y)) => same(x, y),
         (Result(x, e), Result(y, f)) => same(x, y) && same(e, f),
         _ => a == b,
     }
@@ -900,7 +903,7 @@ fn open(t: &Ty) -> bool {
     match t {
         Never | Unknown => true,
         Struct(_, ts) | Enum(_, ts) | Tuple(ts) => ts.iter().any(open),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) => open(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => open(t),
         Result(t, e) => open(t) || open(e),
         _ => false,
     }
@@ -926,6 +929,7 @@ fn concretize(t: &Ty) -> Ty {
         Range(t) => Range(Box::new(concretize(t))),
         Task(t) => Task(Box::new(concretize(t))),
         Chan(t) => Chan(Box::new(concretize(t))),
+        Mutex(t) => Mutex(Box::new(concretize(t))),
         Optional(t) => Optional(Box::new(concretize(t))),
         Struct(i, ts) => Struct(*i, ts.iter().map(concretize).collect()),
         Enum(i, ts) => Enum(*i, ts.iter().map(concretize).collect()),
@@ -945,6 +949,7 @@ pub fn subst(t: &Ty, env: &HashMap<String, Ty>) -> Ty {
         Range(t) => Range(b(t)),
         Task(t) => Task(b(t)),
         Chan(t) => Chan(b(t)),
+        Mutex(t) => Mutex(b(t)),
         Optional(t) => Optional(b(t)),
         Result(t, e) => Result(b(t), b(e)),
         Fn(sig) => Fn(Box::new(subst_sig(sig, env))),
@@ -981,7 +986,7 @@ fn bind(pat: &Ty, actual: &Ty, env: &mut HashMap<String, Ty>) {
         (Struct(i, ps), Struct(j, ts)) | (Enum(i, ps), Enum(j, ts)) | (Dyn(i, ps), Dyn(j, ts)) if i == j => {
             ps.iter().zip(ts).for_each(|(p, t)| bind(p, t, env))
         }
-        (Slice(p) | Array(p), Slice(t) | Array(t)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) | (Task(p), Task(t)) | (Chan(p), Chan(t)) => bind(p, t, env),
+        (Slice(p) | Array(p), Slice(t) | Array(t)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) | (Task(p), Task(t)) | (Chan(p), Chan(t)) | (Mutex(p), Mutex(t)) => bind(p, t, env),
         (Optional(p), t) => bind(p, t, env),
         (Result(p, pe), Result(t, te)) => {
             bind(p, t, env);
@@ -1028,7 +1033,7 @@ fn undecided(t: &Ty) -> bool {
     match t {
         Struct(_, ts) | Enum(_, ts) => ts.iter().any(open),
         Tuple(ts) => ts.iter().any(undecided),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) => undecided(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => undecided(t),
         Result(t, e) => undecided(t) || undecided(e),
         _ => false,
     }
@@ -1040,7 +1045,7 @@ fn concrete(t: &Ty) -> bool {
     match t {
         Param(_) | Unknown => false,
         Tuple(ts) | Struct(_, ts) | Enum(_, ts) | Dyn(_, ts) => ts.iter().all(concrete),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) => concrete(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => concrete(t),
         Result(t, e) => concrete(t) && concrete(e),
         Fn(sig) => sig.params.iter().all(|p| concrete(&p.ty)) && concrete(&sig.ret),
         _ => true,
@@ -1550,6 +1555,7 @@ impl<'a> Checker<'a> {
             Range(t) => format!("range of {}", self.show(t)),
             Task(t) => format!("Task[{}]", self.show(t)),
             Chan(t) => format!("Chan[{}]", self.show(t)),
+            Mutex(t) => format!("Mutex[{}]", self.show(t)),
             Optional(t) if matches!(**t, Never) => "None".into(),
             Optional(t) => format!("{}?", self.show(t)),
             Result(t, e) => format!("{} ! {}", self.show(t), self.show(e)),
@@ -2821,6 +2827,7 @@ impl<'a> Checker<'a> {
             _ if name == "Task" && args.len() == 1 => return Ty::Task(Box::new(args[0].clone())),
             // `Chan[T]` is a channel of the language, on the same terms.
             _ if name == "Chan" && args.len() == 1 => return Ty::Chan(Box::new(args[0].clone())),
+            _ if name == "Mutex" && args.len() == 1 => return Ty::Mutex(Box::new(args[0].clone())),
             _ => {
                 self.err(span, format!("unknown type `{name}`"));
                 return Ty::Unknown;
@@ -4493,6 +4500,13 @@ impl<'a> Checker<'a> {
                                 let ret = Ty::Chan(Box::new(item));
                                 return self.apply(&Sig { params: vec![plain_param("capacity", Ty::Int("usize"))], ret }, args, span);
                             }
+                            // `Mutex[T](v)`: a value tasks share, starting as `v`.
+                            None if name == "Mutex" && targs.len() == 1 && matches!(base.kind, ExprKind::Path(_)) => {
+                                let item = self.type_of_expr(&targs[0]);
+                                self.res.insert((self.inst, id(e)), Res::Builtin("mutex.new"));
+                                let ret = Ty::Mutex(Box::new(item.clone()));
+                                return self.apply(&Sig { params: vec![plain_param("value", item)], ret }, args, span);
+                            }
                             _ => {}
                         }
                     }
@@ -4734,7 +4748,20 @@ impl<'a> Checker<'a> {
                         self.res.insert((self.inst, id(e)), Res::Builtin(native));
                         self.apply(&sig, args, span)
                     }
-                    Ty::Builtin("scope") | Ty::Task(_) | Ty::Chan(_) => {
+                    Ty::Mutex(t) if matches!(name.as_str(), "get" | "set" | "update") => {
+                        let item = (**t).clone();
+                        let (native, sig) = match name.as_str() {
+                            "get" => ("mutex.get", Sig { params: Vec::new(), ret: item }),
+                            "set" => ("mutex.set", Sig { params: vec![plain_param("value", item)], ret: Ty::Unit }),
+                            _ => {
+                                let change = Ty::Fn(Box::new(Sig { params: vec![plain_param("", item.clone())], ret: item }));
+                                ("mutex.update", Sig { params: vec![plain_param("change", change)], ret: Ty::Unit })
+                            }
+                        };
+                        self.res.insert((self.inst, id(e)), Res::Builtin(native));
+                        self.apply(&sig, args, span)
+                    }
+                    Ty::Builtin("scope") | Ty::Task(_) | Ty::Chan(_) | Ty::Mutex(_) => {
                         self.args_unchecked(args);
                         self.err(span, format!("type `{}` has no method `{name}`", self.show(&bt)));
                         Ty::Unknown

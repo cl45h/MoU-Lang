@@ -1338,6 +1338,11 @@ impl Walk {
                             if args.len > 0 { cap = st.val(args[0]).iv }
                             if !inside(cap, Range(1, 16777216)) { notes.push(Note(PANIC, "this capacity is not proved to be between 1 and 16777216")) }
                         }
+                        if name == "mutex.new" { notes.push(Note(ALLOC, "a `Mutex` is created on the heap")) }
+                        if name == "mutex.get" || name == "mutex.set" || name == "mutex.take" {
+                            notes.push(Note(BLOCK, "this waits while another task updates the `Mutex`"))
+                            notes.push(Note(PANIC, "this panics inside an `update` of the same `Mutex`"))
+                        }
                         if name == "chan.send" {
                             notes.push(Note(BLOCK, "`send` waits while the channel is full"))
                             notes.push(Note(PANIC, "`send` panics on a closed channel"))

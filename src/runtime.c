@@ -1861,6 +1861,75 @@ static pthread_cond_t kchan_moved = PTHREAD_COND_INITIALIZER;
 #endif
 enum { KCHAN_CAP, KCHAN_LEN, KCHAN_HEAD, KCHAN_CLOSED, KCHAN_ITEMS };
 
+/* ---- values tasks share ----
+ *
+ * A `Mutex` is a block of two items: the value, and which thread is
+ * updating it (0 when none is). An update takes the value out and puts
+ * the new one back; whoever wants it in between waits. */
+static KLOCAL char kself;
+#define KME ((i128)(uintptr_t)&kself)
+
+/* Waits, with the lock taken, until nobody is updating the value. */
+static void kmutex_free(kv *it) {
+    while (it[1].u.i != 0) {
+        if (it[1].u.i == KME) {
+            KCHAN_UNLOCK();
+            kpanic("this `Mutex` is used inside its own `update`");
+        }
+        KCHAN_WAIT("a `Mutex`");
+    }
+}
+
+static kv kmutex_new(kv value) {
+    kv items[2] = {value, kint(0)};
+    return kagg(T_TUPLE, 0, 0, 2, items);
+}
+
+static kv kmutex_get(kv m) {
+    kv *it = ITEMS(m.u.o);
+    KCHAN_LOCK();
+    kmutex_free(it);
+    kv r = kretain(it[0]);
+    KCHAN_UNLOCK();
+    krelease(m);
+    return r;
+}
+
+static kv kmutex_set(kv m, kv value) {
+    kv *it = ITEMS(m.u.o);
+    KCHAN_LOCK();
+    kmutex_free(it);
+    kv old = it[0];
+    it[0] = value;
+    KCHAN_UNLOCK();
+    krelease(old);
+    krelease(m);
+    return KUNIT;
+}
+
+static kv kmutex_take(kv m) {
+    kv *it = ITEMS(m.u.o);
+    KCHAN_LOCK();
+    kmutex_free(it);
+    it[1] = kint(KME);
+    kv r = it[0];
+    it[0] = KUNIT;
+    KCHAN_UNLOCK();
+    krelease(m);
+    return r;
+}
+
+static kv kmutex_put(kv m, kv value) {
+    kv *it = ITEMS(m.u.o);
+    KCHAN_LOCK();
+    it[0] = value;
+    it[1] = kint(0);
+    KCHAN_WAKE();
+    KCHAN_UNLOCK();
+    krelease(m);
+    return KUNIT;
+}
+
 static kv kchan_new(kv cap) {
     if (cap.u.i < 1) kpanic("a channel holds at least one value");
     if (cap.u.i > ((i128)1 << 24)) kpanic("a channel cannot hold that many values");

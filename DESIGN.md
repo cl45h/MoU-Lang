@@ -471,7 +471,7 @@ fn both(xs: [int]) -> int {
 
 Medido en `tests/native/tasks.mou` y con cuatro tareas de cálculo en una máquina de 32 hilos: 0,63 s en serie, 0,17 s con tareas. Verificado con los sanitizers de hilos y de memoria.
 
-Faltan: exclusión mutua para estado compartido que cambia, cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
+Faltan: cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
 
 ### Canales: qué hay
 
@@ -497,6 +497,24 @@ fn worker(jobs: Chan[int], done: Chan[int]) {
 - Un valor que nadie recibe se libera con el canal. Si un `scope` espera a una tarea que quedó en `recv` sobre un canal que nadie cierra, el programa no termina: cerrar el canal es parte del protocolo.
 
 Verificado con cuatro tareas que reciben de un canal y devuelven por otro, bajo los sanitizers de hilos y de memoria.
+
+### Estado compartido: qué hay
+
+```mou
+fn bump(m: Mutex[int], times: int) {
+    for i in 0..times { m.update(fn(n: int) -> int { n + 1 }) }
+}
+```
+
+- `Mutex[T](v)` crea un valor que varias tareas comparten y que cambia. Como un canal, es un valor común y todas sus copias son el mismo.
+- `m.get()` da una copia del valor y `m.set(v)` lo reemplaza.
+- `m.update(f)` saca el valor, le aplica `f` y guarda lo que `f` devuelve. Mientras tanto ninguna otra tarea lo lee ni lo escribe: las que lo piden esperan. Leer con `get` y después guardar con `set` no da esa garantía; para cambiar un valor a partir del anterior va `update`.
+- Durante el `update` la función recibe el valor sin compartir, así que agregar a un array que está en un `Mutex` no lo copia.
+- Usar un `Mutex` dentro de su propio `update` es un panic, no un bloqueo eterno.
+- Efectos: `get`, `set` y `update` cuentan como esperar y como posible panic, y crear el `Mutex` aloca. `update` llama a un valor de función, así que además cuenta con todos los efectos, como cualquier llamada de ese tipo.
+- Con `mou run` y `mou test` funciona igual; ahí nunca hay que esperar. No se puede usar al calcular una constante.
+
+Verificado con ocho tareas que suman 5.000 veces cada una sobre el mismo `Mutex` (da 40.000), bajo los sanitizers de hilos y de memoria.
 
 ### Facilidad de uso: lo que el compilador deduce
 

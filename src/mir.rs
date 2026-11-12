@@ -2516,7 +2516,21 @@ impl<'a> Lower<'a> {
                 let task = self.expr(base);
                 self.finish_call(Callee::Native("task.wait"), vec![task], Vec::new(), span)
             }
-            Some(Res::Builtin(name @ ("chan.send" | "chan.recv" | "chan.close"))) => {
+            Some(Res::Builtin("mutex.update")) => {
+                // The value is taken out, changed and put back: nothing
+                // else reads or writes it in between.
+                let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
+                let Some(a) = args.first() else { return Operand::Const(Value::Unit) };
+                let shared = self.expr(base);
+                let m = self.temp();
+                self.set(m, shared);
+                let change = self.expr(&a.value);
+                let cell = || Operand::Place(Place::local(m));
+                let old = self.finish_call(Callee::Native("mutex.take"), vec![cell()], Vec::new(), span);
+                let new = self.finish_call(Callee::Indirect(change), vec![old], Vec::new(), span);
+                self.finish_call(Callee::Native("mutex.put"), vec![cell(), new], Vec::new(), span)
+            }
+            Some(Res::Builtin(name @ ("chan.send" | "chan.recv" | "chan.close" | "mutex.get" | "mutex.set"))) => {
                 let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
                 let mut ops = vec![self.expr(base)];
                 ops.extend(args.iter().map(|a| self.expr(&a.value)));

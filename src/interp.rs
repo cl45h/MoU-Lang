@@ -66,6 +66,47 @@ thread_local! {
     static CHANS: std::cell::RefCell<Vec<(std::collections::VecDeque<Value>, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// The values tasks share: for each, the value and whether an
+    /// `update` of it is running. A `Mutex` is its number here.
+    static CELLS: std::cell::RefCell<Vec<(Value, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What a `Mutex` does. Nothing waits here: the only one that can be
+/// updating a value is whoever asks for it.
+fn shared(name: &str, args: &[Value]) -> Result<Value, String> {
+    if FUEL.get() != u64::MAX {
+        return Err("a `Mutex` cannot be used while the program is compiled".into());
+    }
+    let given = |k: usize| args.get(k).cloned().unwrap_or(Value::Unit);
+    CELLS.with_borrow_mut(|cs| {
+        if name == "mutex.new" {
+            cs.push((given(0), false));
+            return Ok(Value::Int(cs.len() as i128 - 1));
+        }
+        let cell = match args.first() {
+            Some(Value::Int(c)) => cs.get_mut(*c as usize),
+            _ => None,
+        };
+        let Some((value, held)) = cell else { return Err(internal("a `Mutex` that is not one")) };
+        if *held && name != "mutex.put" {
+            return Err("this `Mutex` is used inside its own `update`".into());
+        }
+        Ok(match name {
+            "mutex.get" => value.clone(),
+            "mutex.take" => {
+                *held = true;
+                std::mem::replace(value, Value::Unit)
+            }
+            _ => {
+                *value = given(1);
+                *held = false;
+                Value::Unit
+            }
+        })
+    })
+}
+
 /// What a channel does. Here a task runs whole where it is started, so a
 /// channel holds whatever is sent and nothing can wait.
 fn channel(name: &str, args: &[Value]) -> Result<Value, String> {
@@ -138,6 +179,7 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
     };
     Ok(match name {
         _ if name.starts_with("chan.") => channel(name, args)?,
+        _ if name.starts_with("mutex.") => shared(name, args)?,
         "task.open" => Value::Int(0),
         "task.close" => Value::Unit,
         "task.wait" => match args.first() {

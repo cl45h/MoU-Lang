@@ -39,6 +39,8 @@ pub enum Ty {
     Task(Ty)
     // A channel between tasks, of values of that type.
     Chan(Ty)
+    // A value shared between tasks, that one of them changes at a time.
+    Mutex(Ty)
 }
 
 pub struct ParamSig { name: str, mode: parser.Mode, ty: Ty, optional: bool }
@@ -252,6 +254,7 @@ pub fn same(a: Ty, b: Ty) -> bool {
         (Ty.Range(x), Ty.Range(y)) => same(x, y)
         (Ty.Task(x), Ty.Task(y)) => same(x, y)
         (Ty.Chan(x), Ty.Chan(y)) => same(x, y)
+        (Ty.Mutex(x), Ty.Mutex(y)) => same(x, y)
         (Ty.Optional(x), Ty.Optional(y)) => same(x, y)
         (Ty.Result(x, e), Ty.Result(y, f)) => same(x, y) && same(e, f)
         _ => a == b
@@ -313,6 +316,7 @@ pub fn open(t: Ty) -> bool {
         Ty.Range(x) => open(x)
         Ty.Task(x) => open(x)
         Ty.Chan(x) => open(x)
+        Ty.Mutex(x) => open(x)
         Ty.Optional(x) => open(x)
         Ty.Result(x, e) => open(x) || open(e)
         _ => false
@@ -347,6 +351,7 @@ pub fn concretize(t: Ty) -> Ty {
         Ty.Range(x) => Ty.Range(concretize(x))
         Ty.Task(x) => Ty.Task(concretize(x))
         Ty.Chan(x) => Ty.Chan(concretize(x))
+        Ty.Mutex(x) => Ty.Mutex(concretize(x))
         Ty.Optional(x) => Ty.Optional(concretize(x))
         Ty.Struct(i, ts) => Ty.Struct(i, concretize_all(ts))
         Ty.Enum(i, ts) => Ty.Enum(i, concretize_all(ts))
@@ -393,6 +398,7 @@ pub fn subst(t: Ty, env: [Binding]) -> Ty {
         Ty.Range(x) => Ty.Range(subst(x, env))
         Ty.Task(x) => Ty.Task(subst(x, env))
         Ty.Chan(x) => Ty.Chan(subst(x, env))
+        Ty.Mutex(x) => Ty.Mutex(subst(x, env))
         Ty.Optional(x) => Ty.Optional(subst(x, env))
         Ty.Result(x, e) => Ty.Result(subst(x, env), subst(e, env))
         Ty.Fn(sig) => Ty.Fn(subst_sig(sig, env))
@@ -453,6 +459,7 @@ pub fn bind(pat: Ty, actual: Ty, env: mut [Binding]) {
         (Ty.Range(p), Ty.Range(t)) => bind(p, t, mut env)
         (Ty.Task(p), Ty.Task(t)) => bind(p, t, mut env)
         (Ty.Chan(p), Ty.Chan(t)) => bind(p, t, mut env)
+        (Ty.Mutex(p), Ty.Mutex(t)) => bind(p, t, mut env)
         (Ty.Optional(p), Ty.Optional(t)) => bind(p, t, mut env)
         (Ty.Optional(p), _) => bind(p, actual, mut env)
         (Ty.Result(p, pe), Ty.Result(t, te)) => {
@@ -532,6 +539,7 @@ pub fn undecided(t: Ty) -> bool {
         Ty.Range(x) => undecided(x)
         Ty.Task(x) => undecided(x)
         Ty.Chan(x) => undecided(x)
+        Ty.Mutex(x) => undecided(x)
         Ty.Optional(x) => undecided(x)
         Ty.Result(x, e) => undecided(x) || undecided(e)
         _ => false
@@ -559,6 +567,7 @@ pub fn concrete(t: Ty) -> bool {
         Ty.Range(x) => concrete(x)
         Ty.Task(x) => concrete(x)
         Ty.Chan(x) => concrete(x)
+        Ty.Mutex(x) => concrete(x)
         Ty.Optional(x) => concrete(x)
         Ty.Result(x, e) => concrete(x) && concrete(e)
         Ty.Fn(sig) => {
@@ -602,6 +611,7 @@ pub fn plain(t: Ty) -> str {
         Ty.Range(x) => "range {plain(x)}"
         Ty.Task(x) => "task {plain(x)}"
         Ty.Chan(x) => "chan {plain(x)}"
+        Ty.Mutex(x) => "mutex {plain(x)}"
         Ty.Optional(x) => "{plain(x)}?"
         Ty.Result(x, e) => "{plain(x)} ! {plain(e)}"
         Ty.Param(n) => "'{n}"

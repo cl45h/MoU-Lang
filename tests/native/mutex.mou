@@ -1,0 +1,32 @@
+import std.io
+
+fn bump(m: Mutex[int], times: int) -> int {
+    for i in 0..times { m.update(fn(n: int) -> int { n + 1 }) }
+    times
+}
+
+fn note(log: Mutex[[str]], who: str) {
+    log.update(fn(xs: [str]) -> [str] {
+        var ys = xs
+        ys.push(who)
+        ys
+    })
+}
+
+fn main() ! io.Error {
+    let m = Mutex[int](0)
+    let log = Mutex[[str]]([])
+    scope s {
+        var ts: [Task[int]] = []
+        for i in 0..8 { ts.push(s.spawn(bump(m, 5000))) }
+        for i in 0..3 { s.spawn(note(log, "tarea")) }
+        var asked = 0
+        for t in ts { asked += t.wait() }
+        io.print("{asked}")?
+    }
+    io.print("{m.get()} {log.get().len}")?
+    m.set(7)
+    let k = 3
+    m.update(fn(n: int) -> int { n * k })
+    io.print("{m.get()}")?
+}

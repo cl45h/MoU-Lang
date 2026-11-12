@@ -564,6 +564,7 @@ impl Checker {
             types.Ty.Range(x) => "range of {self.show(x)}"
             types.Ty.Task(x) => "Task[{self.show(x)}]"
             types.Ty.Chan(x) => "Chan[{self.show(x)}]"
+            types.Ty.Mutex(x) => "Mutex[{self.show(x)}]"
             types.Ty.Optional(x) => {
                 if is_never(x) { return "None" }
                 "{self.show(x)}?"
@@ -889,6 +890,7 @@ impl Checker {
                 if name == "Task" && args.len == 1 { return types.Ty.Task(args[0]) }
                 // `Chan[T]` is a channel of the language, on the same terms.
                 if name == "Chan" && args.len == 1 { return types.Ty.Chan(args[0]) }
+                if name == "Mutex" && args.len == 1 { return types.Ty.Mutex(args[0]) }
                 self.err(at, "unknown type `{name}`")
                 return types.Ty.Unknown
             }
@@ -4893,6 +4895,12 @@ impl Checker {
                                 self.set_res(e, Res.Builtin("chan.new"))
                                 return self.apply(types.Sig([param("capacity", types.Ty.Int("usize"))], types.Ty.Chan(item)), args, at)
                             }
+                            // `Mutex[T](v)`: a value tasks share, starting as `v`.
+                            if g.name == "Mutex" && targs.len == 1 && is_path(base) {
+                                let item = self.type_of_expr(targs[0])
+                                self.set_res(e, Res.Builtin("mutex.new"))
+                                return self.apply(types.Sig([param("value", item)], types.Ty.Mutex(item)), args, at)
+                            }
                         }
                         _ => {}
                     }
@@ -5117,6 +5125,24 @@ impl Checker {
                 if name == "close" {
                     self.set_res(e, Res.Builtin("chan.close"))
                     return self.apply(types.Sig([], types.Ty.Unit), args, at)
+                }
+                self.args_unchecked(args)
+                self.err(at, "type `{self.show(bt)}` has no method `{name}`")
+                types.Ty.Unknown
+            }
+            types.Ty.Mutex(t) => {
+                if name == "get" {
+                    self.set_res(e, Res.Builtin("mutex.get"))
+                    return self.apply(types.Sig([], t), args, at)
+                }
+                if name == "set" {
+                    self.set_res(e, Res.Builtin("mutex.set"))
+                    return self.apply(types.Sig([param("value", t)], types.Ty.Unit), args, at)
+                }
+                if name == "update" {
+                    self.set_res(e, Res.Builtin("mutex.update"))
+                    let change = types.Ty.Fn(types.Sig([param("", t)], t))
+                    return self.apply(types.Sig([param("change", change)], types.Ty.Unit), args, at)
                 }
                 self.args_unchecked(args)
                 self.err(at, "type `{self.show(bt)}` has no method `{name}`")

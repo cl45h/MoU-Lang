@@ -42,7 +42,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 
 - Rendimiento parejo con C: hoy iguala en bucles, cálculo numérico y structs de campos simples (números y `bool`) y opcionales de números, que ya van sin bloque de memoria. Sigue siendo varias veces más lento con enums, strings y structs que guardan otros valores, porque esos todavía van en bloques de memoria con etiqueta.
 - Referencias guardadas en structs y regiones explícitas.
-- Exclusión mutua entre tareas (lanzar tareas, esperar su resultado y pasarse valores por canales ya se puede).
+- Cancelar tareas, limitar la cantidad de hilos y la entrada y salida sin bloquear (tareas, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.
 - Parámetros `comptime`, tipos como valores y reflexión.
 - Structs con layout de C, buffers y callbacks en las llamadas a C (números, `bool`, strings y punteros opacos ya se pueden), y leer los headers en vez de declarar las funciones a mano.

@@ -3033,7 +3033,24 @@ impl Lower {
                         _ => return self.unsupported(at, "this call")
                     }
                 }
-                if name == "chan.send" || name == "chan.recv" || name == "chan.close" {
+                if name == "mutex.update" {
+                    // The value is taken out, changed and put back: nothing
+                    // else reads or writes it in between.
+                    match callee.kind {
+                        parser.Kind.Field(base, _) => {
+                            if args.len == 0 { return unit() }
+                            let shared = self.expr(base)
+                            let m = self.temp()
+                            self.set(m, shared)
+                            let change = self.expr(args[0].value)
+                            let old = self.finish_call(Callee.Native("mutex.take"), [local_op(m)], [], at)
+                            let fresh = self.finish_call(Callee.Indirect(change), [old], [], at)
+                            return self.finish_call(Callee.Native("mutex.put"), [local_op(m), fresh], [], at)
+                        }
+                        _ => return self.unsupported(at, "this call")
+                    }
+                }
+                if name == "chan.send" || name == "chan.recv" || name == "chan.close" || name == "mutex.get" || name == "mutex.set" {
                     match callee.kind {
                         parser.Kind.Field(base, _) => {
                             var ops = [self.expr(base)]
