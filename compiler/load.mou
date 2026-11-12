@@ -60,6 +60,151 @@ fn under(dir: str, rest: str) -> str {
     "{dir}/{rest}"
 }
 
+// The declarations written inside the blocks of others, each one before
+// those inside it. A declaration in a block is a declaration of its
+// module: it is written there to be next to what uses it.
+fn in_block(b: parser.Block, out: mut [parser.Decl]) {
+    for s in b.stmts {
+        match s {
+            parser.Stmt.Let(_, _, _, value) => {
+                if let Some(v) = value { in_expr(v, mut out) }
+            }
+            parser.Stmt.Assign(target, _, value) => {
+                in_expr(target, mut out)
+                in_expr(value, mut out)
+            }
+            parser.Stmt.Defer(e) => in_expr(e, mut out)
+            parser.Stmt.Do(e) => in_expr(e, mut out)
+            parser.Stmt.Item(d) => {
+                out.push(d)
+                in_decl(d, mut out)
+            }
+        }
+    }
+    if let Some(t) = b.tail { in_expr(t, mut out) }
+}
+
+fn in_cond(c: parser.Cond, out: mut [parser.Decl]) {
+    match c {
+        parser.Cond.Test(e) => in_expr(e, mut out)
+        parser.Cond.Bind(_, e) => in_expr(e, mut out)
+    }
+}
+
+fn in_expr(e: parser.Expr, out: mut [parser.Decl]) {
+    match e.kind {
+        parser.Kind.Str(parts) => {
+            for p in parts {
+                match p {
+                    parser.StrPart.Value(inner) => in_expr(inner, mut out)
+                    _ => {}
+                }
+            }
+        }
+        parser.Kind.Tuple(items) => {
+            for i in items { in_expr(i, mut out) }
+        }
+        parser.Kind.Array(items) => {
+            for i in items { in_expr(i, mut out) }
+        }
+        parser.Kind.Repeat(a, b) => {
+            in_expr(a, mut out)
+            in_expr(b, mut out)
+        }
+        parser.Kind.Blk(b) => in_block(b, mut out)
+        parser.Kind.Loop(b) => in_block(b, mut out)
+        parser.Kind.Unsafe(b) => in_block(b, mut out)
+        parser.Kind.If(c, then, otherwise) => {
+            in_cond(c, mut out)
+            in_block(then, mut out)
+            if let Some(x) = otherwise { in_expr(x, mut out) }
+        }
+        parser.Kind.Match(scrutinee, arms) => {
+            in_expr(scrutinee, mut out)
+            for arm in arms {
+                if let Some(g) = arm.guard { in_expr(g, mut out) }
+                in_expr(arm.body, mut out)
+            }
+        }
+        parser.Kind.For(_, iter, body) => {
+            in_expr(iter, mut out)
+            in_block(body, mut out)
+        }
+        parser.Kind.While(c, body) => {
+            in_cond(c, mut out)
+            in_block(body, mut out)
+        }
+        parser.Kind.Closure(_, _, _, body) => in_block(body, mut out)
+        parser.Kind.Scope(_, body) => in_block(body, mut out)
+        parser.Kind.With(bindings, body) => {
+            for b in bindings { in_expr(b.value, mut out) }
+            in_block(body, mut out)
+        }
+        parser.Kind.Comptime(x) => in_expr(x, mut out)
+        parser.Kind.Try(x) => in_expr(x, mut out)
+        parser.Kind.Return(x) => {
+            if let Some(v) = x { in_expr(v, mut out) }
+        }
+        parser.Kind.Break(x) => {
+            if let Some(v) = x { in_expr(v, mut out) }
+        }
+        parser.Kind.Unary(_, x) => in_expr(x, mut out)
+        parser.Kind.Cast(x, _) => in_expr(x, mut out)
+        parser.Kind.Field(x, _) => in_expr(x, mut out)
+        parser.Kind.Binary(_, lhs, rhs) => {
+            in_expr(lhs, mut out)
+            in_expr(rhs, mut out)
+        }
+        parser.Kind.Range(lo, hi, _) => {
+            if let Some(x) = lo { in_expr(x, mut out) }
+            if let Some(x) = hi { in_expr(x, mut out) }
+        }
+        parser.Kind.Call(callee, args) => {
+            in_expr(callee, mut out)
+            for a in args { in_expr(a.value, mut out) }
+        }
+        parser.Kind.Index(base, args) => {
+            in_expr(base, mut out)
+            for a in args { in_expr(a, mut out) }
+        }
+        parser.Kind.Catch(x, _, handler) => {
+            in_expr(x, mut out)
+            in_block(handler, mut out)
+        }
+        _ => {}
+    }
+}
+
+fn in_decl(d: parser.Decl, out: mut [parser.Decl]) {
+    match d.kind {
+        parser.DeclKind.Fn(f) => {
+            for p in f.params {
+                if let Some(e) = p.default { in_expr(e, mut out) }
+            }
+            for w in f.conds { in_expr(w, mut out) }
+            if let Some(b) = f.body { in_expr(b, mut out) }
+        }
+        parser.DeclKind.Struct(s) => {
+            for f in s.fields {
+                if let Some(e) = f.default { in_expr(e, mut out) }
+            }
+        }
+        parser.DeclKind.Enum(en) => {
+            for v in en.variants {
+                if let Some(e) = v.value { in_expr(e, mut out) }
+            }
+        }
+        parser.DeclKind.Trait(t) => {
+            for m in t.methods { in_decl(m, mut out) }
+        }
+        parser.DeclKind.Impl(i) => {
+            for m in i.decls { in_decl(m, mut out) }
+        }
+        parser.DeclKind.Const(_, _, value) => in_expr(value, mut out)
+        parser.DeclKind.Alias(_, _, _) => {}
+    }
+}
+
 impl Loader {
     // Parses a module and, first, the modules it imports. Returns its number.
     fn module(mut self, name: str, path: str, src: str) -> int {
@@ -114,6 +259,10 @@ impl Loader {
         }
         let first = self.merged.decls.len as int
         for d in file.decls { self.merged.decls.push(d) }
+        // A declaration inside a block is one of the module.
+        var nested: [parser.Decl] = []
+        for d in file.decls { in_decl(d, mut nested) }
+        for d in nested { self.merged.decls.push(d) }
         self.modules[id] = Module(name, path, first, self.merged.decls.len as int, imports, file.profile, true)
         id
     }

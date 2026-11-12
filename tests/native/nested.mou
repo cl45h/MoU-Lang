@@ -1,0 +1,32 @@
+import std.io
+
+fn outer(n: int) -> int {
+    struct Acc { total: int }
+    fn twice(x: int) -> int { x * 2 }
+    enum Step { Add(int), Stop }
+    impl Acc {
+        fn add(mut self, x: int) { self.total += twice(x) }
+    }
+    let steps = [Step.Add(n), Step.Add(1), Step.Stop]
+    var acc = Acc(0)
+    for s in steps {
+        match s {
+            Step.Add(x) => acc.add(x)
+            Step.Stop => {}
+        }
+    }
+    if n > 0 {
+        fn bonus() -> int {
+            let limit = 100
+            fn inner() -> int { 7 }
+            inner() + 0 * limit
+        }
+        return acc.total + bonus()
+    }
+    acc.total
+}
+
+fn main() -> int ! io.Error {
+    io.print("{outer(5)} {outer(0)}")?
+    0
+}

@@ -46,7 +46,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Parámetros `comptime`, tipos como valores y reflexión.
 - Punteros, strings y structs en las llamadas a C, y leer los headers en vez de declarar las funciones a mano.
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
-- Declaraciones dentro de un bloque y los bloques `scope` y `with`: se leen, pero el compilador avisa que no los soporta.
+- Los bloques `scope` y `with`, que son parte de las regiones y del contexto: se leen, pero el compilador avisa que no los soporta.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).
 

@@ -140,7 +140,10 @@ impl Loader {
             self.merged.imports = file.imports;
         }
         let start = self.merged.decls.len();
+        // A declaration inside a block is one of the module.
+        let nested = crate::ast::nested_decls(&file.decls);
         self.merged.decls.extend(file.decls);
+        self.merged.decls.extend(nested);
         self.modules[id] = Some(Module { name, decls: start..self.merged.decls.len(), imports, profile });
         id
     }

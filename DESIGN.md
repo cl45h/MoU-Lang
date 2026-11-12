@@ -448,6 +448,7 @@ Faltan: leer el header en vez de declarar a mano, strings, punteros, structs con
 
 Tres reglas sacan texto que no agrega seguridad:
 
+- Una declaración (`fn`, `struct`, `enum`, `impl`, `trait`, constante o alias) se puede escribir dentro de un bloque, al lado de lo que la usa. Es una declaración del módulo: su nombre se ve en todo el módulo y no puede repetirse, y una función escrita así no ve las variables de la función donde está.
 - `n as char` da el carácter con ese código, y hace panic si el número no es el código de ninguno (negativo, mayor que 0x10FFFF, o entre 0xD800 y 0xDFFF). `c as int` da el código. `text.parse_float(s)` lee un número con fracción de un texto (`-12.5e3`) y da `None` si el texto es otra cosa.
 - Un entero se convierte solo a un tipo que contiene todos sus valores: `u8` a `int`, `i32` a `i64`, `u32` a `i64`. Vale al asignar, al pasar argumentos, al devolver y al mezclar tipos en una operación (`u8 + int` se calcula como `int`). Cuando se puede perder información (`int` a `u8`, con signo a sin signo) sigue haciendo falta `as`, que comprueba el valor. `usize` e `isize` no se convierten solos, porque su tamaño depende de la máquina.
 - `var xs = [1, 2]` es un array que puede crecer. Con `let` sigue siendo de largo fijo.

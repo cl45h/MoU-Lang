@@ -1484,9 +1484,8 @@ impl<'a> Lower<'a> {
             crate::ast::Stmt::Expr(e) => {
                 self.expr(e);
             }
-            crate::ast::Stmt::Decl(d) => {
-                self.unsupported(d.span, "declarations inside a block");
-            }
+            // Lowered with the declarations of the module.
+            crate::ast::Stmt::Decl(_) => {}
         }
     }
 

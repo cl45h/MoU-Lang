@@ -1482,9 +1482,8 @@ impl Lower {
             parser.Stmt.Do(e) => {
                 let _ = self.expr(e)
             }
-            parser.Stmt.Item(d) => {
-                let _ = self.unsupported(check.Span(d.line, d.col), "declarations inside a block")
-            }
+            // Lowered with the declarations of the module.
+            parser.Stmt.Item(_) => {}
         }
     }
 }

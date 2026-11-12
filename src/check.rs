@@ -3303,11 +3303,8 @@ impl<'a> Checker<'a> {
                 self.discard(&t, e.span);
                 t == Ty::Never
             }
-            Stmt::Decl(d) => {
-                let (kind, name) = d.kind.describe();
-                self.report.skipped_decls.push(format!("nested {kind} {name}"));
-                false
-            }
+            // Checked with the declarations of the module, where the loader put it.
+            Stmt::Decl(_) => false,
         }
     }
 

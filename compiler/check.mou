@@ -2996,10 +2996,8 @@ impl Checker {
                 self.discard(t, at_expr(e))
                 is_never(t)
             }
-            parser.Stmt.Item(d) => {
-                self.skipped_decls.push("nested {describe(d.kind)}")
-                false
-            }
+            // Checked with the declarations of the module, where the loader put it.
+            parser.Stmt.Item(_) => false
         }
     }
 

@@ -3,7 +3,7 @@
 
 use crate::lexer::Span;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct File {
     pub profile: Option<String>,
     pub imports: Vec<Import>,
@@ -13,7 +13,7 @@ pub struct File {
     pub modules: Vec<Module>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Module {
     /// Dotted name, as in `import`. Empty for the program's own file.
     pub name: String,
@@ -24,7 +24,7 @@ pub struct Module {
     pub profile: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModImport {
     /// Name the importing module uses.
     pub alias: String,
@@ -37,7 +37,7 @@ pub struct ModImport {
     pub decls: Vec<Decl>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Import {
     /// `c`, `cpp` or `py` for foreign imports.
     pub origin: Option<String>,
@@ -47,13 +47,13 @@ pub struct Import {
     pub decls: Vec<Decl>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Attr {
     pub name: String,
     pub args: Vec<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Decl {
     pub attrs: Vec<Attr>,
     pub public: bool,
@@ -61,7 +61,7 @@ pub struct Decl {
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DeclKind {
     Fn(FnDecl),
     Struct(StructDecl),
@@ -96,7 +96,7 @@ pub enum Mode {
     Own,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FnDecl {
     pub name: String,
     pub generics: Vec<GenParam>,
@@ -108,7 +108,7 @@ pub struct FnDecl {
     pub body: Option<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub comptime: bool,
     pub name: String,
@@ -117,21 +117,21 @@ pub struct Param {
     pub default: Option<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GenParam {
     Type { name: String, bounds: Vec<Type> },
     Region(String),
     Comptime { name: String, ty: Type },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StructDecl {
     pub name: String,
     pub generics: Vec<GenParam>,
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Field {
     pub public: bool,
     pub name: String,
@@ -139,21 +139,21 @@ pub struct Field {
     pub default: Option<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub name: String,
     pub generics: Vec<GenParam>,
     pub variants: Vec<Variant>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Variant {
     pub name: String,
     pub fields: Vec<(Option<String>, Type)>,
     pub value: Option<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TraitDecl {
     pub name: String,
     pub generics: Vec<GenParam>,
@@ -161,7 +161,7 @@ pub struct TraitDecl {
     pub methods: Vec<Decl>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ImplDecl {
     pub generics: Vec<GenParam>,
     pub trait_: Option<Type>,
@@ -169,7 +169,7 @@ pub struct ImplDecl {
     pub decls: Vec<Decl>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Type {
     Path { path: Vec<String>, args: Vec<GenArg> },
     Slice(Box<Type>),
@@ -184,25 +184,25 @@ pub enum Type {
     TypeType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GenArg {
     Type(Type),
     Expr(Expr),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StrPart {
     Lit(String),
     Expr(Expr),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ExprKind {
     Int(String),
     Float(String),
@@ -240,33 +240,33 @@ pub enum ExprKind {
     Catch { expr: Box<Expr>, binding: Option<String>, handler: Block },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Arg {
     pub label: Option<String>,
     pub mode: Mode,
     pub value: Expr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Cond {
     Expr(Expr),
     Let(Pattern, Expr),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Arm {
     pub pat: Pattern,
     pub guard: Option<Expr>,
     pub body: Expr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub tail: Option<Box<Expr>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Let { mutable: bool, pat: Pattern, ty: Option<Type>, value: Option<Expr> },
     Assign { target: Expr, op: &'static str, value: Expr },
@@ -275,7 +275,7 @@ pub enum Stmt {
     Decl(Decl),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Pattern {
     Wildcard,
     Literal(Box<Expr>),
@@ -543,5 +543,134 @@ pub fn dump(parsed: &Result<File, crate::lexer::Error>) -> String {
         out.push_str(&decl_text(d));
         out.push('\n');
     }
+    out
+}
+
+/// The declarations written inside the blocks of others, each one before
+/// those inside it. A declaration in a block is a declaration of its
+/// module: it is written there to be next to what uses it.
+pub fn nested_decls(decls: &[Decl]) -> Vec<Decl> {
+    fn in_block(b: &Block, out: &mut Vec<Decl>) {
+        for s in &b.stmts {
+            match s {
+                Stmt::Let { value, .. } => {
+                    if let Some(v) = value {
+                        in_expr(v, out);
+                    }
+                }
+                Stmt::Assign { target, value, .. } => {
+                    in_expr(target, out);
+                    in_expr(value, out);
+                }
+                Stmt::Defer(e) | Stmt::Expr(e) => in_expr(e, out),
+                Stmt::Decl(d) => {
+                    out.push(d.clone());
+                    in_decl(d, out);
+                }
+            }
+        }
+        if let Some(t) = &b.tail {
+            in_expr(t, out);
+        }
+    }
+    fn in_cond(c: &Cond, out: &mut Vec<Decl>) {
+        match c {
+            Cond::Expr(e) | Cond::Let(_, e) => in_expr(e, out),
+        }
+    }
+    fn in_expr(e: &Expr, out: &mut Vec<Decl>) {
+        match &e.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Char(_) | ExprKind::Bool(_) | ExprKind::Path(_) | ExprKind::Continue => {}
+            ExprKind::Str(parts) => {
+                for p in parts {
+                    if let StrPart::Expr(inner) = p {
+                        in_expr(inner, out);
+                    }
+                }
+            }
+            ExprKind::Tuple(items) | ExprKind::Array(items) => items.iter().for_each(|i| in_expr(i, out)),
+            ExprKind::ArrayRepeat(a, b) => {
+                in_expr(a, out);
+                in_expr(b, out);
+            }
+            ExprKind::Block(b) | ExprKind::Loop(b) | ExprKind::Unsafe(b) => in_block(b, out),
+            ExprKind::If { cond, then, els } => {
+                in_cond(cond, out);
+                in_block(then, out);
+                if let Some(x) = els {
+                    in_expr(x, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                in_expr(scrutinee, out);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        in_expr(g, out);
+                    }
+                    in_expr(&arm.body, out);
+                }
+            }
+            ExprKind::For { iter, body, .. } => {
+                in_expr(iter, out);
+                in_block(body, out);
+            }
+            ExprKind::While { cond, body } => {
+                in_cond(cond, out);
+                in_block(body, out);
+            }
+            ExprKind::Closure { body, .. } | ExprKind::Scope { body, .. } => in_block(body, out),
+            ExprKind::With { bindings, body } => {
+                bindings.iter().for_each(|b| in_expr(&b.1, out));
+                in_block(body, out);
+            }
+            ExprKind::Comptime(x) | ExprKind::Try(x) => in_expr(x, out),
+            ExprKind::Return(x) | ExprKind::Break(x) => {
+                if let Some(x) = x {
+                    in_expr(x, out);
+                }
+            }
+            ExprKind::Unary { expr: x, .. } | ExprKind::Cast { expr: x, .. } | ExprKind::Field { base: x, .. } => in_expr(x, out),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                in_expr(lhs, out);
+                in_expr(rhs, out);
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                for x in [lo, hi].into_iter().flatten() {
+                    in_expr(x, out);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                in_expr(callee, out);
+                args.iter().for_each(|a| in_expr(&a.value, out));
+            }
+            ExprKind::Index { base, args } => {
+                in_expr(base, out);
+                args.iter().for_each(|a| in_expr(a, out));
+            }
+            ExprKind::Catch { expr: x, handler, .. } => {
+                in_expr(x, out);
+                in_block(handler, out);
+            }
+        }
+    }
+    fn in_decl(d: &Decl, out: &mut Vec<Decl>) {
+        match &d.kind {
+            DeclKind::Fn(f) => {
+                f.params.iter().filter_map(|p| p.default.as_ref()).for_each(|e| in_expr(e, out));
+                f.where_.iter().for_each(|e| in_expr(e, out));
+                if let Some(b) = &f.body {
+                    in_expr(b, out);
+                }
+            }
+            DeclKind::Struct(s) => s.fields.iter().filter_map(|f| f.default.as_ref()).for_each(|e| in_expr(e, out)),
+            DeclKind::Enum(e) => e.variants.iter().filter_map(|v| v.value.as_ref()).for_each(|e| in_expr(e, out)),
+            DeclKind::Trait(t) => t.methods.iter().for_each(|m| in_decl(m, out)),
+            DeclKind::Impl(i) => i.decls.iter().for_each(|m| in_decl(m, out)),
+            DeclKind::Const { value, .. } => in_expr(value, out),
+            DeclKind::TypeAlias { .. } => {}
+        }
+    }
+    let mut out = Vec::new();
+    decls.iter().for_each(|d| in_decl(d, &mut out));
     out
 }
