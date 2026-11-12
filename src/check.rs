@@ -74,6 +74,16 @@ fn plain_param(name: &str, ty: Ty) -> ParamSig {
     ParamSig { name: name.into(), mode: Mode::Let, ty, optional: false }
 }
 
+/// What is known of a type: its name, what it is, the name and the type
+/// of each field of a struct, and the same for each variant of an enum.
+#[derive(Debug, Clone, Default)]
+pub struct Meta {
+    pub name: String,
+    pub kind: &'static str,
+    pub fields: Vec<(String, String)>,
+    pub variants: Vec<(String, Vec<(String, String)>)>,
+}
+
 pub struct Report {
     pub checked_fns: usize,
     pub skipped_decls: Vec<String>,
@@ -255,6 +265,8 @@ pub struct Info {
     pub traits: Vec<TraitInfo>,
     /// Calls of functions that return `ref mut` whose result is written to.
     pub ref_writes: std::collections::HashSet<(usize, usize)>,
+    /// What each `meta.info(T)` gives, by the instance and the call.
+    pub metas: HashMap<(usize, usize), Meta>,
 }
 
 #[cfg(test)]
@@ -285,6 +297,7 @@ fn checker(file: &File) -> Checker<'_> {
         externs: Vec::new(),
         extern_ids: HashMap::new(),
         foreign_todo: Vec::new(),
+        metas: HashMap::new(),
         cstructs: HashMap::new(),
         unsafe_depth: 0,
         ref_calls: HashMap::new(),
@@ -343,6 +356,7 @@ pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
             dyns: c.dyns,
             externs: c.externs,
             cstructs: c.cstructs,
+            metas: c.metas,
             traits: c.traits,
             ref_writes: c.ref_writes,
         };
@@ -1391,6 +1405,7 @@ struct Checker<'a> {
     /// The headers of C whose functions are taken in once the structs
     /// they may name have their fields.
     foreign_todo: Vec<(usize, String, String, &'a [Decl])>,
+    metas: HashMap<(usize, usize), Meta>,
     /// The structs marked `@c`, and the type of C each one is.
     cstructs: HashMap<usize, String>,
     /// How many `unsafe` blocks are open.
@@ -2735,6 +2750,38 @@ impl<'a> Checker<'a> {
         let fields = self.structs[i].fields.iter().map(|f| (f.name.clone(), f.ty.clone(), f.optional)).collect();
         let owner = Ty::Struct(i, tparams.iter().map(|n| Ty::Param(n.clone())).collect());
         self.construct(e, Res::StructCtor(i), owner, &tparams, fields, explicit, hint, args, span)
+    }
+
+    /// `meta.info(T)`: what is known of the type `T`, written where it is asked for.
+    fn meta_info(&mut self, e: &Expr, module: usize, args: &[Arg], span: Span) -> Ty {
+        let [arg] = args else {
+            self.args_unchecked(args);
+            self.err(span, "`info` takes one type, as in `meta.info(Config)`");
+            return Ty::Unknown;
+        };
+        let ty = self.type_of_expr(&arg.value);
+        self.types.insert((self.inst, id(&arg.value)), ty.clone());
+        let Some(Global::Struct(i)) = self.global_in(module, "Info") else { return Ty::Unknown };
+        let mut meta = Meta { name: self.show(&ty), kind: "other", ..Meta::default() };
+        match &ty {
+            Ty::Struct(s, targs) if *s < self.structs.len() => {
+                meta.kind = "struct";
+                let tys = self.structs[*s].field_tys(targs);
+                meta.fields = self.structs[*s].fields.iter().zip(&tys).map(|(f, t)| (f.name.clone(), self.show(t))).collect();
+            }
+            Ty::Enum(en, targs) => {
+                meta.kind = "enum";
+                for (v, variant) in self.enums[*en].variants.iter().enumerate() {
+                    let tys = self.enums[*en].field_tys(v, targs);
+                    let fields = variant.fields.iter().zip(&tys).map(|((n, _), t)| (n.clone().unwrap_or_default(), self.show(t))).collect();
+                    meta.variants.push((variant.name.clone(), fields));
+                }
+            }
+            _ => {}
+        }
+        self.metas.insert((self.inst, id(e)), meta);
+        self.res.insert((self.inst, id(e)), Res::Builtin("meta.info"));
+        Ty::Struct(i, Vec::new())
     }
 
     /// `s.spawn(e)`: `e` is what the task runs. It is checked as the body of
@@ -4495,6 +4542,11 @@ impl<'a> Checker<'a> {
             // The name is missing or private: already reported.
             self.args_unchecked(args);
             return Ty::Unknown;
+        }
+        if let Some((m, "info")) = target {
+            if self.mods.get(m).is_some_and(|n| n == "std.meta") && matches!(callee.kind, ExprKind::Field { .. }) {
+                return self.meta_info(e, m, args, span);
+            }
         }
         if let Some((m, name)) = target {
                 if name == "panic" && self.global_in(m, name).is_none() && matches!(callee.kind, ExprKind::Path(_)) {

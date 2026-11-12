@@ -609,7 +609,7 @@ impl Checker {
     // A bound as it is written: `Into[str]`.
     fn show_bound(self, b: Bound) -> str { self.with_args(self.traits[b.tr].name, b.args) }
 
-    fn show(self, t: types.Ty) -> str {
+    pub fn show(self, t: types.Ty) -> str {
         match t {
             types.Ty.Int(k) => k
             types.Ty.Float(k) => k
@@ -3251,6 +3251,24 @@ impl Checker {
 
     // ---- patterns ----
 
+    // `meta.info(T)`: what is known of the type `T`, written where it is asked for.
+    fn meta_info(mut self, e: parser.Expr, module: int, args: [parser.Arg], at: Span) -> types.Ty {
+        if args.len != 1 {
+            self.args_unchecked(args)
+            self.err(at, "`info` takes one type, as in `meta.info(Config)`")
+            return types.Ty.Unknown
+        }
+        let ty = self.type_of_expr(args[0].value)
+        self.types.set(self.slot(args[0].value), ty)
+        match self.global_in(module, "Info") {
+            Some(Global.Struct(i)) => {
+                self.set_res(e, Res.Builtin("meta.info"))
+                types.Ty.Struct(i, [])
+            }
+            _ => types.Ty.Unknown
+        }
+    }
+
     pub fn struct_field_tys(self, i: int, args: [types.Ty]) -> [types.Ty] {
         let env = types.targ_env(self.structs[i].tparams, args)
         var out: [types.Ty] = []
@@ -4953,6 +4971,11 @@ impl Checker {
         let plain_name = match callee.kind {
             parser.Kind.Name(_) => true
             _ => false
+        }
+        if let Some(g) = target {
+            if g.name == "info" && !plain_name && g.module < (self.mods.len as int) {
+                if self.mods[g.module] == "std.meta" { return self.meta_info(e, g.module, args, at) }
+            }
         }
         match target {
             None => {

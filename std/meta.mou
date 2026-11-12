@@ -1,0 +1,16 @@
+//! What a program can ask about its own types.
+
+/// A field of a struct or of a variant: its name (empty when it has
+/// none) and its type, as it is written.
+pub struct Field { name: str, ty: str }
+
+/// A variant of an enum.
+pub struct Variant { name: str, fields: [Field] }
+
+/// A type: its name, what it is (`struct`, `enum` or `other`), the fields
+/// of a struct and the variants of an enum.
+pub struct Info { name: str, kind: str, fields: [Field], variants: [Variant] }
+
+/// `meta.info(T)` is what is known of the type `T`. The compiler writes
+/// it where it is asked for: nothing is looked up while the program runs.
+pub fn info() -> Info { Info("", "other", [], []) }

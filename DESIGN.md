@@ -421,7 +421,9 @@ Las constantes globales (`let TABLE: [u32] = crc_table()`) y las expresiones `co
 - Hay un límite de pasos (100 millones de bloques para todo el programa), para que un bucle infinito sea un error y no un compilador colgado.
 - `comptime e` no puede usar variables de la función donde está, porque no tienen valor al compilar. Puede usar constantes globales y llamar a cualquier función.
 
-Límites conocidos: `comptime` toma toda la expresión que sigue (`comptime a + b` calcula la suma), así que para mezclar con algo que se calcula al ejecutar van paréntesis: `(comptime a) + b`. Una constante que guarda una closure se sigue calculando al arrancar. Faltan los parámetros `comptime`, los tipos como valores (`fn Matrix(comptime T: type) -> type`) y la reflexión con `info(T)`.
+Límites conocidos: `comptime` toma toda la expresión que sigue (`comptime a + b` calcula la suma), así que para mezclar con algo que se calcula al ejecutar van paréntesis: `(comptime a) + b`. Una constante que guarda una closure se sigue calculando al arrancar. Faltan los parámetros `comptime` y los tipos como valores (`fn Matrix(comptime T: type) -> type`).
+
+Reflexión: `meta.info(T)` (de `import std.meta`) da lo que se sabe del tipo `T` como un valor común: `name`, `kind` (`struct`, `enum` u `other`), `fields` (nombre y tipo de cada campo, como texto) y `variants` (cada variante con sus campos). `T` es cualquier tipo, también uno genérico con sus argumentos (`meta.info(Pair[int])`). El compilador escribe el valor donde se lo pide; al ejecutar no se busca nada. Sirve para recorrer los campos de un tipo (armar un encabezado, un esquema, un mensaje), pero todavía no para leer o escribir el valor de un campo por su nombre: eso necesita los tipos como valores.
 
 ### Funciones de C: qué hay
 

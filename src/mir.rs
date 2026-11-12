@@ -511,6 +511,8 @@ pub fn dump(p: &Program) -> String {
             Value::None => "none".to_string(),
             Value::Fn(f) => format!("fn {f}"),
             Value::Enum(e, v, fields) if fields.is_empty() => format!("enum {e}.{v}"),
+            Value::Struct(i, fields) => format!("struct {i}({})", fields.iter().map(value).collect::<Vec<_>>().join(", ")),
+            Value::Array(items) => format!("[{}]", items.iter().map(value).collect::<Vec<_>>().join(", ")),
             other => format!("{other:?}"),
         }
     }
@@ -2634,6 +2636,25 @@ impl<'a> Lower<'a> {
                 let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
                 let task = self.expr(base);
                 self.finish_call(Callee::Native(name), vec![task], Vec::new(), span)
+            }
+            Some(Res::Builtin("meta.info")) => {
+                // The struct `Info` says which structs its parts are.
+                let (Ty::Struct(i, _), Some(meta)) = (self.ty(e), self.info.metas.get(&(self.inst, id(e)))) else {
+                    return self.unsupported(span, "this `info`");
+                };
+                let part = |k: usize| match self.info.structs[i].fields.get(k).map(|f| &f.ty) {
+                    Some(Ty::Slice(t)) => match &**t {
+                        Ty::Struct(s, _) => *s,
+                        _ => 0,
+                    },
+                    _ => 0,
+                };
+                let (field, variant) = (part(2), part(3));
+                let text = |s: &str| Value::Str(s.into());
+                let list = |vs: Vec<Value>| Value::Array(Rc::new(vs));
+                let fields = |fs: &[(String, String)]| list(fs.iter().map(|(n, t)| Value::Struct(field, vec![text(n), text(t)])).collect());
+                let variants = list(meta.variants.iter().map(|(n, fs)| Value::Struct(variant, vec![text(n), fields(fs)])).collect());
+                Operand::Const(Value::Struct(i, vec![text(&meta.name), text(meta.kind), fields(&meta.fields), variants]))
             }
             Some(Res::Builtin("mutex.update")) => {
                 // The value is taken out, changed and put back: nothing

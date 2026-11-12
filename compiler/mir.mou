@@ -977,6 +977,20 @@ fn c_type(t: types.Ty) -> str {
     }
 }
 
+// The struct the items of the array in field `k` are, or 0.
+fn slice_struct(fields: [check.FieldInfo], k: int) -> int {
+    if k >= (fields.len as int) { return 0 }
+    match fields[k].ty {
+        types.Ty.Slice(item) => {
+            match item {
+                types.Ty.Struct(s, _) => s
+                _ => 0
+            }
+        }
+        _ => 0
+    }
+}
+
 // The errors by line and column, each line and message once.
 fn sorted_errors(errors: [lexer.Error]) -> [lexer.Error] {
     var at: [int] = []
@@ -3201,6 +3215,46 @@ impl Lower {
                         _ => return self.unsupported(at, "this call")
                     }
                 }
+                if name == "meta.info" {
+                    if args.len == 0 { return unit() }
+                    match self.ty(e) {
+                        types.Ty.Struct(i, _) => {
+                            // The struct `Info` says which structs its parts are.
+                            let field = slice_struct(self.c.structs[i].fields, 2)
+                            let variant = slice_struct(self.c.structs[i].fields, 3)
+                            let t = self.ty(args[0].value)
+                            var kind = "other"
+                            var fields: [Value] = []
+                            var variants: [Value] = []
+                            match t {
+                                types.Ty.Struct(s, targs) => {
+                                    if s < (self.c.structs.len as int) {
+                                        kind = "struct"
+                                        let tys = self.c.struct_field_tys(s, targs)
+                                        for k in 0..(tys.len as int) { fields.push(Value.Struct(field, [Value.Str(self.c.structs[s].fields[k].name), Value.Str(self.c.show(tys[k]))])) }
+                                    }
+                                }
+                                types.Ty.Enum(en, targs) => {
+                                    kind = "enum"
+                                    for v in 0..(self.c.enums[en].variants.len as int) {
+                                        let variant_info = self.c.enums[en].variants[v]
+                                        let tys = self.c.variant_field_tys(en, v, targs)
+                                        var parts: [Value] = []
+                                        for k in 0..(tys.len as int) {
+                                            var label = ""
+                                            if let Some(n) = variant_info.fields[k].label { label = n }
+                                            parts.push(Value.Struct(field, [Value.Str(label), Value.Str(self.c.show(tys[k]))]))
+                                        }
+                                        variants.push(Value.Struct(variant, [Value.Str(variant_info.name), Value.Array(parts)]))
+                                    }
+                                }
+                                _ => {}
+                            }
+                            return Operand.Const(Value.Struct(i, [Value.Str(self.c.show(t)), Value.Str(kind), Value.Array(fields), Value.Array(variants)]))
+                        }
+                        _ => return self.unsupported(at, "this `info`")
+                    }
+                }
                 if name == "mutex.update" {
                     // The value is taken out, changed and put back: nothing
                     // else reads or writes it in between.
@@ -3434,6 +3488,16 @@ fn value_text(v: Value) -> str {
         Value.None => "none"
         Value.Fn(f) => "fn {f}"
         Value.Enum(e, variant) => "enum {e}.{variant}"
+        Value.Struct(i, fields) => {
+            var parts: [str] = []
+            for f in fields { parts.push(value_text(f)) }
+            "struct {i}({text.join(parts, ", ")})"
+        }
+        Value.Array(items) => {
+            var parts: [str] = []
+            for x in items { parts.push(value_text(x)) }
+            "[{text.join(parts, ", ")}]"
+        }
         _ => "value"
     }
 }

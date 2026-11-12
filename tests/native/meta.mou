@@ -1,0 +1,27 @@
+import std.io
+import std.meta
+
+struct Config { host: str, port: u16, tags: [str], limit: int? }
+enum Shape { Dot, Circle(f64), Rect(w: f64, h: f64) }
+struct Pair[T] { a: T, b: T }
+
+// The names of the fields of a type, as a line of a table.
+fn header(t: meta.Info) -> str {
+    var line = t.name
+    for f in t.fields { line = "{line} | {f.name}: {f.ty}" }
+    line
+}
+
+fn main() ! io.Error {
+    io.print(header(meta.info(Config)))?
+    io.print(header(meta.info(Pair[int])))?
+    let s = meta.info(Shape)
+    io.print("{s.kind} {s.name} {s.variants.len}")?
+    for v in s.variants {
+        var parts: [str] = []
+        for f in v.fields { parts.push("{f.name}:{f.ty}") }
+        io.print("  {v.name} {parts.len} {parts}")?
+    }
+    let n = meta.info(int)
+    io.print("{n.name} {n.kind} {n.fields.len} {meta.info([Config]).name}")?
+}
