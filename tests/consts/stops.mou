@@ -1,0 +1,8 @@
+fn check(n: int) -> int {
+    assert(n > 5, "n is {n}")
+    n
+}
+fn main() -> int {
+    let a = comptime check(3)
+    a
+}

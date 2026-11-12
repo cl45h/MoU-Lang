@@ -40,7 +40,7 @@ commands:
   types    print what the checker finds out about each expression, in the same form
   lowered  print the program lowered to MIR, as the lowering written in Mou does
   fx       print the effects of each function, as the analysis written in Mou does
-  rawc     print the C written straight from the MIR, as the compiler written in Mou does";
+  rawc     print the C of the program, or its mistakes one to a line, as the compiler written in Mou does";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -277,9 +277,8 @@ fn fx_text(path: &str, src: &str) -> String {
     }
 }
 
-/// The C of a program without what the compiler written in Mou does not do
-/// yet: its effects are not checked and no constant is computed while
-/// compiling.
+/// The C of a program, as `mou c` gives it, or its mistakes one to a line:
+/// what the compiler written in Mou prints.
 fn rawc_text(path: &str, src: &str) -> String {
     let errors = |es: Vec<lexer::Error>| es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect();
     let (sources, file) = load::load(path, src);
@@ -300,6 +299,11 @@ fn rawc_text(path: &str, src: &str) -> String {
         return errors(mistakes);
     }
     let mistakes = effects::check(&program);
+    if !mistakes.is_empty() {
+        return errors(mistakes);
+    }
+    let mut program = program;
+    let mistakes = comptime::eval(&mut program);
     if !mistakes.is_empty() {
         return errors(mistakes);
     }
@@ -528,7 +532,8 @@ mod selfhost {
     /// The compiler written in Mou gives, stage by stage and for every file
     /// of the project, what this compiler gives: tokens, tree, modules,
     /// declarations, types, MIR, effects and C. `tests/decls`, `tests/types`,
-    /// `tests/lower`, `tests/own` and `tests/fx` hold programs with mistakes, which both must report in
+    /// `tests/lower`, `tests/own`, `tests/fx` and `tests/consts` hold programs
+    /// with mistakes, which both must report in
     /// the same words. At the end it compiles itself, and the compiler that
     /// comes out writes the same C again.
     ///
@@ -546,7 +551,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own", "tests/fx"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own", "tests/fx", "tests/consts"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {

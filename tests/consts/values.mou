@@ -1,0 +1,38 @@
+import std.text
+struct P { x: int, name: str }
+enum Shape { Dot, Box(w: int, h: int), Tag(str) }
+let A: int = 6 * 7
+let B: u8 = 200
+let B2: u8 = B +| 100
+let C: i8 = 100
+let C2: i8 = C +% 100
+let D: int = 1 << 40
+let E: [int] = [1, 2, 3]
+let F: [str] = ["a", "b{A}"]
+let G: P = P(A, "p{B}")
+let H: Shape = Shape.Box(2, 3)
+let I: Shape = Shape.Dot
+let J: (int, bool, char) = (A / 5, A > 40, 'x')
+let K: int? = Some(A % 5)
+let L: str = text.join(F, "-")
+let M: f64 = 2.5
+let N: f64 = 1.5 * 4.0 + 0.25
+let O: f64 = 10 as f64
+let Q: [u8] = [1, 2, 255]
+let R: int = sum_to(100)
+let S: str = "{H} {I} {J} {K} {E}"
+let T: [[int]] = [[1], [2, 3], []]
+let U: int = -A
+let V: bool = !(A == 42)
+
+fn sum_to(n: int) -> int {
+    var s = 0
+    for k in 0..=n { s += k }
+    s
+}
+
+fn main() -> int {
+    let w = comptime sum_to(10) * 2
+    let z = comptime text.repeat("ab", 3)
+    A + D + R + w + E[1] + G.x + (L.len as int) + (z.len as int) + (S.len as int)
+}

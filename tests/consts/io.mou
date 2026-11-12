@@ -1,0 +1,7 @@
+import std.io
+fn noisy() -> int {
+    io.print("x") catch e { }
+    1
+}
+let A: int = noisy()
+fn main() { }

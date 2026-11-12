@@ -1,0 +1,3 @@
+fn big() -> int { 9223372036854775807 }
+let A: int = big() + 1
+fn main() { }

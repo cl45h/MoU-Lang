@@ -1,0 +1,1280 @@
+// Works out, while the program is compiled, its constants and its
+// `comptime` expressions: it runs their middle form, and what is left in
+// the program is their value. It follows `src/comptime.rs` and
+// `src/interp.rs`.
+//
+// What runs here has no input or output, so that compiling a program
+// twice gives the same program, and it has a limit of steps. A panic
+// becomes a mistake of the compilation.
+//
+// A constant is left to be worked out when the program starts, instead,
+// when it needs what this file cannot yet do exactly as the compiler in
+// Rust does: `f32`, the character after another, and numbers with a
+// fraction written with more than 15 digits.
+
+import std.raw
+import std.text
+import effects
+import lexer
+import mir
+
+// How many blocks all the constants of a program may run.
+let LIMIT: int = 100000000
+
+let MAX_DEPTH: int = 100000
+
+let U128_LIMIT: str = "the interpreter only supports `u128` values below 2^127"
+
+fn pow2(bits: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..bits { out = out * 2 }
+    out
+}
+
+let MIN_ALL: i128 = (0 - pow2(126)) * 2
+let MAX_ALL: i128 = pow2(126) - 1 + pow2(126)
+
+// What stops the run: a panic of the program, or (`quit`) something this
+// file does not do, which is not a mistake of the program.
+struct Oops { msg: str, quit: bool }
+
+fn panic_of(msg: str) -> Oops { Oops(msg, false) }
+
+fn quit() -> Oops { Oops("", true) }
+
+fn internal(what: str) -> Oops { Oops("internal error in the interpreter: {what}", false) }
+
+struct Frame { func: int, block: int, locals: [mir.Value], env: [mir.Value] }
+
+struct Bounds { lo: i128, hi: i128 }
+
+fn kind_bits(k: str) -> int {
+    if k == "i8" || k == "u8" { return 8 }
+    if k == "i16" || k == "u16" { return 16 }
+    if k == "i32" || k == "u32" { return 32 }
+    64
+}
+
+fn bounds(kind: str) -> Bounds {
+    if kind == "lit" || kind == "i128" { return Bounds(MIN_ALL, MAX_ALL) }
+    if kind == "u128" { return Bounds(0, MAX_ALL) }
+    let bits = kind_bits(kind)
+    if text.starts_with(kind, "i") { return Bounds(0 - pow2(bits - 1), pow2(bits - 1) - 1) }
+    Bounds(0, pow2(bits) - 1)
+}
+
+// ---- numbers with a fraction ----
+
+// The number a text stands for, when it can be read exactly: up to 15
+// digits and a small power of ten.
+fn parse_float(written: str) -> f64? {
+    var digits: i128 = 0
+    var count = 0
+    var exp = 0
+    var seen_dot = false
+    var negative = false
+    var in_exp = false
+    var exp_negative = false
+    var exp_value = 0
+    var any = false
+    for ch in text.chars(written) {
+        if ch == '_' { continue }
+        if in_exp {
+            if ch == '-' {
+                exp_negative = true
+                continue
+            }
+            if ch == '+' { continue }
+            if !text.is_digit(ch) { return None }
+            exp_value = exp_value * 10 + (ch as int - '0' as int)
+            if exp_value > 400 { return None }
+            continue
+        }
+        if ch == '-' {
+            negative = true
+            continue
+        }
+        if ch == 'e' || ch == 'E' {
+            in_exp = true
+            continue
+        }
+        if ch == '.' {
+            seen_dot = true
+            continue
+        }
+        if !text.is_digit(ch) { return None }
+        any = true
+        let d = ch as int - '0' as int
+        if digits == 0 && d == 0 {
+            if seen_dot { exp -= 1 }
+            continue
+        }
+        digits = digits * 10 + (d as i128)
+        count += 1
+        if count > 15 { return None }
+        if seen_dot { exp -= 1 }
+    }
+    if !any { return None }
+    if exp_negative { exp -= exp_value } else { exp += exp_value }
+    var out = digits as f64
+    if digits == 0 {
+        if negative { return Some(0.0 - 0.0) }
+        return Some(0.0)
+    }
+    if exp > 22 || exp < -22 { return None }
+    var scale = 1.0
+    var k = exp
+    if k < 0 { k = 0 - k }
+    for i in 0..k { scale = scale * 10.0 }
+    if exp >= 0 { out = out * scale } else { out = out / scale }
+    if negative { out = 0.0 - out }
+    Some(out)
+}
+
+// A number with a fraction as a value, when its text is that of a number.
+fn float_value(x: f64) -> mir.Value ! Oops {
+    let shown = "{x}"
+    for ch in text.chars(shown) {
+        if ch == 'n' || ch == 'N' || ch == 'i' { return quit() }
+    }
+    mir.Value.Float(shown)
+}
+
+fn float_of(written: str) -> f64 ! Oops {
+    match parse_float(written) {
+        Some(x) => x
+        None => return quit()
+    }
+}
+
+// ---- whole numbers ----
+
+struct Checked { ok: bool, v: i128 }
+
+fn add_checked(a: i128, b: i128) -> Checked {
+    if b > 0 && a > MAX_ALL - b { return Checked(false, 0) }
+    if b < 0 && a < MIN_ALL - b { return Checked(false, 0) }
+    Checked(true, a + b)
+}
+
+fn sub_checked(a: i128, b: i128) -> Checked {
+    if b < 0 && a > MAX_ALL + b { return Checked(false, 0) }
+    if b > 0 && a < MIN_ALL + b { return Checked(false, 0) }
+    Checked(true, a - b)
+}
+
+fn mul_checked(a: i128, b: i128) -> Checked {
+    if a == 0 || b == 0 { return Checked(true, 0) }
+    if a == -1 {
+        if b == MIN_ALL { return Checked(false, 0) }
+        return Checked(true, 0 - b)
+    }
+    if b == -1 {
+        if a == MIN_ALL { return Checked(false, 0) }
+        return Checked(true, 0 - a)
+    }
+    if a > 0 {
+        if b > 0 && a > MAX_ALL / b { return Checked(false, 0) }
+        if b < 0 && b < MIN_ALL / a { return Checked(false, 0) }
+    } else {
+        if b > 0 && a < MIN_ALL / b { return Checked(false, 0) }
+        if b < 0 && a < MAX_ALL / b { return Checked(false, 0) }
+    }
+    Checked(true, a * b)
+}
+
+fn overflow(op: str, kind: str) -> Oops {
+    if kind == "u128" { return panic_of(U128_LIMIT) }
+    if kind == "lit" { return panic_of("integer overflow: the result of `{op}` does not fit in 128 bits") }
+    panic_of("integer overflow: the result of `{op}` does not fit in `{kind}`")
+}
+
+fn int_op(op: str, kind: str, a: i128, b: i128) -> i128 ! Oops {
+    let range = bounds(kind)
+    let lo = range.lo
+    let hi = range.hi
+    var bits = kind_bits(kind)
+    if kind == "lit" || kind == "i128" || kind == "u128" { bits = 128 }
+    if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+        var r = Checked(false, 0)
+        if op == "+" { r = add_checked(a, b) }
+        if op == "-" { r = sub_checked(a, b) }
+        if op == "*" { r = mul_checked(a, b) }
+        if op == "/" || op == "%" {
+            if b == 0 { return panic_of("division by zero") }
+            if !(a == MIN_ALL && b == -1) {
+                if op == "/" { r = Checked(true, a / b) } else { r = Checked(true, a % b) }
+            }
+        }
+        if r.ok && lo <= r.v && r.v <= hi { return r.v }
+        return overflow(op, kind)
+    }
+    if op == "+%" || op == "-%" || op == "*%" {
+        var r: i128 = 0
+        if op == "+%" { r = a +% b }
+        if op == "-%" { r = a -% b }
+        if op == "*%" { r = a *% b }
+        return wrap(op, kind, bits, lo, hi, r)?
+    }
+    if op == "+|" || op == "-|" || op == "*|" {
+        var r = Checked(false, 0)
+        var up = false
+        if op == "+|" {
+            r = add_checked(a, b)
+            up = b > 0
+        }
+        if op == "-|" {
+            r = sub_checked(a, b)
+            up = b < 0
+        }
+        if op == "*|" {
+            r = mul_checked(a, b)
+            up = (a < 0) == (b < 0)
+        }
+        // With no exact result, it does not even fit in 128 bits.
+        if kind == "u128" {
+            if !r.ok { return overflow(op, kind) }
+            if r.v >= 0 { return r.v }
+            return 0
+        }
+        if !r.ok {
+            if up { return hi }
+            return lo
+        }
+        if r.v < lo { return lo }
+        if r.v > hi { return hi }
+        return r.v
+    }
+    if op == "<<" || op == ">>" {
+        let width = if kind == "lit" { 127 } else { bits }
+        if b < 0 || b >= (width as i128) { return panic_of("a shift by {b} is out of range") }
+        let by = b as int
+        if op == ">>" { return shift_right(a, by) }
+        if kind == "lit" {
+            // The bits pushed out must all be copies of the sign.
+            let top = shift_right(a, 127 - by)
+            if top != 0 && top != -1 { return overflow(op, kind) }
+            return a *% pow2_wrapping(by)
+        }
+        return wrap(op, kind, bits, lo, hi, a *% pow2_wrapping(by))?
+    }
+    internal("a comparison treated as arithmetic")
+}
+
+// Two to a power, going around at 128 bits.
+fn pow2_wrapping(by: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..by { out = out *% 2 }
+    out
+}
+
+// A shift to the right that keeps the sign.
+fn shift_right(a: i128, by: int) -> i128 {
+    var out = a
+    for k in 0..by {
+        if out >= 0 {
+            out = out / 2
+        } else {
+            out = (out - 1) / 2
+        }
+    }
+    out
+}
+
+fn wrap(op: str, kind: str, bits: int, lo: i128, hi: i128, r: i128) -> i128 ! Oops {
+    if bits == 128 {
+        if kind == "u128" && r < 0 { return overflow(op, kind) }
+        return r
+    }
+    let size = pow2(bits)
+    var low = r % size
+    if low < 0 { low = low + size }
+    if lo < 0 && low > hi { return low - size }
+    low
+}
+
+// ---- values as text ----
+
+fn hex(v: int) -> str {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    if v == 0 { return "0" }
+    var out = ""
+    var left = v
+    while left > 0 {
+        out = "{digits[left % 16]}{out}"
+        left = left / 16
+    }
+    out
+}
+
+// A character as it is written inside quotes.
+fn escaped(ch: char, quote: char) -> str {
+    if ch == quote { return "\\{ch}" }
+    if ch == '\\' { return "\\\\" }
+    if ch == '\n' { return "\\n" }
+    if ch == '\r' { return "\\r" }
+    if ch == '\t' { return "\\t" }
+    let code = ch as int
+    if code == 0 { return "\\0" }
+    if code < 32 || code == 127 { return "\\u{{{hex(code)}}}" }
+    text.from_chars([ch])
+}
+
+fn quoted(s: str) -> str {
+    var out: [str] = []
+    out.push("\"")
+    for ch in text.chars(s) { out.push(escaped(ch, '"')) }
+    out.push("\"")
+    text.concat(out)
+}
+
+fn show_all(p: mir.Program, xs: [mir.Value]) -> str {
+    var out: [str] = []
+    for x in xs { out.push(show(p, x, false)) }
+    text.join(out, ", ")
+}
+
+// The text of a value. Strings and characters are in quotes unless at the top.
+fn show(p: mir.Program, v: mir.Value, top: bool) -> str {
+    match v {
+        mir.Value.Int(i) => "{i}"
+        mir.Value.Float(f) => f
+        mir.Value.Bool(b) => "{b}"
+        mir.Value.Char(ch) => {
+            if top { return text.from_chars([ch]) }
+            "'{escaped(ch, '\'')}'"
+        }
+        mir.Value.Str(s) => {
+            if top { return s }
+            quoted(s)
+        }
+        mir.Value.Unit => "()"
+        mir.Value.Tuple(xs) => "({show_all(p, xs)})"
+        mir.Value.Struct(i, xs) => {
+            let shape = p.structs[i]
+            if text.starts_with(shape.name, "dyn ") && xs.len > 0 { return show(p, xs[0], top) }
+            var parts: [str] = []
+            for k in 0..xs.len {
+                if k < shape.fields.len { parts.push("{shape.fields[k]}: {show(p, xs[k], false)}") }
+            }
+            "{shape.name}({text.join(parts, ", ")})"
+        }
+        mir.Value.Enum(e, variant) => p.enums[e].variants[variant].name
+        mir.Value.Variant(e, variant, xs) => {
+            let shape = p.enums[e].variants[variant]
+            var parts: [str] = []
+            for k in 0..xs.len {
+                if k >= shape.fields.len { break }
+                match shape.fields[k] {
+                    Some(f) => parts.push("{f}: {show(p, xs[k], false)}")
+                    None => parts.push(show(p, xs[k], false))
+                }
+            }
+            "{shape.name}({text.join(parts, ", ")})"
+        }
+        mir.Value.Array(xs) => "[{show_all(p, xs)}]"
+        mir.Value.None => "None"
+        mir.Value.Some(x) => "Some({show(p, x, false)})"
+        mir.Value.Ok(x) => show(p, x, top)
+        mir.Value.Err(x) => "error {show(p, x, false)}"
+        mir.Value.Fn(f) => "fn {p.fns[f].name}"
+        mir.Value.Closure(f, _) => "fn {p.fns[f].name}"
+    }
+}
+
+// ---- strings by their bytes ----
+
+fn utf8_len(ch: char) -> int {
+    let c = ch as int
+    if c < 128 { return 1 }
+    if c < 2048 { return 2 }
+    if c < 65536 { return 3 }
+    4
+}
+
+fn byte_len(s: str) -> int {
+    var n = 0
+    for ch in text.chars(s) { n += utf8_len(ch) }
+    n
+}
+
+// ---- places ----
+
+struct Step { index: bool, k: int }
+
+fn steps(fr: Frame, place: mir.Place) -> [Step] ! Oops {
+    var out: [Step] = []
+    for pr in place.proj {
+        match pr {
+            mir.Proj.Field(k) => out.push(Step(false, k))
+            mir.Proj.Index(op) => {
+                match operand(fr, op)? {
+                    mir.Value.Int(i) => {
+                        if i < 0 { return panic_of("index {i} is negative") }
+                        out.push(Step(true, i as int))
+                    }
+                    _ => return internal("an index that is not an integer")
+                }
+            }
+            // The steps a function that returns `ref mut` worked out.
+            mir.Proj.Path(l) => {
+                match fr.locals[l] {
+                    mir.Value.Array(pairs) => {
+                        var k = 0
+                        while k < (pairs.len as int) {
+                            if k + 1 >= (pairs.len as int) { return internal("a path with a step that is not a pair of integers") }
+                            match (pairs[k], pairs[k + 1]) {
+                                (mir.Value.Int(which), mir.Value.Int(i)) => {
+                                    if which == 0 {
+                                        out.push(Step(false, i as int))
+                                    } else {
+                                        if i < 0 { return panic_of("index {i} is negative") }
+                                        out.push(Step(true, i as int))
+                                    }
+                                }
+                                _ => return internal("a path with a step that is not a pair of integers")
+                            }
+                            k += 2
+                        }
+                    }
+                    _ => return internal("a path that is not an array")
+                }
+            }
+        }
+    }
+    out
+}
+
+fn out_of_range(k: int, count: int) -> Oops { panic_of("index {k} is out of range for length {count}") }
+
+// The part of a value a step leads to.
+fn part(v: mir.Value, s: Step) -> mir.Value ! Oops {
+    if s.index {
+        match v {
+            mir.Value.Array(xs) => {
+                if s.k >= (xs.len as int) { return out_of_range(s.k, xs.len as int) }
+                return xs[s.k]
+            }
+            _ => return internal("a projection on the wrong kind of value")
+        }
+    }
+    match v {
+        mir.Value.Tuple(xs) => field_of(xs, s.k)?
+        mir.Value.Struct(_, xs) => field_of(xs, s.k)?
+        mir.Value.Variant(_, _, xs) => field_of(xs, s.k)?
+        mir.Value.Some(x) => x
+        mir.Value.Ok(x) => x
+        mir.Value.Err(x) => x
+        _ => return internal("a projection on the wrong kind of value")
+    }
+}
+
+fn field_of(xs: [mir.Value], k: int) -> mir.Value ! Oops {
+    if k < 0 || k >= (xs.len as int) { return internal("a field that does not exist") }
+    xs[k]
+}
+
+fn read(fr: Frame, place: mir.Place) -> mir.Value ! Oops {
+    var v = fr.locals[place.local]
+    for s in steps(fr, place)? { v = part(v, s)? }
+    v
+}
+
+fn operand(fr: Frame, op: mir.Operand) -> mir.Value ! Oops {
+    match op {
+        mir.Operand.Const(v) => v
+        mir.Operand.At(p) => read(fr, p)?
+    }
+}
+
+fn with_item(xs: [mir.Value], k: int, v: mir.Value) -> [mir.Value] {
+    var out = xs
+    out[k] = v
+    out
+}
+
+// A value with the part at the end of the steps, from `at` on, replaced.
+fn replaced(v: mir.Value, path: [Step], at: int, new: mir.Value) -> mir.Value ! Oops {
+    if at >= (path.len as int) { return new }
+    let s = path[at]
+    let inner = replaced(part(v, s)?, path, at + 1, new)?
+    match v {
+        mir.Value.Array(xs) => mir.Value.Array(with_item(xs, s.k, inner))
+        mir.Value.Tuple(xs) => mir.Value.Tuple(with_item(xs, s.k, inner))
+        mir.Value.Struct(i, xs) => mir.Value.Struct(i, with_item(xs, s.k, inner))
+        mir.Value.Variant(e, variant, xs) => mir.Value.Variant(e, variant, with_item(xs, s.k, inner))
+        mir.Value.Some(_) => mir.Value.Some(inner)
+        mir.Value.Ok(_) => mir.Value.Ok(inner)
+        mir.Value.Err(_) => mir.Value.Err(inner)
+        _ => return internal("a projection on the wrong kind of value")
+    }
+}
+
+fn write(fr: mut Frame, place: mir.Place, value: mir.Value) -> bool ! Oops {
+    if place.proj.len == 0 {
+        fr.locals[place.local] = value
+        return true
+    }
+    let path = steps(fr, place)?
+    let whole = replaced(fr.locals[place.local], path, 0, value)?
+    fr.locals[place.local] = whole
+    true
+}
+
+// ---- rvalues ----
+
+fn all_of(fr: Frame, ops: [mir.Operand]) -> [mir.Value] ! Oops {
+    var out: [mir.Value] = []
+    for o in ops { out.push(operand(fr, o)?) }
+    out
+}
+
+struct RangeParts { has_lo: bool, lo: mir.Value, has_hi: bool, hi: mir.Value, inclusive: bool }
+
+fn range_parts(r: mir.Value) -> RangeParts ! Oops {
+    match r {
+        mir.Value.Tuple(parts) => {
+            if parts.len != 3 { return internal("a range with the wrong shape") }
+            var out = RangeParts(false, mir.Value.Unit, false, mir.Value.Unit, false)
+            match parts[0] {
+                mir.Value.Some(x) => {
+                    out.has_lo = true
+                    out.lo = x
+                }
+                _ => {}
+            }
+            match parts[1] {
+                mir.Value.Some(x) => {
+                    out.has_hi = true
+                    out.hi = x
+                }
+                _ => {}
+            }
+            match parts[2] {
+                mir.Value.Bool(b) => {
+                    out.inclusive = b
+                }
+                _ => {}
+            }
+            out
+        }
+        _ => return internal("a range with the wrong shape")
+    }
+}
+
+struct Offsets { lo: int, hi: int }
+
+// Where a range starts and ends in something of a length.
+fn slice_bounds(range: mir.Value, count: int) -> Offsets ! Oops {
+    let r = range_parts(range)?
+    var lo = 0
+    var hi = count
+    if r.has_lo {
+        match r.lo {
+            mir.Value.Int(i) => {
+                if i < 0 { return panic_of("the range bound {i} is negative") }
+                lo = i as int
+            }
+            _ => return internal("a range bound that is not an integer")
+        }
+    }
+    if r.has_hi {
+        match r.hi {
+            mir.Value.Int(i) => {
+                if i < 0 { return panic_of("the range bound {i} is negative") }
+                hi = i as int
+            }
+            _ => return internal("a range bound that is not an integer")
+        }
+        if r.inclusive { hi += 1 }
+    }
+    if lo > hi || hi > count { return panic_of("the range {lo}..{hi} is out of range for length {count}") }
+    Offsets(lo, hi)
+}
+
+// The order of two values: -1, 0 or 1, or 2 when they have none (a number
+// that is not one).
+fn compare(a: mir.Value, b: mir.Value) -> int ! Oops {
+    match (a, b) {
+        (mir.Value.Int(x), mir.Value.Int(y)) => {
+            if x < y { return -1 }
+            if x > y { return 1 }
+            0
+        }
+        (mir.Value.Float(x), mir.Value.Float(y)) => {
+            let p = float_of(x)?
+            let q = float_of(y)?
+            if p < q { return -1 }
+            if p > q { return 1 }
+            0
+        }
+        (mir.Value.Char(x), mir.Value.Char(y)) => {
+            if x < y { return -1 }
+            if x > y { return 1 }
+            0
+        }
+        (mir.Value.Str(x), mir.Value.Str(y)) => {
+            if x < y { return -1 }
+            if x > y { return 1 }
+            0
+        }
+        _ => return internal("a comparison of values that have no order")
+    }
+}
+
+fn same_values(a: mir.Value, b: mir.Value) -> bool ! Oops {
+    match (a, b) {
+        (mir.Value.Float(x), mir.Value.Float(y)) => float_of(x)? == float_of(y)?
+        _ => a == b
+    }
+}
+
+fn unary(op: mir.UnOp, n: mir.Num, v: mir.Value) -> mir.Value ! Oops {
+    match (op, v) {
+        (mir.UnOp.Neg, mir.Value.Int(i)) => {
+            match n {
+                mir.Num.Int(kind) => mir.Value.Int(int_op("-", kind, 0, i)?)
+                _ => return internal("a unary operator applied to the wrong kind of value")
+            }
+        }
+        (mir.UnOp.Neg, mir.Value.Float(f)) => float_value(0.0 - float_of(f)?)?
+        (mir.UnOp.Not, mir.Value.Bool(b)) => mir.Value.Bool(!b)
+        (mir.UnOp.BitNot, mir.Value.Int(i)) => {
+            match n {
+                mir.Num.Int(kind) => {
+                    let range = bounds(kind)
+                    if range.lo < 0 { return mir.Value.Int((0 - 1) - i) }
+                    if kind == "u128" { return panic_of(U128_LIMIT) }
+                    mir.Value.Int(range.hi - i)
+                }
+                _ => return internal("a unary operator applied to the wrong kind of value")
+            }
+        }
+        _ => return internal("a unary operator applied to the wrong kind of value")
+    }
+}
+
+// The bits of two whole numbers joined one by one.
+fn bits_op(op: str, x: i128, y: i128) -> i128 {
+    if op == "&" { return x & y }
+    if op == "|" { return x | y }
+    x ^ y
+}
+
+fn binary(op: str, n: mir.Num, a: mir.Value, b: mir.Value) -> mir.Value ! Oops {
+    if op == "==" { return mir.Value.Bool(same_values(a, b)?) }
+    if op == "!=" { return mir.Value.Bool(!same_values(a, b)?) }
+    if op == "<" || op == "<=" || op == ">" || op == ">=" {
+        let ord = compare(a, b)?
+        if op == "<" { return mir.Value.Bool(ord == -1) }
+        if op == "<=" { return mir.Value.Bool(ord == -1 || ord == 0) }
+        if op == ">" { return mir.Value.Bool(ord == 1) }
+        return mir.Value.Bool(ord == 1 || ord == 0)
+    }
+    if op == "&" || op == "|" || op == "^" {
+        match (a, b) {
+            (mir.Value.Int(x), mir.Value.Int(y)) => return mir.Value.Int(bits_op(op, x, y))
+            (mir.Value.Bool(x), mir.Value.Bool(y)) => {
+                if op == "&" { return mir.Value.Bool(x && y) }
+                if op == "|" { return mir.Value.Bool(x || y) }
+                return mir.Value.Bool(x != y)
+            }
+            _ => return internal("a bit operator applied to the wrong kind of value")
+        }
+    }
+    match (a, b) {
+        (mir.Value.Int(x), mir.Value.Int(y)) => {
+            match n {
+                mir.Num.Int(kind) => mir.Value.Int(int_op(op, kind, x, y)?)
+                _ => return internal("an arithmetic operator applied to the wrong kind of value")
+            }
+        }
+        (mir.Value.Float(x), mir.Value.Float(y)) => {
+            let p = float_of(x)?
+            let q = float_of(y)?
+            if op == "+" { return float_value(p + q)? }
+            if op == "-" { return float_value(p - q)? }
+            if op == "*" { return float_value(p * q)? }
+            if op == "/" { return float_value(p / q)? }
+            // The rest of a division of numbers with a fraction is left
+            // for when the program runs.
+            return quit()
+        }
+        _ => return internal("an arithmetic operator applied to the wrong kind of value")
+    }
+}
+
+fn opt_convert(c: mir.Conv?, v: mir.Value) -> mir.Value ! Oops {
+    match c {
+        Some(x) => convert(x, v)?
+        None => v
+    }
+}
+
+fn convert(c: mir.Conv, v: mir.Value) -> mir.Value ! Oops {
+    match (c, v) {
+        (mir.Conv.Fit(kind), mir.Value.Int(i)) => {
+            let range = bounds(kind)
+            if i < range.lo || i > range.hi { return panic_of("the value {i} is out of range for `{kind}`") }
+            v
+        }
+        (mir.Conv.ToFloat(single), mir.Value.Int(i)) => {
+            if single { return quit() }
+            float_value(i as f64)?
+        }
+        (mir.Conv.ToFloat(single), mir.Value.Float(_)) => {
+            if single { return quit() }
+            v
+        }
+        (mir.Conv.Wrap(inner), _) => mir.Value.Some(opt_convert(inner, v)?)
+        (mir.Conv.Inside(x), mir.Value.Some(y)) => mir.Value.Some(convert(x, y)?)
+        (mir.Conv.Inside(_), mir.Value.None) => v
+        (mir.Conv.Elems(x), mir.Value.Array(xs)) => {
+            var out: [mir.Value] = []
+            for y in xs { out.push(convert(x, y)?) }
+            mir.Value.Array(out)
+        }
+        (mir.Conv.Tuple(cs), mir.Value.Tuple(xs)) => {
+            var out: [mir.Value] = []
+            for k in 0..xs.len {
+                if k >= cs.len { break }
+                out.push(opt_convert(cs[k], xs[k])?)
+            }
+            mir.Value.Tuple(out)
+        }
+        (mir.Conv.Res(ok, _), mir.Value.Ok(x)) => mir.Value.Ok(opt_convert(ok, x)?)
+        (mir.Conv.Res(_, failed), mir.Value.Err(x)) => mir.Value.Err(opt_convert(failed, x)?)
+        _ => return internal("a conversion applied to the wrong kind of value")
+    }
+}
+
+fn fits(range: Bounds, kind: str, i: i128, shown: str) -> mir.Value ! Oops {
+    if range.lo <= i && i <= range.hi { return mir.Value.Int(i) }
+    panic_of("`as`: the value {shown} does not fit in `{kind}`")
+}
+
+fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir.Value ! Oops {
+    match rv {
+        mir.Rvalue.Use(op) => operand(fr, op)?
+        mir.Rvalue.Unary(op, n, v) => unary(op, n, operand(fr, v)?)?
+        mir.Rvalue.Binary(op, n, a, b) => {
+            let x = operand(fr, a)?
+            let y = operand(fr, b)?
+            binary(op, n, x, y)?
+        }
+        mir.Rvalue.CastInt(v, kind) => {
+            let range = bounds(kind)
+            match operand(fr, v)? {
+                mir.Value.Int(i) => fits(range, kind, i, "{i}")?
+                mir.Value.Char(ch) => fits(range, kind, (ch as int) as i128, "'{escaped(ch, '\'')}'")?
+                mir.Value.Bool(b) => {
+                    if b { return mir.Value.Int(1) }
+                    mir.Value.Int(0)
+                }
+                // A number with a fraction cut to a whole one is left for
+                // when the program runs.
+                mir.Value.Float(_) => return quit()
+                _ => return internal("a cast of a value that is not a number")
+            }
+        }
+        mir.Rvalue.CastFloat(v, single) => {
+            if single { return quit() }
+            match operand(fr, v)? {
+                mir.Value.Int(i) => float_value(i as f64)?
+                mir.Value.Float(f) => mir.Value.Float(f)
+                _ => return internal("a cast of a value that is not a number")
+            }
+        }
+        mir.Rvalue.Convert(v, c) => convert(c, operand(fr, v)?)?
+        mir.Rvalue.Tuple(ops) => mir.Value.Tuple(all_of(fr, ops)?)
+        mir.Rvalue.Struct(i, ops) => mir.Value.Struct(i, all_of(fr, ops)?)
+        mir.Rvalue.Enum(e, v, ops) => {
+            if ops.len == 0 { return mir.Value.Enum(e, v) }
+            mir.Value.Variant(e, v, all_of(fr, ops)?)
+        }
+        mir.Rvalue.Array(ops) => mir.Value.Array(all_of(fr, ops)?)
+        mir.Rvalue.Repeat(v, n) => {
+            match operand(fr, n)? {
+                mir.Value.Int(count) => {
+                    if count < 0 || count > 100000000 { return panic_of("an array of length {count} cannot be created") }
+                    let item = operand(fr, v)?
+                    var out: [mir.Value] = []
+                    for k in 0..(count as int) { out.push(item) }
+                    mir.Value.Array(out)
+                }
+                _ => return internal("an array length that is not an integer")
+            }
+        }
+        mir.Rvalue.Some(v) => mir.Value.Some(operand(fr, v)?)
+        mir.Rvalue.Ok(v) => mir.Value.Ok(operand(fr, v)?)
+        mir.Rvalue.Err(v) => mir.Value.Err(operand(fr, v)?)
+        mir.Rvalue.Is(v, tag) => {
+            match operand(fr, v)? {
+                mir.Value.Enum(_, variant) => mir.Value.Bool(variant == tag)
+                mir.Value.Variant(_, variant, _) => mir.Value.Bool(variant == tag)
+                mir.Value.None => mir.Value.Bool(tag == 0)
+                mir.Value.Ok(_) => mir.Value.Bool(tag == 0)
+                mir.Value.Some(_) => mir.Value.Bool(tag == 1)
+                mir.Value.Err(_) => mir.Value.Bool(tag == 1)
+                _ => return internal("a variant test on a value without variants")
+            }
+        }
+        mir.Rvalue.Len(v) => {
+            match operand(fr, v)? {
+                mir.Value.Array(xs) => mir.Value.Int(xs.len as i128)
+                mir.Value.Str(s) => mir.Value.Int(byte_len(s) as i128)
+                _ => return internal("the length of a value that has none")
+            }
+        }
+        mir.Rvalue.Get(base, index) => {
+            let b = operand(fr, base)?
+            let i = operand(fr, index)?
+            match (b, i) {
+                (mir.Value.Array(xs), mir.Value.Int(k)) => {
+                    if k < 0 || k >= (xs.len as i128) { return mir.Value.None }
+                    mir.Value.Some(xs[k as int])
+                }
+                _ => return internal("`get` on a value that is not an array")
+            }
+        }
+        mir.Rvalue.Push(_, _) => return internal("an array operation outside a statement")
+        mir.Rvalue.Pop(_) => return internal("an array operation outside a statement")
+        mir.Rvalue.Slice(base, range) => {
+            let r = operand(fr, range)?
+            match operand(fr, base)? {
+                mir.Value.Array(xs) => {
+                    let o = slice_bounds(r, xs.len as int)?
+                    var out: [mir.Value] = []
+                    for k in o.lo..o.hi { out.push(xs[k]) }
+                    mir.Value.Array(out)
+                }
+                mir.Value.Str(s) => {
+                    let o = slice_bounds(r, byte_len(s))?
+                    var out: [char] = []
+                    var at = 0
+                    for ch in text.chars(s) {
+                        let next = at + utf8_len(ch)
+                        // An end of the range inside a character splits it.
+                        if (o.lo > at && o.lo < next) || (o.hi > at && o.hi < next) { return panic_of("the range {o.lo}..{o.hi} splits a character of the string") }
+                        if at >= o.lo && next <= o.hi { out.push(ch) }
+                        at = next
+                    }
+                    mir.Value.Str(text.from_chars(out))
+                }
+                _ => return internal("a slice of a value that cannot be sliced")
+            }
+        }
+        mir.Rvalue.Format(parts) => {
+            var out: [str] = []
+            for part in parts {
+                match part {
+                    mir.FmtPart.Lit(s) => out.push(s)
+                    mir.FmtPart.Val(op) => out.push(show(p, operand(fr, op)?, true))
+                }
+            }
+            mir.Value.Str(text.concat(out))
+        }
+        mir.Rvalue.Chars(v) => {
+            match operand(fr, v)? {
+                mir.Value.Str(s) => {
+                    var out: [mir.Value] = []
+                    for ch in text.chars(s) { out.push(mir.Value.Char(ch)) }
+                    mir.Value.Array(out)
+                }
+                _ => return internal("the characters of a value that is not a string")
+            }
+        }
+        mir.Rvalue.Const(i) => {
+            // A constant that was left for when the program runs.
+            if i < 0 || i >= (consts.len as int) { return quit() }
+            consts[i]
+        }
+        mir.Rvalue.RangeStart(r, _) => {
+            let parts = range_parts(operand(fr, r)?)?
+            if !parts.has_lo { return panic_of("a range without a start cannot be iterated") }
+            parts.lo
+        }
+        mir.Rvalue.RangeHas(r, i) => {
+            let parts = range_parts(operand(fr, r)?)?
+            if !parts.has_hi { return mir.Value.Bool(true) }
+            let ord = compare(operand(fr, i)?, parts.hi)?
+            mir.Value.Bool(ord == -1 || (ord == 0 && parts.inclusive))
+        }
+        mir.Rvalue.RangeLast(r, i) => {
+            let parts = range_parts(operand(fr, r)?)?
+            if !parts.inclusive || !parts.has_hi { return mir.Value.Bool(false) }
+            mir.Value.Bool(same_values(parts.hi, operand(fr, i)?)?)
+        }
+        mir.Rvalue.Closure(f, ops) => mir.Value.Closure(f, all_of(fr, ops)?)
+        mir.Rvalue.Uninit => mir.Value.Unit
+        mir.Rvalue.Moved => mir.Value.Unit
+        mir.Rvalue.Capture(k) => {
+            if k < 0 || k >= (fr.env.len as int) { return internal("a capture that does not exist") }
+            fr.env[k]
+        }
+        mir.Rvalue.Succ(v, n) => {
+            match operand(fr, v)? {
+                mir.Value.Int(i) => {
+                    match n {
+                        mir.Num.Int(kind) => mir.Value.Int(int_op("+", kind, i, 1)?)
+                        _ => return internal("the successor of a value that has none")
+                    }
+                }
+                // The character after another is left for when the program runs.
+                mir.Value.Char(_) => return quit()
+                _ => return internal("the successor of a value that has none")
+            }
+        }
+    }
+}
+
+// A function of a module the compiler gives. Those that reach outside
+// the program do not get here: a constant cannot do input or output.
+fn native(name: str, args: [mir.Value]) -> mir.Value ! Oops {
+    if name == "raw.concat" {
+        match args[0] {
+            mir.Value.Array(parts) => {
+                var out: [str] = []
+                for q in parts {
+                    match q {
+                        mir.Value.Str(s) => out.push(s)
+                        _ => return internal("`concat` of a value that is not a string")
+                    }
+                }
+                return mir.Value.Str(text.concat(out))
+            }
+            _ => return internal("a built-in function given a value that is not an array")
+        }
+    }
+    if name == "raw.from_chars" {
+        match args[0] {
+            mir.Value.Array(items) => {
+                var out: [char] = []
+                for q in items {
+                    match q {
+                        mir.Value.Char(ch) => out.push(ch)
+                        _ => return internal("`from_chars` of a value that is not a character")
+                    }
+                }
+                return mir.Value.Str(text.from_chars(out))
+            }
+            _ => return internal("a built-in function given a value that is not an array")
+        }
+    }
+    if name == "path.join" {
+        match (args[0], args[1]) {
+            (mir.Value.Array(a), mir.Value.Array(b)) => {
+                var out = a
+                for x in b { out.push(x) }
+                return mir.Value.Array(out)
+            }
+            _ => return internal("a built-in function given a value that is not an array")
+        }
+    }
+    if name == "raw.hash" {
+        match args[0] {
+            mir.Value.Str(s) => return mir.Value.Int(raw.hash(s) as i128)
+            _ => return internal("a built-in function given a value that is not a string")
+        }
+    }
+    if name == "raw.mix" {
+        match args[0] {
+            mir.Value.Int(n) => {
+                // `mix` takes the lowest 64 bits, with their sign.
+                let size = pow2(64)
+                var low = n % size
+                if low < 0 { low = low + size }
+                if low >= pow2(63) { low = low - size }
+                return mir.Value.Int(raw.mix(low as int) as i128)
+            }
+            _ => return internal("`mix` of a value that is not an integer")
+        }
+    }
+    quit()
+}
+
+// ---- running ----
+
+// How a run ended: with a value, with a panic at a place, or given up.
+struct Ran { ok: bool, quit: bool, value: mir.Value, msg: str, line: int, col: int }
+
+fn stopped(o: Oops, line: int, col: int) -> Ran { Ran(false, o.quit, mir.Value.Unit, o.msg, line, col) }
+
+fn new_frame(p: mir.Program, func: int, args: [mir.Value], env: [mir.Value]) -> Frame {
+    var locals = args
+    while (locals.len as int) < p.fns[func].locals { locals.push(mir.Value.Unit) }
+    Frame(func, 0, locals, env)
+}
+
+fn find_back(writeback: [mir.Writeback], k: int) -> int {
+    for i in 0..(writeback.len as int) {
+        if writeback[i].arg == k { return i }
+    }
+    -1
+}
+
+// Runs a function without parameters to its end. `fuel` is how many
+// blocks may still run, in all.
+fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
+    var stack: [Frame] = []
+    stack.push(new_frame(p, func, [], []))
+    loop {
+        // The frame on top is taken out while its block runs, so that
+        // nothing else holds it and its locals change where they are.
+        var fr = Frame(0, 0, [], [])
+        match stack.pop() {
+            Some(x) => {
+                fr = x
+            }
+            None => return Ran(false, true, mir.Value.Unit, "", 0, 0)
+        }
+        let bb = p.fns[fr.func].blocks[fr.block]
+        if fuel == 0 { return Ran(false, false, mir.Value.Unit, "it runs for too long to be computed while compiling", bb.at.line, bb.at.col) }
+        fuel -= 1
+        for st in bb.stmts {
+            var failed: Oops? = None
+            match st.rv {
+                // The two operations that change an array where it is.
+                mir.Rvalue.Push(target, item) => {
+                    let done = push_item(mut fr, target, item) catch e {
+                        failed = Some(e)
+                        false
+                    }
+                    if done {
+                        let _ = write(mut fr, st.place, mir.Value.Unit) catch e {
+                            failed = Some(e)
+                            false
+                        }
+                    }
+                }
+                mir.Rvalue.Pop(target) => {
+                    let got = pop_item(mut fr, target) catch e {
+                        failed = Some(e)
+                        mir.Value.Unit
+                    }
+                    match failed {
+                        Some(_) => {}
+                        None => {
+                            let _ = write(mut fr, st.place, got) catch e {
+                                failed = Some(e)
+                                false
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let v = rvalue(p, consts, fr, st.rv) catch e {
+                        failed = Some(e)
+                        mir.Value.Unit
+                    }
+                    match failed {
+                        Some(_) => {}
+                        None => {
+                            let _ = write(mut fr, st.place, v) catch e {
+                                failed = Some(e)
+                                false
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(o) = failed { return stopped(o, st.at.line, st.at.col) }
+        }
+        let line = bb.at.line
+        let col = bb.at.col
+        match bb.term {
+            mir.Term.Goto(b) => {
+                fr.block = b
+                stack.push(fr)
+            }
+            mir.Term.Branch(c, yes, no) => {
+                let v = operand(fr, c) catch e { return stopped(e, line, col) }
+                match v {
+                    mir.Value.Bool(b) => {
+                        if b { fr.block = yes } else { fr.block = no }
+                    }
+                    _ => return stopped(internal("a branch on a value that is not a bool"), line, col)
+                }
+                stack.push(fr)
+            }
+            mir.Term.Call(callee, args, writeback, dest, next) => {
+                var vals: [mir.Value] = []
+                for a in args {
+                    let v = operand(fr, a) catch e { return stopped(e, line, col) }
+                    vals.push(v)
+                }
+                var target = -1
+                var env: [mir.Value] = []
+                match callee {
+                    mir.Callee.Fn(f) => {
+                        target = f
+                    }
+                    mir.Callee.Indirect(op) => {
+                        let v = operand(fr, op) catch e { return stopped(e, line, col) }
+                        match v {
+                            mir.Value.Fn(f) => {
+                                target = f
+                            }
+                            mir.Value.Closure(f, captured) => {
+                                target = f
+                                env = captured
+                            }
+                            _ => return stopped(internal("a call to a value that is not a function"), line, col)
+                        }
+                    }
+                    mir.Callee.Native(name) => {
+                        let result = native(name, vals) catch e { return stopped(e, line, col) }
+                        let _ = write(mut fr, dest, result) catch e { return stopped(e, line, col) }
+                        fr.block = next
+                        stack.push(fr)
+                        continue
+                    }
+                    mir.Callee.Panic => {
+                        var shown = ""
+                        if vals.len > 0 { shown = show(p, vals[0], true) }
+                        return stopped(panic_of(shown), line, col)
+                    }
+                    mir.Callee.Extern(x) => return stopped(panic_of("the C function `{p.externs[x].name}` can only be called in a compiled program: use `mou build`"), line, col)
+                    // Input and output are ruled out before anything runs.
+                    mir.Callee.Print => return stopped(quit(), line, col)
+                }
+                if (stack.len as int) + 1 >= MAX_DEPTH { return stopped(panic_of("stack overflow: more than {MAX_DEPTH} nested calls"), line, col) }
+                stack.push(fr)
+                stack.push(new_frame(p, target, vals, env))
+            }
+            mir.Term.Return(op) => {
+                let v = operand(fr, op) catch e { return stopped(e, line, col) }
+                var caller = Frame(0, 0, [], [])
+                match stack.pop() {
+                    Some(x) => {
+                        caller = x
+                    }
+                    None => return Ran(true, false, v, "", 0, 0)
+                }
+                let block = p.fns[caller.func].blocks[caller.block]
+                match block.term {
+                    mir.Term.Call(_, _, writeback, dest, next) => {
+                        for w in writeback {
+                            let _ = write(mut caller, w.place, fr.locals[w.arg]) catch e { return stopped(e, line, col) }
+                        }
+                        let _ = write(mut caller, dest, v) catch e { return stopped(e, line, col) }
+                        caller.block = next
+                        stack.push(caller)
+                    }
+                    _ => return stopped(internal("a return to a block that did not call"), line, col)
+                }
+            }
+            mir.Term.Panic(msg) => return stopped(panic_of(msg), line, col)
+            mir.Term.Unreachable => return stopped(internal("reached a block that has no terminator"), line, col)
+        }
+    }
+    Ran(false, true, mir.Value.Unit, "", 0, 0)
+}
+
+fn push_item(fr: mut Frame, target: mir.Place, item: mir.Operand) -> bool ! Oops {
+    let v = operand(fr, item)?
+    match read(fr, target)? {
+        mir.Value.Array(xs) => {
+            var grown = xs
+            grown.push(v)
+            let _ = write(mut fr, target, mir.Value.Array(grown))?
+            true
+        }
+        _ => return internal("`push` on a value that is not an array")
+    }
+}
+
+fn pop_item(fr: mut Frame, target: mir.Place) -> mir.Value ! Oops {
+    match read(fr, target)? {
+        mir.Value.Array(xs) => {
+            if xs.len == 0 { return mir.Value.None }
+            var left = xs
+            var last = mir.Value.Unit
+            if let Some(x) = left.pop() { last = x }
+            let _ = write(mut fr, target, mir.Value.Array(left))?
+            mir.Value.Some(last)
+        }
+        _ => return internal("`pop` on a value that is not an array")
+    }
+}
+
+// ---- the constants of a program ----
+
+fn shown(name: str) -> str {
+    let prefix = "constant "
+    if !text.starts_with(name, prefix) { return "this `comptime` expression" }
+    let cs = text.chars(name)
+    var out: [char] = []
+    for k in 9..cs.len { out.push(cs[k]) }
+    "the constant `{text.from_chars(out)}`"
+}
+
+// Whether a value is written where it is used, instead of read from the
+// table of constants.
+fn small(v: mir.Value) -> bool {
+    match v {
+        mir.Value.Int(_) => true
+        mir.Value.Float(_) => true
+        mir.Value.Bool(_) => true
+        mir.Value.Char(_) => true
+        mir.Value.Str(_) => true
+        mir.Value.Unit => true
+        mir.Value.None => true
+        _ => false
+    }
+}
+
+pub struct Result { program: mir.Program, values: [mir.Value], known: bool, errors: [lexer.Error] }
+
+// Works out the constants of a program. With `known`, `values` holds the
+// value of each one and the program reads the small ones where they are
+// used; without it, they are left for when the program starts.
+pub fn eval(p: mir.Program) -> Result {
+    if p.consts.len == 0 { return Result(p, [], true, []) }
+    let fx = effects.infer_from(p, p.consts)
+    var errors: [lexer.Error] = []
+    for f in p.consts {
+        if (fx.of[f] & effects.IO) != 0 {
+            var seen: [int] = []
+            let why = fx.cause(p, f, effects.IO, mut seen)
+            errors.push(lexer.Error("{shown(p.fns[f].name)} is computed when the program is compiled, where there is no input or output: {why}", p.fns[f].at.line, p.fns[f].at.col))
+        }
+    }
+    if errors.len > 0 { return Result(p, [], false, errors) }
+    var values: [mir.Value] = []
+    var fuel = LIMIT
+    for f in p.consts {
+        let ran = exec(p, values, f, mut fuel)
+        if ran.ok {
+            values.push(ran.value)
+            continue
+        }
+        if ran.quit { return Result(p, [], false, []) }
+        errors.push(lexer.Error("{shown(p.fns[f].name)} cannot be computed: {ran.msg}", ran.line, ran.col))
+        return Result(p, [], false, errors)
+    }
+    var fns: [mir.Func] = []
+    for f in p.fns {
+        var blocks: [mir.Block] = []
+        for b in f.blocks {
+            var stmts: [mir.Stmt] = []
+            for st in b.stmts {
+                var rv = st.rv
+                match st.rv {
+                    mir.Rvalue.Const(k) => {
+                        if small(values[k]) { rv = mir.Rvalue.Use(mir.Operand.Const(values[k])) }
+                    }
+                    _ => {}
+                }
+                stmts.push(mir.Stmt(st.place, rv, st.at))
+            }
+            blocks.push(mir.Block(stmts, b.term, b.at, b.done))
+        }
+        var g = f
+        g.blocks = blocks
+        fns.push(g)
+    }
+    var q = p
+    q.fns = fns
+    Result(q, values, true, [])
+}

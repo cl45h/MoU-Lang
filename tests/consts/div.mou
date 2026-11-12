@@ -1,0 +1,3 @@
+fn zero() -> int { 0 }
+let A: int = 10 / zero()
+fn main() { }

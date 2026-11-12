@@ -22,6 +22,7 @@
 import std.io
 import cgen
 import check
+import consts
 import effects
 import lexer
 import load
@@ -97,10 +98,15 @@ fn main() -> int ! io.Error {
             for e in ruled { io.print("error {e.line}:{e.col} {e.msg}")? }
             return 1
         }
+        let worked = consts.eval(lowered)
+        if worked.errors.len > 0 {
+            for e in worked.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 1
+        }
         let runtime = io.read_file(runtime_path)?
         var paths: [str] = []
         for m in program.modules { paths.push(m.path) }
-        let written = cgen.emit(lowered, paths, runtime) catch e {
+        let written = cgen.emit(worked.program, paths, runtime, worked.values) catch e {
             io.print("error 0:0 {e.msg}")?
             return 1
         }

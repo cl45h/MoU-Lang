@@ -1,0 +1,4 @@
+let XS: [int] = [1, 2, 3]
+fn at(i: int) -> int { XS[i] }
+let A: int = at(7)
+fn main() { }

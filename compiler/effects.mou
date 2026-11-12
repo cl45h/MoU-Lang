@@ -1481,6 +1481,66 @@ pub fn infer(p: mir.Program) -> Effects {
     Effects(of, found)
 }
 
+// The effects of the functions that can be reached from `roots`, and of
+// no other: enough to tell what a constant does, without going through
+// the whole program.
+pub fn infer_from(p: mir.Program, roots: [int]) -> Effects {
+    var wheres: [bool] = []
+    for f in p.fns {
+        var has = false
+        for b in f.blocks {
+            match b.term {
+                mir.Term.Panic(m) => {
+                    if text.starts_with(m, WHERE) { has = true }
+                }
+                _ => {}
+            }
+        }
+        wheres.push(has)
+    }
+    var found: [Found] = []
+    var callees: [[int]] = []
+    var done: [bool] = []
+    for f in p.fns {
+        found.push(Found([], [], false))
+        callees.push([])
+        done.push(false)
+    }
+    var work = roots
+    while work.len > 0 {
+        var f = 0
+        if let Some(x) = work.pop() { f = x }
+        if done[f] { continue }
+        done[f] = true
+        var one = Walk(p, p.fns[f], wheres).run(start(p.fns[f]), -1)
+        for s in p.fns[f].copies { one.sites.push(Site(Where(s.line, s.col), ALLOC, "a value that holds an array is copied here")) }
+        var called: [int] = []
+        for c in one.calls {
+            called.push(c.f)
+            work.push(c.f)
+        }
+        callees[f] = called
+        found[f] = one
+    }
+    var of: [int] = []
+    for f in found {
+        var e = 0
+        for s in f.sites { e = e | s.effect }
+        of.push(e)
+    }
+    loop {
+        var changed = false
+        for f in 0..(p.fns.len as int) {
+            var all = of[f]
+            for g in callees[f] { all = all | of[g] }
+            if all != of[f] { changed = true }
+            of[f] = all
+        }
+        if !changed { break }
+    }
+    Effects(of, found)
+}
+
 fn has_int(xs: [int], x: int) -> bool {
     for y in xs {
         if y == x { return true }

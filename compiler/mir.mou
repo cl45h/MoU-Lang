@@ -26,6 +26,16 @@ pub enum Value {
     Fn(int)
     // A variant without fields of an enum.
     Enum(int, int)
+    // What only working out a constant while compiling gives.
+    Tuple([Value])
+    Struct(int, [Value])
+    // A variant of an enum with its fields.
+    Variant(int, int, [Value])
+    Array([Value])
+    Some(Value)
+    Ok(Value)
+    Err(Value)
+    Closure(int, [Value])
 }
 
 pub enum Proj { Field(int), Index(Operand), Path(int) }
@@ -3083,6 +3093,7 @@ fn value_text(v: Value) -> str {
         Value.None => "none"
         Value.Fn(f) => "fn {f}"
         Value.Enum(e, variant) => "enum {e}.{variant}"
+        _ => "value"
     }
 }
 

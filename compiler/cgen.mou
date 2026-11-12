@@ -160,7 +160,23 @@ fn constant(v: mir.Value) -> str ! Fail {
         mir.Value.None => "KNONE"
         mir.Value.Enum(e, variant) => "kagg(T_ENUM, {e}, {variant}, 0, NULL)"
         mir.Value.Fn(f) => "kfn({f})"
+        mir.Value.Tuple(vs) => "kagg(T_TUPLE, 0, 0, {constants(vs)?})"
+        mir.Value.Struct(i, vs) => "kagg(T_STRUCT, {i}, 0, {constants(vs)?})"
+        mir.Value.Variant(e, variant, vs) => "kagg(T_ENUM, {e}, {variant}, {constants(vs)?})"
+        mir.Value.Array(vs) => "kagg(T_ARRAY, 0, 0, {constants(vs)?})"
+        mir.Value.Some(x) => "kbox(T_SOME, {constant(x)?})"
+        mir.Value.Ok(x) => "kbox(T_OK, {constant(x)?})"
+        mir.Value.Err(x) => "kbox(T_ERR, {constant(x)?})"
+        mir.Value.Closure(_, _) => return Fail("the C backend cannot write a closure as a constant")
     }
+}
+
+// The items of a constant, as the last arguments of `kagg`.
+fn constants(vs: [mir.Value]) -> str ! Fail {
+    if vs.len == 0 { return "0, NULL" }
+    var parts: [str] = []
+    for v in vs { parts.push(constant(v)?) }
+    "{vs.len}, (kv[]){{{text.join(parts, ", ")}}}"
 }
 
 // The C type of a whole number type of the language.
@@ -1758,8 +1774,9 @@ fn listed(items: [str]) -> str {
 
 // The C source of a program. `paths` are the files of its modules, which
 // panics report; the first is the one of the program itself. `runtime`
-// is the text of `runtime.c`.
-pub fn emit(p: mir.Program, paths: [str], runtime: str) -> str ! Fail {
+// is the text of `runtime.c`, and `values` what the constants are when
+// they were worked out while compiling (none of them otherwise).
+pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> str ! Fail {
     let path = if paths.len > 0 { paths[0] } else { "program" }
     var main = -1
     if let Some(m) = p.main {
@@ -1884,7 +1901,15 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str) -> str ! Fail {
     line(mut out, "    kargv = argv;")
     line(mut out, "    kv A[1] = {{KUNIT}};")
     line(mut out, "    kstack_base = &base;")
-    for k in 0..p.consts.len { line(mut out, "    KC[{k}] = f{p.consts[k]}(A, KUNIT);") }
+    for k in 0..p.consts.len {
+        // A constant worked out while compiling is written as its value.
+        var written = ""
+        if k < values.len {
+            written = constant(values[k]) catch e { "" }
+        }
+        if written == "" { written = "f{p.consts[k]}(A, KUNIT)" }
+        line(mut out, "    KC[{k}] = {written};")
+    }
     line(mut out, "    int status = kfinish(f{main}(A, KUNIT));")
     line(mut out, "    for (int i = 0; i < {p.consts.len}; i++) krelease(KC[i]);")
     line(mut out, "    return status;")
