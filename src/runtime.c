@@ -1571,6 +1571,54 @@ static kv kraw_mix(kv n) {
     return kint((int64_t)(z ^ (z >> 31)));
 }
 
+/* `n as char`: the character with that code. */
+static kv kraw_to_char(kv n) {
+    i128 i = n.u.i;
+    if (i < 0 || i > 0x10FFFF || (i >= 0xD800 && i <= 0xDFFF)) {
+        ksb sb = {0};
+        ksb_str(&sb, "`as`: the value ");
+        ksb_i128(&sb, i);
+        ksb_str(&sb, " is not a character");
+        kpanic(sb.p);
+    }
+    return kchar((uint32_t)i);
+}
+
+/* The number a text holds: a sign, digits, a fraction and an exponent,
+   and nothing else. */
+static kv kraw_parse_float(kv text) {
+    const char *s = kbytes(text);
+    int64_t n = klen(text), i = 0, start;
+    bool ok = true;
+    if (i < n && s[i] == '-') i++;
+    start = i;
+    while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    ok = i > start;
+    if (ok && i < n && s[i] == '.') {
+        start = ++i;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        ok = i > start;
+    }
+    if (ok && i < n && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        if (i < n && (s[i] == '+' || s[i] == '-')) i++;
+        start = i;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        ok = i > start;
+    }
+    kv r = KNONE;
+    if (ok && i == n) {
+        char *copy = malloc((size_t)n + 1);
+        if (!copy) kpanic("out of memory");
+        memcpy(copy, s, (size_t)n);
+        copy[n] = 0;
+        r = kbox(T_SOME, kf64(strtod(copy, NULL)));
+        free(copy);
+    }
+    krelease(text);
+    return r;
+}
+
 /* ---- calls ---- */
 
 static char *kstack_base;

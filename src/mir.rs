@@ -2178,6 +2178,7 @@ impl<'a> Lower<'a> {
                 match self.ty(e) {
                     Ty::Int(k) => self.tmp(Rvalue::CastInt(v, k)),
                     Ty::Float(k) => self.tmp(Rvalue::CastFloat(v, k == "f32")),
+                    Ty::Char => self.finish_call(Callee::Native("raw.to_char"), vec![v], Vec::new(), span),
                     _ => self.unsupported(span, "casts to this type"),
                 }
             }

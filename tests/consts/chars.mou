@@ -1,0 +1,13 @@
+import std.text
+fn letters() -> str {
+    var out: [char] = []
+    for c in 'a'..='f' { out.push(c) }
+    text.from_chars(out)
+}
+let ABC: str = letters()
+let PI: f64 = 3.14159265358979323846264338
+let TINY: f64 = 0.000000000000000000001234567890123456789
+let HALF: f64? = text.parse_float("0.5")
+let Z: char = 90 as char
+let SUM: f64 = PI + 1.0
+fn main() -> int { (ABC.len as int) + (Z as int) }

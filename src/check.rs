@@ -1438,6 +1438,7 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
         ("std.raw", "from_chars") => ("raw.from_chars", vec![param("chars", list(Ty::Char))], Ty::Str),
         ("std.raw", "hash") => ("raw.hash", vec![param("text", Ty::Str)], int),
         ("std.raw", "mix") => ("raw.mix", vec![param("n", int.clone())], int),
+        ("std.raw", "parse_float") => ("raw.parse_float", vec![param("text", Ty::Str)], Ty::Optional(Box::new(Ty::Float("f64")))),
         _ => return None,
     };
     Some((native, Sig { params, ret }))
@@ -3976,6 +3977,9 @@ impl<'a> Checker<'a> {
                     (Ty::Unknown, _) | (_, Ty::Unknown) => true,
                     (f, t) if is_num(f) && is_num(t) => true,
                     (Ty::Char | Ty::Bool, Ty::Int(_)) => true,
+                    // A whole number is a character when it is the code of one:
+                    // checked when the program runs.
+                    (f, Ty::Char) if is_int(f) => true,
                     _ => false,
                 };
                 if !ok {

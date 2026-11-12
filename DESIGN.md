@@ -448,6 +448,7 @@ Faltan: leer el header en vez de declarar a mano, strings, punteros, structs con
 
 Tres reglas sacan texto que no agrega seguridad:
 
+- `n as char` da el carácter con ese código, y hace panic si el número no es el código de ninguno (negativo, mayor que 0x10FFFF, o entre 0xD800 y 0xDFFF). `c as int` da el código. `text.parse_float(s)` lee un número con fracción de un texto (`-12.5e3`) y da `None` si el texto es otra cosa.
 - Un entero se convierte solo a un tipo que contiene todos sus valores: `u8` a `int`, `i32` a `i64`, `u32` a `i64`. Vale al asignar, al pasar argumentos, al devolver y al mezclar tipos en una operación (`u8 + int` se calcula como `int`). Cuando se puede perder información (`int` a `u8`, con signo a sin signo) sigue haciendo falta `as`, que comprueba el valor. `usize` e `isize` no se convierten solos, porque su tamaño depende de la máquina.
 - `var xs = [1, 2]` es un array que puede crecer. Con `let` sigue siendo de largo fijo.
 - Un número escrito que no entra en el tipo que le toca es un error de compilación (`let b: u8 = 300`, `x < 1000` con `x: u8`), no un panic al ejecutar.
@@ -477,7 +478,7 @@ La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se d
 | Bajada a MIR | Hecho: `compiler/mir.mou`. Cada función queda como bloques de sentencias simples: patrones, bucles, `defer`, closures y capturas, `comptime`, conversiones, llamadas con argumentos `mut` que vuelven a su lugar, funciones gemelas para los resultados `ref mut`, `dyn`. Da el mismo MIR que el de Rust para todo el proyecto, incluidas sus propias 578 funciones |
 | Ownership | Hecho: `compiler/moves.mou`. Variables leídas sin valor, usadas después de moverlas con `own`, o inmutables asignadas dos veces |
 | Efectos | Hecho: `compiler/effects.mou`. Infiere `alloc`, `panic`, `io` y `unsafe`, prueba rangos de enteros e índices con el mismo análisis de flujo y da los mismos errores para `@noalloc`, `@nopanic`, `@noio` y los módulos `system`. Es lento sobre programas grandes (44 s sobre el propio compilador contra menos de 1 s del de Rust), porque cada rango es hoy un objeto en el heap |
-| `comptime` | Hecho: `compiler/consts.mou`, con un intérprete de MIR. Las constantes y las expresiones `comptime` quedan calculadas en el binario, y un pánico o entrada y salida al compilar son errores. Tres cosas las deja para el arranque del programa en vez de calcularlas: `f32`, el carácter siguiente a otro y los números con fracción escritos con más de 15 cifras. No apareció ningún caso en el proyecto |
+| `comptime` | Hecho: `compiler/consts.mou`, con un intérprete de MIR. Las constantes y las expresiones `comptime` quedan calculadas en el binario, y un pánico o entrada y salida al compilar son errores. Dos cosas las deja para el arranque del programa en vez de calcularlas: las operaciones con `f32` y cortar un número con fracción a entero. No apareció ningún caso en el proyecto |
 | Emisor de C | Hecho: `compiler/cgen.mou`. Escribe el mismo archivo C que el de Rust, byte por byte, para todo el proyecto |
 | Se compila a sí mismo | **Hecho**. `mouc`, compilado por el compilador de Rust, compila `compiler/main.mou`; el compilador que sale de ahí vuelve a compilar `compiler/main.mou` y escribe exactamente el mismo C (unas 330.000 líneas con el runtime), que además es el que escribe el compilador de Rust |
 

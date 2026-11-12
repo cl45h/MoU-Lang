@@ -4044,6 +4044,11 @@ impl Checker {
                             _ => {}
                         }
                     }
+                    // A whole number is a character when it is the code
+                    // of one: checked when the program runs.
+                    types.Ty.Char => {
+                        if types.is_int(source) { ok = true }
+                    }
                     _ => {}
                 }
                 if !ok {
@@ -4708,6 +4713,7 @@ fn native(module: str, name: str) -> Native? {
         if name == "from_chars" { return Some(Native("raw.from_chars", types.Sig([param("chars", types.Ty.Slice(types.Ty.Char))], types.Ty.Str))) }
         if name == "hash" { return Some(Native("raw.hash", types.Sig([param("text", types.Ty.Str)], int))) }
         if name == "mix" { return Some(Native("raw.mix", types.Sig([param("n", int)], int))) }
+        if name == "parse_float" { return Some(Native("raw.parse_float", types.Sig([param("text", types.Ty.Str)], types.Ty.Optional(types.Ty.Float("f64"))))) }
     }
     None
 }

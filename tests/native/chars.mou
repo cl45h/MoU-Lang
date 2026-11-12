@@ -1,0 +1,26 @@
+import std.io
+import std.text
+
+fn shift(c: char, by: int) -> char {
+    let base = if c >= 'a' && c <= 'z' { 'a' as int } else { 'A' as int }
+    ((c as int - base + by) % 26 + base) as char
+}
+
+fn main() -> int ! io.Error {
+    let code = 955
+    io.print("{65 as char}{(code + 1) as char}{shift('y', 3)}{shift('B', 1)}")?
+    var out: [char] = []
+    for k in 0..5 { out.push((97 + k) as char) }
+    io.print(text.from_chars(out))?
+    let shown = [text.parse_float("12.5"), text.parse_float("-0.001"), text.parse_float("1e3"), text.parse_float("0.1"), text.parse_float("123456789012345678901234567890")]
+    for v in shown { io.print("{v}")? }
+    let bad = [text.parse_float(""), text.parse_float("abc"), text.parse_float("1."), text.parse_float(".5"), text.parse_float("1e"), text.parse_float(" 1"), text.parse_float("inf"), text.parse_float("0x10"), text.parse_float("+1")]
+    for v in bad { io.print("{v}")? }
+    match text.parse_float("2.5") {
+        Some(x) => io.print("{x * 2.0}")?
+        None => io.print("none")?
+    }
+    let wrong = 55296
+    io.print("{wrong as char}")?
+    0
+}

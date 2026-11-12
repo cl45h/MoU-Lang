@@ -2429,6 +2429,17 @@ fn whole_value(written: str) -> i128? {
 // shortest digits that give the number back, with an exponent only for
 // the very large and the very small.
 fn float_text(written: str) -> str {
+    var plain: [char] = []
+    for ch in text.chars(written) {
+        if ch != '_' { plain.push(ch) }
+    }
+    // The number is read and written again: that gives its shortest digits.
+    if let Some(x) = text.parse_float(text.from_chars(plain)) { return "{x}" }
+    digits_text(written)
+}
+
+// The same from the digits alone, for what cannot be read as a number.
+fn digits_text(written: str) -> str {
     var digits: [char] = []
     var exp = 0
     var seen_dot = false
@@ -2560,6 +2571,7 @@ impl Lower {
             }
             types.Ty.Int(k) => self.tmp(Rvalue.CastInt(v, k))
             types.Ty.Float(k) => self.tmp(Rvalue.CastFloat(v, k == "f32"))
+            types.Ty.Char => self.finish_call(Callee.Native("raw.to_char"), [v], [], at)
             _ => self.unsupported(at, "casts to this type")
         }
     }

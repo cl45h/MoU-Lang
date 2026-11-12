@@ -187,3 +187,7 @@ pub fn parse_int(s: str) -> int? {
     if negative { return n }
     if n == -9223372036854775807 - 1 { None } else { Some(0 - n) }
 }
+
+/// The number a decimal text holds: a sign, digits, a fraction and an
+/// exponent, as in `-12.5e3`. `None` when it is anything else.
+pub fn parse_float(s: str) -> f64? { raw.parse_float(s) }

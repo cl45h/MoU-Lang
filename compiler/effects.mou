@@ -1268,6 +1268,11 @@ impl Walk {
                     }
                     mir.Callee.Print => notes.push(Note(IO, "`io.print` writes to the output"))
                     mir.Callee.Native(name) => {
+                        if name == "raw.to_char" {
+                            var iv = top_range()
+                            if args.len > 0 { iv = st.val(args[0]).iv }
+                            if !inside(iv, Range(0, 55295)) && !inside(iv, Range(57344, 1114111)) { notes.push(Note(PANIC, "this number is not proved to be a character")) }
+                        }
                         if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
                         if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
                             let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }

@@ -141,6 +141,20 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             all.extend(items(1)?.iter().cloned());
             Value::Array(Rc::new(all))
         }
+        "raw.to_char" => match args.first() {
+            Some(Value::Int(i)) => match u32::try_from(*i).ok().and_then(char::from_u32) {
+                Some(c) => Value::Char(c),
+                None => return Err(format!("`as`: the value {i} is not a character")),
+            },
+            _ => return Err(internal("a cast to a character of a value that is not an integer")),
+        },
+        "raw.parse_float" => {
+            let s = text(0)?;
+            match float_shape(&s).then(|| s.parse::<f64>().ok()).flatten() {
+                Some(f) => Value::Some(Box::new(Value::Float(f))),
+                None => Value::None,
+            }
+        }
         "raw.hash" => Value::Int(hash(&text(0)?) as i128),
         "raw.mix" => match args.first() {
             Some(Value::Int(n)) => Value::Int(mix(*n as i64) as i128),
@@ -148,6 +162,42 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         },
         _ => return Err(internal("an unknown built-in function")),
     })
+}
+
+/// Whether a text is a number with an optional sign, fraction and
+/// exponent, and nothing else: `-12.5e3`.
+pub fn float_shape(s: &str) -> bool {
+    let b = s.as_bytes();
+    let mut i = 0;
+    let digits = |i: &mut usize| {
+        let start = *i;
+        while *i < b.len() && b[*i].is_ascii_digit() {
+            *i += 1;
+        }
+        *i > start
+    };
+    if b.first() == Some(&b'-') {
+        i += 1;
+    }
+    if !digits(&mut i) {
+        return false;
+    }
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        if !digits(&mut i) {
+            return false;
+        }
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        if !digits(&mut i) {
+            return false;
+        }
+    }
+    i == b.len()
 }
 
 fn internal(what: &str) -> String {

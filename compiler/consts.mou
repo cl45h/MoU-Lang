@@ -7,10 +7,9 @@
 // twice gives the same program, and it has a limit of steps. A panic
 // becomes a mistake of the compilation.
 //
-// A constant is left to be worked out when the program starts, instead,
-// when it needs what this file cannot yet do exactly as the compiler in
-// Rust does: `f32`, the character after another, and numbers with a
-// fraction written with more than 15 digits.
+// A constant that works with `f32`, or that cuts a number with a
+// fraction to a whole one, is left to be worked out when the program
+// starts: this file does not do that yet exactly as the compiler in Rust does.
 
 import std.raw
 import std.text
@@ -65,70 +64,13 @@ fn bounds(kind: str) -> Bounds {
 
 // ---- numbers with a fraction ----
 
-// The number a text stands for, when it can be read exactly: up to 15
-// digits and a small power of ten.
+// The number a text stands for.
 fn parse_float(written: str) -> f64? {
-    var digits: i128 = 0
-    var count = 0
-    var exp = 0
-    var seen_dot = false
-    var negative = false
-    var in_exp = false
-    var exp_negative = false
-    var exp_value = 0
-    var any = false
+    var plain: [char] = []
     for ch in text.chars(written) {
-        if ch == '_' { continue }
-        if in_exp {
-            if ch == '-' {
-                exp_negative = true
-                continue
-            }
-            if ch == '+' { continue }
-            if !text.is_digit(ch) { return None }
-            exp_value = exp_value * 10 + (ch as int - '0' as int)
-            if exp_value > 400 { return None }
-            continue
-        }
-        if ch == '-' {
-            negative = true
-            continue
-        }
-        if ch == 'e' || ch == 'E' {
-            in_exp = true
-            continue
-        }
-        if ch == '.' {
-            seen_dot = true
-            continue
-        }
-        if !text.is_digit(ch) { return None }
-        any = true
-        let d = ch as int - '0' as int
-        if digits == 0 && d == 0 {
-            if seen_dot { exp -= 1 }
-            continue
-        }
-        digits = digits * 10 + (d as i128)
-        count += 1
-        if count > 15 { return None }
-        if seen_dot { exp -= 1 }
+        if ch != '_' { plain.push(ch) }
     }
-    if !any { return None }
-    if exp_negative { exp -= exp_value } else { exp += exp_value }
-    var out = digits as f64
-    if digits == 0 {
-        if negative { return Some(0.0 - 0.0) }
-        return Some(0.0)
-    }
-    if exp > 22 || exp < -22 { return None }
-    var scale = 1.0
-    var k = exp
-    if k < 0 { k = 0 - k }
-    for i in 0..k { scale = scale * 10.0 }
-    if exp >= 0 { out = out * scale } else { out = out / scale }
-    if negative { out = 0.0 - out }
-    Some(out)
+    text.parse_float(text.from_chars(plain))
 }
 
 // A number with a fraction as a value, when its text is that of a number.
@@ -920,8 +862,13 @@ fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir
                         _ => return internal("the successor of a value that has none")
                     }
                 }
-                // The character after another is left for when the program runs.
-                mir.Value.Char(_) => return quit()
+                mir.Value.Char(ch) => {
+                    // The codes from D800 to DFFF are not characters.
+                    var code = ch as int + 1
+                    if code == 55296 { code = 57344 }
+                    if code > 1114111 { return panic_of("there is no character after the last one") }
+                    mir.Value.Char(code as char)
+                }
                 _ => return internal("the successor of a value that has none")
             }
         }
@@ -969,6 +916,26 @@ fn native(name: str, args: [mir.Value]) -> mir.Value ! Oops {
                 return mir.Value.Array(out)
             }
             _ => return internal("a built-in function given a value that is not an array")
+        }
+    }
+    if name == "raw.to_char" {
+        match args[0] {
+            mir.Value.Int(i) => {
+                if i < 0 || i > 1114111 || (i >= 55296 && i <= 57343) { return panic_of("`as`: the value {i} is not a character") }
+                return mir.Value.Char((i as int) as char)
+            }
+            _ => return internal("a cast to a character of a value that is not an integer")
+        }
+    }
+    if name == "raw.parse_float" {
+        match args[0] {
+            mir.Value.Str(s) => {
+                match text.parse_float(s) {
+                    Some(x) => return mir.Value.Some(float_value(x)?)
+                    None => return mir.Value.None
+                }
+            }
+            _ => return internal("a built-in function given a value that is not a string")
         }
     }
     if name == "raw.hash" {

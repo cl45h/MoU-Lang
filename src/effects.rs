@@ -873,6 +873,12 @@ impl Walk<'_> {
                     }
                     Callee::Print => notes.push((IO, "`io.print` writes to the output".into())),
                     Callee::Native(name) => {
+                        if *name == "raw.to_char" {
+                            let iv = args.first().map_or(TOP, |a| st.val(a).iv);
+                            if !inside(iv, (0, 0xD7FF)) && !inside(iv, (0xE000, 0x10FFFF)) {
+                                notes.push((PANIC, "this number is not proved to be a character".into()));
+                            }
+                        }
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
                         }
