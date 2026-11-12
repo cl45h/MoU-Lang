@@ -1,0 +1,1598 @@
+// Effects: what running a function can do besides working out its
+// result. It follows `src/effects.rs`.
+//
+// Four effects are found for every function, on its middle form: `alloc`
+// (it can make or grow data on the heap), `panic` (it can stop the
+// program), `io` (it can reach outside the program) and `unsafe` (it runs
+// a function of C). A function has the effects of its own operations and
+// of all it calls.
+//
+// `@noalloc`, `@nopanic` and `@noio` on a declaration rule an effect out,
+// and a `system` module rules out `alloc` for all its functions. Each
+// operation that would have the effect is then a mistake.
+//
+// An operation that panics only for some values (an index, `+`, a
+// division, `as`) does not count when the values are proved to be good.
+// The proof goes forward over the function and knows, at each point, a
+// range for every whole number, which numbers are below the length of
+// which arrays, and the least length of arrays. It learns from the
+// conditions of `if`, `while`, `for`, `assert` and `where`.
+
+import std.text
+import lexer
+import mir
+
+pub let ALLOC: int = 1
+pub let PANIC: int = 2
+pub let IO: int = 4
+// It runs code the compiler does not check: a function of C.
+pub let UNSAFE: int = 16
+
+let WHERE: str = "a `where` condition of"
+
+fn pow2(bits: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..bits { out = out * 2 }
+    out
+}
+
+// The smallest and the largest number the analysis can hold, and the
+// longest an array can be. They are worked out once.
+let MIN_ALL: i128 = (0 - pow2(126)) * 2
+let MAX_ALL: i128 = pow2(126) - 1 + pow2(126)
+let LEN_MAX: i128 = pow2(63) - 1
+let TWO_7: i128 = pow2(7)
+let TWO_8: i128 = pow2(8)
+let TWO_15: i128 = pow2(15)
+let TWO_16: i128 = pow2(16)
+let TWO_31: i128 = pow2(31)
+let TWO_32: i128 = pow2(32)
+let TWO_63: i128 = pow2(63)
+let TWO_64: i128 = pow2(64)
+
+fn min_all() -> i128 { MIN_ALL }
+
+fn max_all() -> i128 { MAX_ALL }
+
+fn len_max() -> i128 { LEN_MAX }
+
+struct Range { lo: i128, hi: i128 }
+
+fn top_range() -> Range { Range(min_all(), max_all()) }
+
+fn same_range(a: Range, b: Range) -> bool { a.lo == b.lo && a.hi == b.hi }
+
+fn is_top(r: Range) -> bool { r.lo == min_all() && r.hi == max_all() }
+
+fn larger(a: i128, b: i128) -> i128 { if a > b { a } else { b } }
+
+fn smaller(a: i128, b: i128) -> i128 { if a < b { a } else { b } }
+
+// The values of a kind of whole number, as far as the compiler follows them.
+fn bounds(kind: str) -> Range {
+    if kind == "i64" || kind == "isize" { return Range(0 - TWO_63, TWO_63 - 1) }
+    if kind == "u64" || kind == "usize" { return Range(0, TWO_64 - 1) }
+    if kind == "lit" || kind == "i128" { return Range(MIN_ALL, MAX_ALL) }
+    if kind == "u128" { return Range(0, MAX_ALL) }
+    if kind == "i8" { return Range(0 - TWO_7, TWO_7 - 1) }
+    if kind == "u8" { return Range(0, TWO_8 - 1) }
+    if kind == "i16" { return Range(0 - TWO_15, TWO_15 - 1) }
+    if kind == "u16" { return Range(0, TWO_16 - 1) }
+    if kind == "i32" { return Range(0 - TWO_31, TWO_31 - 1) }
+    if kind == "u32" { return Range(0, TWO_32 - 1) }
+    if text.starts_with(kind, "i") { return Range(0 - TWO_63, TWO_63 - 1) }
+    Range(0, TWO_64 - 1)
+}
+
+// An array the analysis can name: a local, or a field of a field of one.
+struct Key { local: int, fields: [int] }
+
+fn same_ints(a: [int], b: [int]) -> bool {
+    if a.len != b.len { return false }
+    for k in 0..a.len {
+        if a[k] != b[k] { return false }
+    }
+    true
+}
+
+fn same_key(a: Key, b: Key) -> bool { a.local == b.local && same_ints(a.fields, b.fields) }
+
+fn same_opt_key(a: Key?, b: Key?) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => same_key(x, y)
+        (None, None) => true
+        _ => false
+    }
+}
+
+fn starts_with(all: [int], start: [int]) -> bool {
+    if start.len > all.len { return false }
+    for k in 0..start.len {
+        if all[k] != start[k] { return false }
+    }
+    true
+}
+
+struct Cmp { op: str, a: mir.Operand, b: mir.Operand }
+
+fn same_opt_cmp(a: Cmp?, b: Cmp?) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => x.op == y.op && x.a == y.a && x.b == y.b
+        (None, None) => true
+        _ => false
+    }
+}
+
+struct Below { local: int, key: Key }
+
+struct MinLen { key: Key, n: i128 }
+
+struct State {
+    // The range of each local, when it holds a whole number.
+    iv: [Range]
+    // Locals known not to be zero.
+    nz: [bool]
+    // Another local that holds the same value, or -1.
+    eq: [int]
+    // The array whose length the local holds.
+    len_of: [Key?]
+    // The comparison whose result the local holds.
+    cmp: [Cmp?]
+    // Locals that are below the length of an array.
+    below: [Below]
+    // Arrays known to have at least so many items.
+    min_len: [MinLen]
+    // The range of the items of each local, when it holds an array of whole numbers.
+    items: [Range]
+}
+
+// What is known about a value that is about to be kept.
+struct Val {
+    iv: Range
+    nz: bool
+    eq: int
+    len_of: Key?
+    cmp: Cmp?
+    below: [Key]
+    // For a new array, the least number of items it has, or -1.
+    min_len: i128
+    // The array it is a copy of.
+    source: Key?
+    items: Range
+}
+
+fn top_val() -> Val { Val(top_range(), false, -1, None, None, [], -1, None, top_range()) }
+
+fn range_val(iv: Range) -> Val { Val(iv, false, -1, None, None, [], -1, None, top_range()) }
+
+fn key_of(p: mir.Place) -> Key? {
+    var fields: [int] = []
+    for s in p.proj {
+        match s {
+            mir.Proj.Field(k) => fields.push(k)
+            _ => return None
+        }
+    }
+    Some(Key(p.local, fields))
+}
+
+// The local an operand is, when it is one whole, or -1.
+fn bare(op: mir.Operand) -> int {
+    match op {
+        mir.Operand.At(p) => {
+            if p.proj.len == 0 { return p.local }
+            -1
+        }
+        _ => -1
+    }
+}
+
+fn simple(op: mir.Operand) -> bool {
+    match op {
+        mir.Operand.Const(_) => true
+        _ => bare(op) >= 0
+    }
+}
+
+fn mentions(op: mir.Operand, l: int) -> bool { bare(op) == l }
+
+fn meet(a: Range, b: Range) -> Range { Range(larger(a.lo, b.lo), smaller(a.hi, b.hi)) }
+
+fn inside(a: Range, b: Range) -> bool { b.lo <= a.lo && a.hi <= b.hi }
+
+fn negated(op: str) -> str {
+    if op == "<" { return ">=" }
+    if op == "<=" { return ">" }
+    if op == ">" { return "<=" }
+    if op == ">=" { return "<" }
+    if op == "==" { return "!=" }
+    if op == "!=" { return "==" }
+    ""
+}
+
+fn has_path(p: mir.Place) -> bool {
+    for s in p.proj {
+        match s {
+            mir.Proj.Path(_) => return true
+            _ => {}
+        }
+    }
+    false
+}
+
+fn top_state(locals: int) -> State {
+    var s = State([], [], [], [], [], [], [], [])
+    for l in 0..locals {
+        s.iv.push(top_range())
+        s.nz.push(false)
+        s.eq.push(-1)
+        s.len_of.push(None)
+        s.cmp.push(None)
+        s.items.push(top_range())
+    }
+    s
+}
+
+fn same_state(a: State, b: State) -> bool {
+    if a.iv.len != b.iv.len || a.below.len != b.below.len || a.min_len.len != b.min_len.len { return false }
+    for l in 0..a.iv.len {
+        if !same_range(a.iv[l], b.iv[l]) || a.nz[l] != b.nz[l] || a.eq[l] != b.eq[l] || !same_range(a.items[l], b.items[l]) { return false }
+        if !same_opt_key(a.len_of[l], b.len_of[l]) || !same_opt_cmp(a.cmp[l], b.cmp[l]) { return false }
+    }
+    for k in 0..a.below.len {
+        if a.below[k].local != b.below[k].local || !same_key(a.below[k].key, b.below[k].key) { return false }
+    }
+    for k in 0..a.min_len.len {
+        if a.min_len[k].n != b.min_len[k].n || !same_key(a.min_len[k].key, b.min_len[k].key) { return false }
+    }
+    true
+}
+
+// A bound that is a real number, and not the end of all numbers.
+fn finite(n: i128) -> bool { n != min_all() && n != max_all() }
+
+impl State {
+    fn root(self, l: int) -> int {
+        if self.eq[l] >= 0 { return self.eq[l] }
+        l
+    }
+
+    // The locals known to hold the same value as `l`, itself among them.
+    fn class(self, l: int) -> [int] {
+        let r = self.root(l)
+        var out: [int] = []
+        for x in 0..(self.eq.len as int) {
+            if self.root(x) == r { out.push(x) }
+        }
+        out
+    }
+
+    fn least_len(self, k: Key) -> i128 {
+        for m in self.min_len {
+            if same_key(m.key, k) { return m.n }
+        }
+        0
+    }
+
+    fn set_min_len(mut self, k: Key, n: i128) {
+        if n <= 0 { return }
+        for i in 0..self.min_len.len {
+            if same_key(self.min_len[i].key, k) {
+                self.min_len[i] = MinLen(k, larger(self.min_len[i].n, n))
+                return
+            }
+        }
+        self.min_len.push(MinLen(k, n))
+    }
+
+    fn is_below(self, l: int, k: Key) -> bool {
+        for b in self.below {
+            if b.local == l && same_key(b.key, k) { return true }
+        }
+        false
+    }
+
+    fn add_below(mut self, l: int, k: Key) {
+        if !self.is_below(l, k) { self.below.push(Below(l, k)) }
+    }
+
+    fn val(self, op: mir.Operand) -> Val {
+        match op {
+            mir.Operand.Const(v) => {
+                match v {
+                    mir.Value.Int(n) => Val(Range(n, n), n != 0, -1, None, None, [], -1, None, top_range())
+                    _ => top_val()
+                }
+            }
+            mir.Operand.At(p) => {
+                if p.proj.len > 0 {
+                    var v = top_val()
+                    v.source = key_of(p)
+                    return v
+                }
+                let l = p.local
+                var below: [Key] = []
+                for b in self.below {
+                    if b.local == l { below.push(b.key) }
+                }
+                Val(self.iv[l], self.nz[l], self.root(l), self.len_of[l], self.cmp[l], below, -1, Some(Key(l, [])), self.items[l])
+            }
+        }
+    }
+
+    // Forgets what is known about the arrays of a local whose fields
+    // start as `fields` do.
+    fn forget_under(mut self, local: int, fields: [int]) {
+        var below: [Below] = []
+        for b in self.below {
+            if !(b.key.local == local && starts_with(b.key.fields, fields)) { below.push(b) }
+        }
+        self.below = below
+        var lens: [MinLen] = []
+        for m in self.min_len {
+            if !(m.key.local == local && starts_with(m.key.fields, fields)) { lens.push(m) }
+        }
+        self.min_len = lens
+        for l in 0..self.len_of.len {
+            if let Some(k) = self.len_of[l] {
+                if k.local == local && starts_with(k.fields, fields) { self.len_of[l] = None }
+            }
+        }
+    }
+
+    // A write to a place may change the length of the arrays it holds.
+    fn kill_keys(mut self, p: mir.Place) {
+        if has_path(p) {
+            self.forget_under(p.local, [])
+            return
+        }
+        if let Some(k) = key_of(p) { self.forget_under(p.local, k.fields) }
+    }
+
+    fn kill_local(mut self, l: int) {
+        self.iv[l] = top_range()
+        self.items[l] = top_range()
+        self.nz[l] = false
+        self.len_of[l] = None
+        self.cmp[l] = None
+        for x in 0..(self.eq.len as int) {
+            if self.eq[x] == l || x == l { self.eq[x] = -1 }
+            if let Some(c) = self.cmp[x] {
+                if mentions(c.a, l) || mentions(c.b, l) { self.cmp[x] = None }
+            }
+        }
+        var below: [Below] = []
+        for b in self.below {
+            if b.local != l { below.push(b) }
+        }
+        self.below = below
+        self.forget_under(l, [])
+    }
+
+    fn write(mut self, p: mir.Place, v: Val, hint: mir.Scalar?) {
+        let l = p.local
+        if p.proj.len > 0 {
+            self.kill_keys(p)
+            self.items[l] = top_range()
+            for x in 0..(self.eq.len as int) {
+                if self.eq[x] == l || x == l { self.eq[x] = -1 }
+            }
+            return
+        }
+        // What is known about the array it copies holds for the copy.
+        var below: [Below] = []
+        var lens: [MinLen] = []
+        if let Some(src) = v.source {
+            if src.local != l {
+                for b in self.below {
+                    if b.local == l { continue }
+                    if b.key.local == src.local && starts_with(b.key.fields, src.fields) { below.push(Below(b.local, Key(l, rest_of(b.key.fields, src.fields.len as int)))) }
+                }
+                for m in self.min_len {
+                    if m.key.local == src.local && starts_with(m.key.fields, src.fields) { lens.push(MinLen(Key(l, rest_of(m.key.fields, src.fields.len as int)), m.n)) }
+                }
+            }
+        }
+        self.kill_local(l)
+        self.iv[l] = v.iv
+        if let Some(h) = hint {
+            match h {
+                mir.Scalar.Int(k) => {
+                    let m = meet(v.iv, bounds(k))
+                    if m.lo <= m.hi {
+                        self.iv[l] = m
+                    } else {
+                        self.iv[l] = bounds(k)
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.nz[l] = v.nz
+        self.items[l] = v.items
+        self.eq[l] = -1
+        if v.eq != l { self.eq[l] = v.eq }
+        self.len_of[l] = None
+        if let Some(k) = v.len_of {
+            if k.local != l { self.len_of[l] = Some(k) }
+        }
+        self.cmp[l] = None
+        if let Some(c) = v.cmp {
+            if !mentions(c.a, l) && !mentions(c.b, l) { self.cmp[l] = Some(c) }
+        }
+        for k in v.below {
+            if k.local != l { self.add_below(l, k) }
+        }
+        for b in below { self.add_below(b.local, b.key) }
+        for m in lens { self.set_min_len(m.key, m.n) }
+        if v.min_len >= 0 { self.set_min_len(Key(l, []), v.min_len) }
+    }
+
+    // Narrows the range of an operand and of what equals it.
+    fn bound(mut self, op: mir.Operand, has_lo: bool, lo: i128, has_hi: bool, hi: i128) {
+        let l = bare(op)
+        if l < 0 { return }
+        for x in self.class(l) {
+            var r = self.iv[x]
+            if has_lo { r = Range(larger(r.lo, lo), r.hi) }
+            if has_hi { r = Range(r.lo, smaller(r.hi, hi)) }
+            self.iv[x] = r
+            if let Some(k) = self.len_of[x] { self.set_min_len(k, r.lo) }
+        }
+    }
+
+    // Takes in that a comparison holds.
+    fn refine(mut self, op: str, a: mir.Operand, b: mir.Operand) {
+        let ia = self.val(a).iv
+        let ib = self.val(b).iv
+        if op == "<" {
+            if finite(ib.hi) { self.bound(a, false, 0, true, ib.hi - 1) }
+            if finite(ia.lo) { self.bound(b, true, ia.lo + 1, false, 0) }
+            let la = bare(a)
+            let lb = bare(b)
+            if la >= 0 && lb >= 0 {
+                if let Some(k) = self.len_of[lb] {
+                    for x in self.class(la) { self.add_below(x, k) }
+                }
+            }
+            return
+        }
+        if op == "<=" {
+            if finite(ib.hi) { self.bound(a, false, 0, true, ib.hi) }
+            if finite(ia.lo) { self.bound(b, true, ia.lo, false, 0) }
+            return
+        }
+        if op == ">" {
+            self.refine("<", b, a)
+            return
+        }
+        if op == ">=" {
+            self.refine("<=", b, a)
+            return
+        }
+        if op == "==" {
+            self.bound(a, finite(ib.lo), ib.lo, finite(ib.hi), ib.hi)
+            self.bound(b, finite(ia.lo), ia.lo, finite(ia.hi), ia.hi)
+            let x = bare(a)
+            let y = bare(b)
+            if x >= 0 && y >= 0 {
+                var facts: [Below] = []
+                for f in self.below {
+                    if f.local == x || f.local == y { facts.push(f) }
+                }
+                for f in facts {
+                    if f.local == x { self.add_below(y, f.key) } else { self.add_below(x, f.key) }
+                }
+                if self.nz[x] || self.nz[y] {
+                    self.nz[x] = true
+                    self.nz[y] = true
+                }
+            }
+            return
+        }
+        if op == "!=" {
+            self.differs(a, ia, ib)
+            self.differs(b, ib, ia)
+        }
+    }
+
+    // `x` is not the one value `other` can be.
+    fn differs(mut self, x: mir.Operand, ix: Range, other: Range) {
+        if other.lo != other.hi { return }
+        let n = other.lo
+        let l = bare(x)
+        if n == 0 && l >= 0 {
+            for c in self.class(l) { self.nz[c] = true }
+        }
+        if ix.lo == n { self.bound(x, true, n + 1, false, 0) }
+        if ix.hi == n { self.bound(x, false, 0, true, n - 1) }
+    }
+
+    // Whether a comparison is known to hold (1), not to hold (0) or
+    // neither (-1).
+    fn decide(self, op: str, a: mir.Operand, b: mir.Operand) -> int {
+        let x = self.val(a)
+        let y = self.val(b)
+        if op == "<" {
+            var under = false
+            let la = bare(a)
+            let lb = bare(b)
+            if la >= 0 && lb >= 0 {
+                if let Some(k) = self.len_of[lb] { under = self.is_below(la, k) }
+            }
+            if x.iv.hi < y.iv.lo || under { return 1 }
+            if x.iv.lo >= y.iv.hi { return 0 }
+            return -1
+        }
+        if op == "<=" {
+            if x.iv.hi <= y.iv.lo { return 1 }
+            if x.iv.lo > y.iv.hi { return 0 }
+            return -1
+        }
+        if op == ">" { return self.decide("<", b, a) }
+        if op == ">=" { return self.decide("<=", b, a) }
+        if op == "==" {
+            let x_zero = x.iv.lo == 0 && x.iv.hi == 0
+            let y_zero = y.iv.lo == 0 && y.iv.hi == 0
+            if x.iv.lo == x.iv.hi && same_range(x.iv, y.iv) { return 1 }
+            if x.iv.hi < y.iv.lo || y.iv.hi < x.iv.lo || (x.nz && y_zero) || (y.nz && x_zero) { return 0 }
+            return -1
+        }
+        if op == "!=" {
+            let r = self.decide("==", a, b)
+            if r < 0 { return -1 }
+            return 1 - r
+        }
+        -1
+    }
+
+    fn feasible(self) -> bool {
+        for r in self.iv {
+            if r.lo > r.hi { return false }
+        }
+        true
+    }
+
+    fn join(self, o: State) -> State {
+        var out = State([], [], [], [], [], [], [], [])
+        for l in 0..self.iv.len {
+            out.iv.push(Range(smaller(self.iv[l].lo, o.iv[l].lo), larger(self.iv[l].hi, o.iv[l].hi)))
+            out.nz.push(self.nz[l] && o.nz[l])
+            if self.eq[l] == o.eq[l] { out.eq.push(self.eq[l]) } else { out.eq.push(-1) }
+            if same_opt_key(self.len_of[l], o.len_of[l]) { out.len_of.push(self.len_of[l]) } else { out.len_of.push(None) }
+            if same_opt_cmp(self.cmp[l], o.cmp[l]) { out.cmp.push(self.cmp[l]) } else { out.cmp.push(None) }
+            out.items.push(Range(smaller(self.items[l].lo, o.items[l].lo), larger(self.items[l].hi, o.items[l].hi)))
+        }
+        for f in self.below {
+            if o.is_below(f.local, f.key) { out.below.push(f) }
+        }
+        for m in self.min_len {
+            let n = smaller(m.n, o.least_len(m.key))
+            if n > 0 { out.min_len.push(MinLen(m.key, n)) }
+        }
+        out
+    }
+
+    // Gives up on what keeps changing around a loop.
+    fn widen(mut self, old: State) {
+        for l in 0..self.iv.len {
+            var r = self.iv[l]
+            if r.lo < old.iv[l].lo { r = Range(min_all(), r.hi) }
+            if r.hi > old.iv[l].hi { r = Range(r.lo, max_all()) }
+            self.iv[l] = r
+            if !same_range(self.items[l], old.items[l]) { self.items[l] = top_range() }
+        }
+        var lens: [MinLen] = []
+        for m in self.min_len {
+            if m.n >= old.least_len(m.key) { lens.push(m) }
+        }
+        self.min_len = lens
+    }
+}
+
+fn rest_of(fields: [int], skip: int) -> [int] {
+    var out: [int] = []
+    for k in skip..(fields.len as int) { out.push(fields[k]) }
+    out
+}
+
+// ---- the range of the result of an operation ----
+
+// A result of an operation on the widest numbers, when it fits in them.
+struct Checked { ok: bool, v: i128 }
+
+fn add_checked(a: i128, b: i128) -> Checked {
+    if b > 0 && a > max_all() - b { return Checked(false, 0) }
+    if b < 0 && a < min_all() - b { return Checked(false, 0) }
+    Checked(true, a + b)
+}
+
+fn sub_checked(a: i128, b: i128) -> Checked {
+    if b < 0 && a > max_all() + b { return Checked(false, 0) }
+    if b > 0 && a < min_all() + b { return Checked(false, 0) }
+    Checked(true, a - b)
+}
+
+fn mul_checked(a: i128, b: i128) -> Checked {
+    if a == 0 || b == 0 { return Checked(true, 0) }
+    if a == -1 {
+        if b == min_all() { return Checked(false, 0) }
+        return Checked(true, 0 - b)
+    }
+    if b == -1 {
+        if a == min_all() { return Checked(false, 0) }
+        return Checked(true, 0 - a)
+    }
+    if a > 0 {
+        if b > 0 && a > max_all() / b { return Checked(false, 0) }
+        if b < 0 && b < min_all() / a { return Checked(false, 0) }
+    } else {
+        if b > 0 && a < min_all() / b { return Checked(false, 0) }
+        if b < 0 && a < max_all() / b { return Checked(false, 0) }
+    }
+    Checked(true, a * b)
+}
+
+struct Arith { r: Range, panics: bool }
+
+fn clamp_to(v: Range, b: Range) -> Range {
+    let m = meet(v, b)
+    if m.lo <= m.hi { return m }
+    b
+}
+
+fn clamp_one(n: i128, b: Range) -> i128 {
+    if n < b.lo { return b.lo }
+    if n > b.hi { return b.hi }
+    n
+}
+
+// The range of the result of an operation on whole numbers, and whether it can panic.
+fn arith(op: str, kind: str, given_x: Range, given_y: Range, y_nz: bool) -> Arith {
+    let b = bounds(kind)
+    let x = clamp_to(given_x, b)
+    let y = clamp_to(given_y, b)
+    let wide = kind == "lit" || kind == "i128" || kind == "u128"
+    var bits: i128 = 64
+    if kind == "lit" { bits = 127 }
+    if kind == "i128" || kind == "u128" { bits = 128 }
+    if kind == "i8" || kind == "u8" { bits = 8 }
+    if kind == "i16" || kind == "u16" { bits = 16 }
+    if kind == "i32" || kind == "u32" { bits = 32 }
+    let adds = op == "+" || op == "+%" || op == "+|"
+    let subs = op == "-" || op == "-%" || op == "-|"
+    let muls = op == "*" || op == "*%" || op == "*|"
+    var exact = false
+    var e = Range(0, 0)
+    if adds {
+        let lo = add_checked(x.lo, y.lo)
+        let hi = add_checked(x.hi, y.hi)
+        if lo.ok && hi.ok {
+            exact = true
+            e = Range(lo.v, hi.v)
+        }
+    }
+    if subs {
+        let lo = sub_checked(x.lo, y.hi)
+        let hi = sub_checked(x.hi, y.lo)
+        if lo.ok && hi.ok {
+            exact = true
+            e = Range(lo.v, hi.v)
+        }
+    }
+    if muls {
+        let ps = [mul_checked(x.lo, y.lo), mul_checked(x.lo, y.hi), mul_checked(x.hi, y.lo), mul_checked(x.hi, y.hi)]
+        if ps[0].ok && ps[1].ok && ps[2].ok && ps[3].ok {
+            exact = true
+            var lo = ps[0].v
+            var hi = ps[0].v
+            for q in ps {
+                lo = smaller(lo, q.v)
+                hi = larger(hi, q.v)
+            }
+            e = Range(lo, hi)
+        }
+    }
+    if op == "+" || op == "-" || op == "*" {
+        if !exact { return Arith(b, true) }
+        if inside(e, b) { return Arith(e, false) }
+        return Arith(clamp_to(e, b), true)
+    }
+    if op == "+%" || op == "-%" || op == "*%" {
+        if exact && inside(e, b) { return Arith(e, kind == "u128") }
+        return Arith(b, kind == "u128")
+    }
+    if op == "+|" || op == "-|" || op == "*|" {
+        if exact { return Arith(Range(clamp_one(e.lo, b), clamp_one(e.hi, b)), kind == "u128") }
+        return Arith(b, wide)
+    }
+    if op == "/" || op == "%" {
+        let zero = !y_nz && y.lo <= 0 && 0 <= y.hi
+        let wraps = b.lo < 0 && x.lo == b.lo && y.lo <= -1 && -1 <= y.hi
+        var r = b
+        if y.lo >= 1 && x.lo >= 0 {
+            if op == "/" { r = Range(0, x.hi) } else { r = Range(0, smaller(x.hi, y.hi - 1)) }
+        } else {
+            if y.lo >= 1 { r = Range(smaller(x.lo, 0), larger(x.hi, 0)) }
+        }
+        return Arith(r, zero || wraps)
+    }
+    if op == "<<" || op == ">>" {
+        let bad = y.lo < 0 || y.hi >= bits
+        var r = b
+        if op == ">>" && x.lo >= 0 { r = Range(0, x.hi) }
+        return Arith(r, bad || (op == "<<" && kind == "lit"))
+    }
+    if op == "&" {
+        if y.lo >= 0 {
+            if x.lo >= 0 { return Arith(Range(0, smaller(x.hi, y.hi)), false) }
+            return Arith(Range(0, y.hi), false)
+        }
+        if x.lo >= 0 { return Arith(Range(0, x.hi), false) }
+    }
+    Arith(b, false)
+}
+
+fn opt_has_fit(c: mir.Conv?) -> bool {
+    match c {
+        Some(x) => has_fit(x)
+        None => false
+    }
+}
+
+fn has_fit(c: mir.Conv) -> bool {
+    match c {
+        mir.Conv.Fit(_) => true
+        mir.Conv.ToFloat(_) => false
+        mir.Conv.Wrap(x) => opt_has_fit(x)
+        mir.Conv.Inside(x) => has_fit(x)
+        mir.Conv.Elems(x) => has_fit(x)
+        mir.Conv.Tuple(cs) => {
+            for x in cs {
+                if opt_has_fit(x) { return true }
+            }
+            false
+        }
+        mir.Conv.Res(a, b) => opt_has_fit(a) || opt_has_fit(b)
+    }
+}
+
+fn opt_has_elems(c: mir.Conv?) -> bool {
+    match c {
+        Some(x) => has_elems(x)
+        None => false
+    }
+}
+
+fn has_elems(c: mir.Conv) -> bool {
+    match c {
+        mir.Conv.Elems(_) => true
+        mir.Conv.Fit(_) => false
+        mir.Conv.ToFloat(_) => false
+        mir.Conv.Wrap(x) => opt_has_elems(x)
+        mir.Conv.Inside(x) => has_elems(x)
+        mir.Conv.Tuple(cs) => {
+            for x in cs {
+                if opt_has_elems(x) { return true }
+            }
+            false
+        }
+        mir.Conv.Res(a, b) => opt_has_elems(a) || opt_has_elems(b)
+    }
+}
+
+struct Where { line: int, col: int }
+
+// An operation that has an effect.
+struct Site { at: Where, effect: int, what: str }
+
+struct CallSite { at: Where, f: int }
+
+struct Found {
+    sites: [Site]
+    // The functions it calls, and where.
+    calls: [CallSite]
+    // Whether one of its `where` conditions can fail.
+    unproved: bool
+}
+
+struct Note { effect: int, what: str }
+
+fn has_key(keys: [Key], k: Key) -> bool {
+    for q in keys {
+        if same_key(q, k) { return true }
+    }
+    false
+}
+
+// The indexes of a place that are not proved to be in range.
+fn indexes(st: State, p: mir.Place, notes: mut [Note]) {
+    for j in 0..(p.proj.len as int) {
+        match p.proj[j] {
+            mir.Proj.Field(_) => {}
+            mir.Proj.Path(_) => notes.push(Note(PANIC, "a place computed by a `ref mut` function is not proved to exist"))
+            mir.Proj.Index(i) => {
+                reads(st, i, mut notes)
+                var before: [mir.Proj] = []
+                for k in 0..j { before.push(p.proj[k]) }
+                var proved = false
+                if let Some(k) = key_of(mir.Place(p.local, before)) {
+                    let v = st.val(i)
+                    proved = v.iv.lo >= 0 && (v.iv.hi < st.least_len(k) || has_key(v.below, k))
+                }
+                if !proved { notes.push(Note(PANIC, "this index is not proved to be in range: compare it with the length first, or use `get`")) }
+            }
+        }
+    }
+}
+
+fn reads(st: State, op: mir.Operand, notes: mut [Note]) {
+    match op {
+        mir.Operand.At(p) => indexes(st, p, mut notes)
+        _ => {}
+    }
+}
+
+// ---- what each operation does ----
+
+struct Walk { p: mir.Program, f: mir.Func, wheres: [bool] }
+
+fn int_range(n: mir.Num) -> Range {
+    match n {
+        mir.Num.Int(k) => bounds(k)
+        _ => top_range()
+    }
+}
+
+fn read_all(st: State, ops: [mir.Operand], notes: mut [Note]) {
+    for o in ops { reads(st, o, mut notes) }
+}
+
+// A value that fits a kind: what is known of it is kept, inside the kind.
+fn fitted(v: Val, b: Range) -> Val {
+    var out = top_val()
+    out.iv = clamp_to(v.iv, b)
+    out.nz = v.nz
+    out.eq = v.eq
+    out.below = v.below
+    out
+}
+
+impl Walk {
+    fn hint(self, l: int) -> mir.Scalar? {
+        if l < (self.f.hints.len as int) {
+            if let Some(s) = self.f.hints[l] { return Some(s) }
+        }
+        if l < (self.f.scalars.len as int) { return self.f.scalars[l] }
+        None
+    }
+
+    fn eval(self, st: State, rv: mir.Rvalue, notes: mut [Note]) -> Val {
+        match rv {
+            mir.Rvalue.Use(a) => {
+                reads(st, a, mut notes)
+                st.val(a)
+            }
+            mir.Rvalue.Unary(op, n, a) => {
+                reads(st, a, mut notes)
+                let v = st.val(a)
+                match op {
+                    mir.UnOp.Neg => {
+                        match n {
+                            mir.Num.Int(k) => {
+                                let r = arith("-", k, Range(0, 0), v.iv, false)
+                                if r.panics { notes.push(Note(PANIC, "`-` on `{k}` can overflow here")) }
+                                var out = range_val(r.r)
+                                out.nz = v.nz
+                                out
+                            }
+                            _ => range_val(int_range(n))
+                        }
+                    }
+                    mir.UnOp.Not => {
+                        var out = top_val()
+                        if let Some(c) = v.cmp {
+                            let other = negated(c.op)
+                            if other != "" { out.cmp = Some(Cmp(other, c.a, c.b)) }
+                        }
+                        out
+                    }
+                    mir.UnOp.BitNot => {
+                        let wide = match n {
+                            mir.Num.Int(k) => k == "u128"
+                            _ => false
+                        }
+                        if wide {
+                            notes.push(Note(PANIC, "`~` on `u128` can panic here"))
+                            return top_val()
+                        }
+                        range_val(int_range(n))
+                    }
+                }
+            }
+            mir.Rvalue.Binary(op, n, a, b) => {
+                reads(st, a, mut notes)
+                reads(st, b, mut notes)
+                if negated(op) != "" {
+                    var out = top_val()
+                    if simple(a) && simple(b) { out.cmp = Some(Cmp(op, a, b)) }
+                    return out
+                }
+                var k = ""
+                match n {
+                    mir.Num.Int(kind) => {
+                        k = kind
+                    }
+                    _ => return top_val()
+                }
+                let x = st.val(a)
+                let y = st.val(b)
+                let y_nz = y.nz || y.iv.lo > 0 || y.iv.hi < 0
+                let r = arith(op, k, x.iv, y.iv, y_nz)
+                if r.panics {
+                    var what = "`{op}` on `{k}` can overflow here"
+                    if (op == "/" || op == "%") && !y_nz { what = "this `{op}` can divide by zero: check the divisor first" }
+                    if op == "<<" || op == ">>" { what = "the shift of this `{op}` is not proved to be in range" }
+                    if op == "+" || op == "-" || op == "*" { what = "`{op}` on `{k}` can overflow here: use `{op}%` or `{op}|`, or check the range first" }
+                    notes.push(Note(PANIC, what))
+                }
+                var v = range_val(r.r)
+                v.nz = r.r.lo > 0 || r.r.hi < 0
+                // `i % xs.len` and `xs.len - 1` are below the length.
+                var done = false
+                if op == "%" && x.iv.lo >= 0 {
+                    let lb = bare(b)
+                    if lb >= 0 {
+                        if let Some(key) = st.len_of[lb] {
+                            v.below.push(key)
+                            done = true
+                        }
+                    }
+                }
+                if !done && op == "-" && y.iv.lo >= 1 {
+                    if let Some(key) = x.len_of { v.below.push(key) }
+                }
+                v
+            }
+            mir.Rvalue.CastInt(a, k) => {
+                reads(st, a, mut notes)
+                let v = st.val(a)
+                let b = bounds(k)
+                if !inside(v.iv, b) { notes.push(Note(PANIC, "the value of this `as` is not proved to fit in `{k}`")) }
+                fitted(v, b)
+            }
+            mir.Rvalue.Convert(a, conv) => {
+                reads(st, a, mut notes)
+                let v = st.val(a)
+                if has_elems(conv) { notes.push(Note(ALLOC, "an array is converted here, which makes a new one")) }
+                match conv {
+                    mir.Conv.Fit(k) => {
+                        let b = bounds(k)
+                        if !inside(v.iv, b) { notes.push(Note(PANIC, "this number is not proved to fit in `{k}`")) }
+                        return fitted(v, b)
+                    }
+                    mir.Conv.Elems(c) => {
+                        match c {
+                            mir.Conv.Fit(k) => {
+                                if inside(v.items, bounds(k)) { return top_val() }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                if has_fit(conv) { notes.push(Note(PANIC, "a number inside this value is not proved to fit in its type")) }
+                top_val()
+            }
+            mir.Rvalue.CastFloat(a, _) => {
+                reads(st, a, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Some(a) => {
+                reads(st, a, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Ok(a) => {
+                reads(st, a, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Err(a) => {
+                reads(st, a, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Is(a, _) => {
+                reads(st, a, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Tuple(ops) => {
+                read_all(st, ops, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Struct(i, ops) => {
+                read_all(st, ops, mut notes)
+                var boxed = true
+                if i < (self.p.boxed_structs.len as int) { boxed = self.p.boxed_structs[i] }
+                if boxed {
+                    if i >= self.p.dyn_from {
+                        notes.push(Note(ALLOC, "a `dyn` value is created here"))
+                    } else {
+                        notes.push(Note(ALLOC, "a value of a recursive struct is created here"))
+                    }
+                }
+                top_val()
+            }
+            mir.Rvalue.Enum(i, _, ops) => {
+                read_all(st, ops, mut notes)
+                var boxed = true
+                if i < (self.p.boxed_enums.len as int) { boxed = self.p.boxed_enums[i] }
+                if ops.len > 0 && boxed { notes.push(Note(ALLOC, "a value of a recursive enum is created here")) }
+                top_val()
+            }
+            mir.Rvalue.Array(ops) => {
+                read_all(st, ops, mut notes)
+                if ops.len > 0 { notes.push(Note(ALLOC, "an array is created here")) }
+                var items = top_range()
+                for k in 0..ops.len {
+                    let iv = st.val(ops[k]).iv
+                    if k == 0 { items = iv } else { items = Range(smaller(items.lo, iv.lo), larger(items.hi, iv.hi)) }
+                }
+                var out = top_val()
+                out.min_len = ops.len as i128
+                out.items = items
+                out
+            }
+            mir.Rvalue.Repeat(a, n) => {
+                reads(st, a, mut notes)
+                reads(st, n, mut notes)
+                notes.push(Note(ALLOC, "an array is created here"))
+                let count = st.val(n).iv
+                if !inside(count, Range(0, 100000000)) { notes.push(Note(PANIC, "the length of this array is not proved to be one an array can have")) }
+                var out = top_val()
+                // A least length below zero says nothing.
+                out.min_len = larger(count.lo, 0)
+                out
+            }
+            mir.Rvalue.Len(a) => {
+                reads(st, a, mut notes)
+                var k: Key? = None
+                match a {
+                    mir.Operand.At(p) => {
+                        k = key_of(p)
+                    }
+                    _ => {}
+                }
+                var lo: i128 = 0
+                if let Some(key) = k { lo = st.least_len(key) }
+                var out = range_val(Range(lo, len_max()))
+                out.len_of = k
+                out.nz = lo > 0
+                out
+            }
+            mir.Rvalue.Slice(a, r) => {
+                reads(st, a, mut notes)
+                reads(st, r, mut notes)
+                notes.push(Note(ALLOC, "a part of an array is copied here"))
+                notes.push(Note(PANIC, "this range is not proved to be inside the array"))
+                top_val()
+            }
+            mir.Rvalue.Format(parts) => {
+                var built = false
+                for part in parts {
+                    match part {
+                        mir.FmtPart.Val(o) => {
+                            reads(st, o, mut notes)
+                            built = true
+                        }
+                        _ => {}
+                    }
+                }
+                if built { notes.push(Note(ALLOC, "a string is built here")) }
+                top_val()
+            }
+            mir.Rvalue.Chars(a) => {
+                reads(st, a, mut notes)
+                notes.push(Note(ALLOC, "an array of the characters of a string is created here"))
+                top_val()
+            }
+            mir.Rvalue.RangeStart(a, _) => {
+                reads(st, a, mut notes)
+                notes.push(Note(PANIC, "this range is not proved to have a start"))
+                top_val()
+            }
+            mir.Rvalue.RangeHas(a, b) => {
+                reads(st, a, mut notes)
+                reads(st, b, mut notes)
+                top_val()
+            }
+            mir.Rvalue.RangeLast(a, b) => {
+                reads(st, a, mut notes)
+                reads(st, b, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Get(a, b) => {
+                reads(st, a, mut notes)
+                reads(st, b, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Succ(a, n) => {
+                reads(st, a, mut notes)
+                match n {
+                    mir.Num.Int(k) => {
+                        let r = arith("+", k, st.val(a).iv, Range(1, 1), true)
+                        if r.panics { notes.push(Note(PANIC, "the counter of this loop can overflow `{k}`")) }
+                        range_val(r.r)
+                    }
+                    _ => {
+                        notes.push(Note(PANIC, "this loop can go past the last character"))
+                        top_val()
+                    }
+                }
+            }
+            mir.Rvalue.Push(p, a) => {
+                indexes(st, p, mut notes)
+                reads(st, a, mut notes)
+                notes.push(Note(ALLOC, "`push` can make the array grow"))
+                top_val()
+            }
+            mir.Rvalue.Pop(p) => {
+                indexes(st, p, mut notes)
+                top_val()
+            }
+            mir.Rvalue.Closure(_, ops) => {
+                read_all(st, ops, mut notes)
+                if ops.len > 0 { notes.push(Note(ALLOC, "a closure that captures values is created here")) }
+                top_val()
+            }
+            _ => top_val()
+        }
+    }
+}
+
+// ---- going through a function ----
+
+struct Next { block: int, state: State }
+
+fn without_place(name: str) -> str {
+    let tail = " (place)"
+    if !text.ends_with(name, tail) { return name }
+    let cs = text.chars(name)
+    var out: [char] = []
+    for k in 0..(cs.len as int - 8) { out.push(cs[k]) }
+    text.from_chars(out)
+}
+
+fn tell(found: mut Found, at: Where, notes: [Note]) {
+    for n in notes { found.sites.push(Site(at, n.effect, n.what)) }
+}
+
+impl Walk {
+    // Runs a block from a state. Gives where it goes on, and in which
+    // state. What it finds is only kept when `report` is set.
+    fn step(self, b: int, entry: State, report: bool, found: mut Found) -> [Next] {
+        var st = entry
+        let block = self.f.blocks[b]
+        for s in block.stmts {
+            var notes: [Note] = []
+            indexes(st, s.place, mut notes)
+            let v = self.eval(st, s.rv, mut notes)
+            match s.rv {
+                mir.Rvalue.Push(p, _) => {
+                    st.kill_keys(p)
+                    st.items[p.local] = top_range()
+                }
+                mir.Rvalue.Pop(p) => {
+                    st.kill_keys(p)
+                    st.items[p.local] = top_range()
+                }
+                _ => {}
+            }
+            st.write(s.place, v, self.hint(s.place.local))
+            if report { tell(mut found, Where(s.at.line, s.at.col), notes) }
+        }
+        var notes: [Note] = []
+        var next: [Next] = []
+        let here = Where(block.at.line, block.at.col)
+        match block.term {
+            mir.Term.Goto(t) => next.push(Next(t, st))
+            mir.Term.Branch(c, t, e) => {
+                reads(st, c, mut notes)
+                var decided = false
+                match c {
+                    mir.Operand.Const(v) => {
+                        match v {
+                            mir.Value.Bool(yes) => {
+                                if yes { next.push(Next(t, st)) } else { next.push(Next(e, st)) }
+                                decided = true
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                if !decided {
+                    var cmp: Cmp? = None
+                    let l = bare(c)
+                    if l >= 0 { cmp = st.cmp[l] }
+                    match cmp {
+                        Some(k) => {
+                            let known = st.decide(k.op, k.a, k.b)
+                            if known != 0 {
+                                var yes = st
+                                yes.refine(k.op, k.a, k.b)
+                                if yes.feasible() { next.push(Next(t, yes)) }
+                            }
+                            if known != 1 {
+                                let other = negated(k.op)
+                                if other != "" { st.refine(other, k.a, k.b) }
+                                if st.feasible() { next.push(Next(e, st)) }
+                            }
+                        }
+                        None => {
+                            next.push(Next(t, st))
+                            next.push(Next(e, st))
+                        }
+                    }
+                }
+            }
+            mir.Term.Call(callee, args, writeback, dest, after) => {
+                read_all(st, args, mut notes)
+                for w in writeback { indexes(st, w.place, mut notes) }
+                indexes(st, dest, mut notes)
+                var ret = top_range()
+                var returns = true
+                match callee {
+                    mir.Callee.Fn(g) => {
+                        let called = self.p.fns[g]
+                        if let Some(s) = called.ret {
+                            match s {
+                                mir.Scalar.Int(k) => {
+                                    ret = bounds(k)
+                                }
+                                _ => {}
+                            }
+                        }
+                        if report {
+                            found.calls.push(CallSite(here, g))
+                            if self.wheres[g] {
+                                if !self.holds(called, st, args) { notes.push(Note(PANIC, "a `where` condition of `{without_place(called.name)}` is not proved to hold here")) }
+                            }
+                        }
+                    }
+                    mir.Callee.Indirect(op) => {
+                        reads(st, op, mut notes)
+                        notes.push(Note(ALLOC | PANIC | IO, "a function value or a method of a `dyn` value is called here, and what it does is not known"))
+                    }
+                    mir.Callee.Extern(x) => {
+                        // What it does is up to who wrote the `unsafe` around it.
+                        notes.push(Note(UNSAFE, "the C function `{self.p.externs[x].name}` is called here"))
+                    }
+                    mir.Callee.Print => notes.push(Note(IO, "`io.print` writes to the output"))
+                    mir.Callee.Native(name) => {
+                        if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
+                        if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
+                            let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }
+                            notes.push(Note(ALLOC, "{shown} creates its result on the heap"))
+                        }
+                    }
+                    mir.Callee.Panic => {
+                        notes.push(Note(PANIC, "the program can stop here: this `panic` or `assert` is not proved to be out of reach"))
+                        returns = false
+                    }
+                }
+                if returns {
+                    for w in writeback { st.write(w.place, top_val(), self.hint(w.place.local)) }
+                    st.write(dest, range_val(ret), self.hint(dest.local))
+                    next.push(Next(after, st))
+                }
+            }
+            mir.Term.Return(op) => reads(st, op, mut notes)
+            mir.Term.Panic(msg) => {
+                if text.starts_with(msg, WHERE) {
+                    if report { found.unproved = true }
+                } else {
+                    // The checker of types proved that an arm of a `match` matches.
+                    if !text.starts_with(msg, "no arm of this `match`") { notes.push(Note(PANIC, "the program stops here when {msg}")) }
+                }
+            }
+            mir.Term.Unreachable => {}
+        }
+        if report { tell(mut found, here, notes) }
+        next
+    }
+
+    // Goes through the function from a state of its start, as far as a
+    // block (a negative number for all of it).
+    fn run(self, entry: State, stop: int) -> Found {
+        let n = self.f.blocks.len as int
+        var at: [State] = []
+        var reached: [bool] = []
+        var visits: [int] = []
+        for b in 0..n {
+            at.push(State([], [], [], [], [], [], [], []))
+            reached.push(false)
+            visits.push(0)
+        }
+        at[0] = entry
+        reached[0] = true
+        var work: [int] = []
+        work.push(0)
+        var quiet = Found([], [], false)
+        while work.len > 0 {
+            var b = 0
+            if let Some(x) = work.pop() { b = x }
+            if b == stop || !reached[b] { continue }
+            for nx in self.step(b, at[b], false, mut quiet) {
+                let t = nx.block
+                var merged = nx.state
+                if reached[t] {
+                    merged = at[t].join(nx.state)
+                    // Every loop has a jump back to an earlier block.
+                    if t <= b && visits[t] > 3 { merged.widen(at[t]) }
+                }
+                if !reached[t] || !same_state(at[t], merged) {
+                    visits[t] += 1
+                    at[t] = merged
+                    reached[t] = true
+                    work.push(t)
+                }
+            }
+        }
+        var found = Found([], [], false)
+        for b in 0..n {
+            if reached[b] && b != stop { let _ = self.step(b, at[b], true, mut found) }
+        }
+        found
+    }
+
+    // Whether the `where` conditions of a function hold for the arguments
+    // of a call, from what is known where the call is.
+    fn holds(self, g: mir.Func, st: State, args: [mir.Operand]) -> bool {
+        if g.body == 0 { return false }
+        var entry = start(g)
+        var vals: [Val] = []
+        for a in args { vals.push(st.val(a)) }
+        var count = vals.len as int
+        if count > g.params { count = g.params }
+        for j in 0..count {
+            let v = vals[j]
+            let m = meet(entry.iv[j], v.iv)
+            if m.lo <= m.hi { entry.iv[j] = m }
+            entry.nz[j] = v.nz
+            for r in 0..j {
+                if vals[r].eq >= 0 && vals[r].eq == v.eq {
+                    entry.eq[j] = entry.root(r)
+                    break
+                }
+            }
+            if let Some(src) = v.source {
+                for m2 in st.min_len {
+                    if m2.key.local == src.local && starts_with(m2.key.fields, src.fields) { entry.set_min_len(Key(j, rest_of(m2.key.fields, src.fields.len as int)), m2.n) }
+                }
+                for i in 0..count {
+                    for k in vals[i].below {
+                        if k.local == src.local && starts_with(k.fields, src.fields) { entry.add_below(i, Key(j, rest_of(k.fields, src.fields.len as int))) }
+                    }
+                }
+            }
+        }
+        let walk = Walk(self.p, g, self.wheres)
+        !walk.run(entry, g.body).unproved
+    }
+}
+
+// What is known when a function starts: the ranges of its parameters.
+fn start(f: mir.Func) -> State {
+    var st = top_state(f.locals)
+    for j in 0..(f.scalars.len as int) {
+        if j >= f.locals { break }
+        if let Some(s) = f.scalars[j] {
+            match s {
+                mir.Scalar.Int(k) => {
+                    st.iv[j] = bounds(k)
+                }
+                _ => {}
+            }
+        }
+    }
+    st
+}
+
+pub struct Effects {
+    // The effects of each function of the program.
+    of: [int]
+    found: [Found]
+}
+
+// The functions that can be reached from `g`, itself among them.
+fn reach(callees: [[int]], g: int) -> [bool] {
+    var seen: [bool] = []
+    for k in 0..callees.len { seen.push(false) }
+    var work: [int] = []
+    work.push(g)
+    while work.len > 0 {
+        var h = 0
+        if let Some(x) = work.pop() { h = x }
+        if seen[h] { continue }
+        seen[h] = true
+        for c in callees[h] { work.push(c) }
+    }
+    seen
+}
+
+pub fn infer(p: mir.Program) -> Effects {
+    var wheres: [bool] = []
+    for f in p.fns {
+        var has = false
+        for b in f.blocks {
+            match b.term {
+                mir.Term.Panic(m) => {
+                    if text.starts_with(m, WHERE) { has = true }
+                }
+                _ => {}
+            }
+        }
+        wheres.push(has)
+    }
+    var found: [Found] = []
+    var callees: [[int]] = []
+    for f in p.fns {
+        var one = Walk(p, f, wheres).run(start(f), -1)
+        for s in f.copies { one.sites.push(Site(Where(s.line, s.col), ALLOC, "a value that holds an array is copied here")) }
+        var called: [int] = []
+        for c in one.calls { called.push(c.f) }
+        callees.push(called)
+        found.push(one)
+    }
+    // A function that can call itself can run out of stack.
+    let n = p.fns.len as int
+    var reaches: [[bool]] = []
+    var known: [bool] = []
+    for g in 0..n {
+        reaches.push([])
+        known.push(false)
+    }
+    for f in 0..n {
+        let calls = found[f].calls
+        for c in calls {
+            if !known[c.f] {
+                reaches[c.f] = reach(callees, c.f)
+                known[c.f] = true
+            }
+            // The calls of `f` that lead back to it.
+            if reaches[c.f][f] { found[f].sites.push(Site(c.at, PANIC, "this call is recursive, and the nesting of calls has a limit")) }
+        }
+    }
+    var of: [int] = []
+    for f in found {
+        var e = 0
+        for s in f.sites { e = e | s.effect }
+        of.push(e)
+    }
+    loop {
+        var changed = false
+        for f in 0..n {
+            var all = of[f]
+            for g in callees[f] { all = all | of[g] }
+            if all != of[f] { changed = true }
+            of[f] = all
+        }
+        if !changed { break }
+    }
+    Effects(of, found)
+}
+
+fn has_int(xs: [int], x: int) -> bool {
+    for y in xs {
+        if y == x { return true }
+    }
+    false
+}
+
+impl Effects {
+    // Why a function has an effect: the operation at the end of the chain.
+    pub fn cause(self, p: mir.Program, f: int, effect: int, seen: mut [int]) -> str {
+        for s in self.found[f].sites {
+            if (s.effect & effect) != 0 { return "{s.what} (line {s.at.line & 1048575} of its file)" }
+        }
+        seen.push(f)
+        for c in self.found[f].calls {
+            if (self.of[c.f] & effect) != 0 && !has_int(seen, c.f) { return "it calls `{without_place(p.fns[c.f].name)}`, where {self.cause(p, c.f, effect, mut seen)}" }
+        }
+        "one of the functions it calls does"
+    }
+}
+
+pub fn names(effects: int) -> str {
+    var on: [str] = []
+    if (effects & ALLOC) != 0 { on.push("alloc") }
+    if (effects & PANIC) != 0 { on.push("panic") }
+    if (effects & IO) != 0 { on.push("io") }
+    if (effects & UNSAFE) != 0 { on.push("unsafe") }
+    if on.len == 0 { return "none" }
+    text.join(on, " ")
+}
+
+struct Told { at: Where, head: str, what: str }
+
+fn told_before(x: Told, y: Told) -> bool {
+    if x.at.line != y.at.line { return x.at.line < y.at.line }
+    if x.at.col != y.at.col { return x.at.col < y.at.col }
+    x.what < y.what
+}
+
+// Checks the functions that rule effects out.
+pub fn check(p: mir.Program) -> [lexer.Error] {
+    var limited = false
+    for f in p.fns {
+        if f.limits != 0 { limited = true }
+    }
+    if !limited { return [] }
+    let fx = infer(p)
+    var errors: [Told] = []
+    for i in 0..(p.fns.len as int) {
+        let f = p.fns[i]
+        if text.ends_with(f.name, " (place)") { continue }
+        let effects = [ALLOC, PANIC, IO]
+        let first = if (f.limits & mir.SYSTEM) != 0 { "in a `system` module, which has no allocator" } else { "`@noalloc`" }
+        let rules = [first, "`@nopanic`", "`@noio`"]
+        let does = ["allocates", "can panic", "does input or output"]
+        for r in 0..3 {
+            let effect = effects[r]
+            if (f.limits & effect) == 0 { continue }
+            let head = "`{f.name}` is {rules[r]}, but "
+            for s in fx.found[i].sites {
+                if (s.effect & effect) != 0 { errors.push(Told(s.at, head, s.what)) }
+            }
+            for c in fx.found[i].calls {
+                // One reason for each call is enough.
+                var told = false
+                for s in fx.found[i].sites {
+                    if s.at.line == c.at.line && s.at.col == c.at.col && (s.effect & effect) != 0 { told = true }
+                }
+                if (fx.of[c.f] & effect) != 0 && !told {
+                    var seen: [int] = []
+                    seen.push(i)
+                    let why = fx.cause(p, c.f, effect, mut seen)
+                    errors.push(Told(c.at, head, "it calls `{without_place(p.fns[c.f].name)}`, which {does[r]}: {why}"))
+                }
+            }
+        }
+    }
+    var at: [int] = []
+    for k in 0..errors.len { at.push(k as int) }
+    for i in 1..at.len {
+        var k = i
+        while k > 0 && told_before(errors[at[k]], errors[at[k - 1]]) {
+            let moved = at[k]
+            at[k] = at[k - 1]
+            at[k - 1] = moved
+            k -= 1
+        }
+    }
+    // An instance of a generic function repeats the mistakes of another.
+    var out: [lexer.Error] = []
+    var last = Told(Where(-1, -1), "", "")
+    var any = false
+    for k in at {
+        let e = errors[k]
+        if any && e.at.line == last.at.line && e.at.col == last.at.col && e.what == last.what { continue }
+        any = true
+        last = e
+        out.push(lexer.Error("{e.head}{e.what}", e.at.line, e.at.col))
+    }
+    out
+}
+
+// The effects of every function of a program, as lines of text, in the
+// form `mou fx` prints them.
+pub fn dump(p: mir.Program) -> [str] {
+    let fx = infer(p)
+    var out: [str] = []
+    for i in 0..p.fns.len {
+        out.push("fn {i} {p.fns[i].name}: {names(fx.of[i])}")
+        for s in fx.found[i].sites { out.push("  site {s.at.line}:{s.at.col} {s.effect} {s.what}") }
+        for c in fx.found[i].calls { out.push("  call {c.at.line}:{c.at.col} {c.f}") }
+        if fx.found[i].unproved { out.push("  unproved") }
+    }
+    out
+}

@@ -39,6 +39,7 @@ commands:
   decls    print what the declarations say, as the checker written in Mou does
   types    print what the checker finds out about each expression, in the same form
   lowered  print the program lowered to MIR, as the lowering written in Mou does
+  fx       print the effects of each function, as the analysis written in Mou does
   rawc     print the C written straight from the MIR, as the compiler written in Mou does";
 
 fn main() -> ExitCode {
@@ -132,6 +133,10 @@ fn main() -> ExitCode {
         }
         "modules" => {
             print!("{}", load::dump(path, &src));
+            Ok(())
+        }
+        "fx" => {
+            print!("{}", fx_text(path, &src));
             Ok(())
         }
         "rawc" => {
@@ -254,6 +259,24 @@ fn lower(file: &ast::File) -> Result<mir::Program, Vec<lexer::Error>> {
     }
 }
 
+/// The effects of every function of a program, and the mistakes of the
+/// ones that rule an effect out.
+fn fx_text(path: &str, src: &str) -> String {
+    let errors = |es: Vec<lexer::Error>| es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect::<String>();
+    let file = match load::load(path, src).1 {
+        Ok(file) => file,
+        Err(es) => return errors(es),
+    };
+    let info = match check::analyze(&file) {
+        Ok((_, info)) => info,
+        Err(es) => return errors(es),
+    };
+    match mir::lower(&file, &info) {
+        Ok(program) => effects::dump(&program) + &errors(effects::check(&program)),
+        Err(es) => errors(es),
+    }
+}
+
 /// The C of a program without what the compiler written in Mou does not do
 /// yet: its effects are not checked and no constant is computed while
 /// compiling.
@@ -273,6 +296,10 @@ fn rawc_text(path: &str, src: &str) -> String {
         Err(es) => return errors(es),
     };
     let mistakes = own::check(&program);
+    if !mistakes.is_empty() {
+        return errors(mistakes);
+    }
+    let mistakes = effects::check(&program);
     if !mistakes.is_empty() {
         return errors(mistakes);
     }
@@ -500,8 +527,8 @@ mod selfhost {
 
     /// The compiler written in Mou gives, stage by stage and for every file
     /// of the project, what this compiler gives: tokens, tree, modules,
-    /// declarations, types, MIR and C. `tests/decls`, `tests/types`,
-    /// `tests/lower` and `tests/own` hold programs with mistakes, which both must report in
+    /// declarations, types, MIR, effects and C. `tests/decls`, `tests/types`,
+    /// `tests/lower`, `tests/own` and `tests/fx` hold programs with mistakes, which both must report in
     /// the same words. At the end it compiles itself, and the compiler that
     /// comes out writes the same C again.
     ///
@@ -519,7 +546,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types", "tests/lower", "tests/own", "tests/fx"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {
@@ -568,6 +595,11 @@ mod selfhost {
                 if mouc.is_some() {
                     stages.push(("c", crate::rawc_text(&shown, &text)));
                 }
+            }
+            // The analysis of effects is slow in Mou for now: the compiler
+            // itself, which rules no effect out, is left aside.
+            if !shown.contains("/compiler/") {
+                stages.push(("fx", crate::fx_text(&shown, &text)));
             }
             for (stage, expected) in stages {
                 let got = match &mouc {

@@ -1,0 +1,26 @@
+import std.io
+struct P { x: int, tags: [str] }
+enum Tree { Leaf, Node(Tree?, int) }
+fn first(xs: [int]) -> int where xs.len > 0 { xs[0] }
+fn item(xs: [int], i: usize) -> int where i < xs.len { xs[i] }
+fn twice(n: int) -> int { n * 2 }
+fn say() ! io.Error { io.print("x")? }
+
+@noio
+fn case0(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+twice(n) + xs[i]
+}
+
+@noio
+fn case1(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+say() catch {}
+ n
+}
+
+@noio
+fn case2(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+io.print("x") catch {}
+ n
+}
+
+fn main() { }

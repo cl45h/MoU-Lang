@@ -1082,6 +1082,27 @@ impl Effects {
     }
 }
 
+/// The effects of every function of a program as text, in the form the
+/// analysis written in Mou (`compiler/effects.mou`) prints them.
+pub fn dump(p: &Program) -> String {
+    use std::fmt::Write;
+    let fx = infer(p);
+    let mut out = String::new();
+    for (i, f) in p.fns.iter().enumerate() {
+        let _ = writeln!(out, "fn {i} {}: {}", f.name, names(fx.of[i]));
+        for s in &fx.found[i].sites {
+            let _ = writeln!(out, "  site {}:{} {} {}", s.span.line, s.span.col, s.effect, s.what);
+        }
+        for (span, g) in &fx.found[i].calls {
+            let _ = writeln!(out, "  call {}:{} {g}", span.line, span.col);
+        }
+        if fx.found[i].unproved {
+            let _ = writeln!(out, "  unproved");
+        }
+    }
+    out
+}
+
 fn shown(name: &str) -> &str {
     name.trim_end_matches(" (place)")
 }

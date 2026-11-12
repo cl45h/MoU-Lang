@@ -1,0 +1,247 @@
+import std.io
+struct P { x: int, tags: [str] }
+enum Tree { Leaf, Node(Tree?, int) }
+fn first(xs: [int]) -> int where xs.len > 0 { xs[0] }
+fn item(xs: [int], i: usize) -> int where i < xs.len { xs[i] }
+fn twice(n: int) -> int { n * 2 }
+fn say() ! io.Error { io.print("x")? }
+
+@nopanic
+fn case0(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+n +% 1
+}
+
+@nopanic
+fn case1(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+n *| 2
+}
+
+@nopanic
+fn case2(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+n / 2
+}
+
+@nopanic
+fn case3(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n > 0 && n < 1000 { n * n + 1 } else { 0 }
+}
+
+@nopanic
+fn case4(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n != 0 { 100 / n } else { 0 }
+}
+
+@nopanic
+fn case5(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n > -100 { 0 - n } else { 0 }
+}
+
+@nopanic
+fn case6(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n >= 0 && n < 256 { (n as u8) as int } else { 0 }
+}
+
+@nopanic
+fn case7(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+n + 1
+}
+
+@nopanic
+fn case8(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+0 - n
+}
+
+@nopanic
+fn case9(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+100 / n
+}
+
+@nopanic
+fn case10(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+100 % n
+}
+
+@nopanic
+fn case11(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+(n as u8) as int
+}
+
+@nopanic
+fn case12(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+1 << n
+}
+
+@nopanic
+fn case13(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if i < xs.len { xs[i] } else { 0 }
+}
+
+@nopanic
+fn case14(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if xs.len > 2 { xs[2] } else { 0 }
+}
+
+@nopanic
+fn case15(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if xs.len == 0 { return 0 }
+ xs[xs.len - 1]
+}
+
+@nopanic
+fn case16(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if xs.len == 0 { return 0 }
+ xs[i % xs.len]
+}
+
+@nopanic
+fn case17(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var s = 0
+ for x in xs { s = s +% x }
+ s
+}
+
+@nopanic
+fn case18(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var s = 0
+ for k in 0..xs.len { s = s +% xs[k] }
+ s
+}
+
+@nopanic
+fn case19(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var s = 0
+ var k: usize = 0
+ while k < xs.len {
+ s = s +% xs[k]
+ k += 1
+ }
+ s
+}
+
+@nopanic
+fn case20(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let len = xs.len
+ var s = 0
+ for k in 0..len { s = s +% xs[k] }
+ s
+}
+
+@nopanic
+fn case21(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let ys = [1, 2, 3]
+ ys[2]
+}
+
+@nopanic
+fn case22(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let ys: [u8] = [1, 2, 255]
+ ys.len as int
+}
+
+@nopanic
+fn case23(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+match xs.get(i) {
+ Some(v) => v
+ None => 0
+ }
+}
+
+@nopanic
+fn case24(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if i < p.tags.len && p.tags[i] == "a" { 1 } else { 0 }
+}
+
+@nopanic
+fn case25(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+xs[i]
+}
+
+@nopanic
+fn case26(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+xs[0]
+}
+
+@nopanic
+fn case27(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if i <= xs.len { xs[i] } else { 0 }
+}
+
+@nopanic
+fn case28(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n >= 0 { xs[n as usize] } else { 0 }
+}
+
+@nopanic
+fn case29(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var ys = xs
+ if i < ys.len {
+ let _ = ys.pop()
+ return ys[i]
+ }
+ 0
+}
+
+@nopanic
+fn case30(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var ys = xs
+ if i < ys.len {
+ ys[i] = 7
+ return ys[i]
+ }
+ 0
+}
+
+@nopanic
+fn case31(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n > 0 { assert(n > 0) }
+ n
+}
+
+@nopanic
+fn case32(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+assert(n > 0)
+ n
+}
+
+@nopanic
+fn case33(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n < 0 { panic("no") }
+ n
+}
+
+@nopanic
+fn case34(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if xs.len > 0 { first(xs) } else { 0 }
+}
+
+@nopanic
+fn case35(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if i < xs.len { item(xs, i) +% first(xs) } else { 0 }
+}
+
+@nopanic
+fn case36(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+first(xs)
+}
+
+@nopanic
+fn case37(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+item(xs, 0)
+}
+
+@nopanic
+fn case38(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+twice(n)
+}
+
+@nopanic
+fn case39(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+g(n)
+}
+
+@nopanic
+fn case40(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+if n <= 0 { 0 } else { case40(xs, i, n - 1, p, g) }
+}
+
+fn main() { }

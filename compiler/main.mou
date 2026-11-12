@@ -22,6 +22,7 @@
 import std.io
 import cgen
 import check
+import effects
 import lexer
 import load
 import mir
@@ -35,14 +36,36 @@ fn main() -> int ! io.Error {
         for line in types.selftest() { io.print(line)? }
         return 0
     }
-    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules" || args[0] == "decls" || args[0] == "types" || args[0] == "lowered" || args[0] == "c") {
-        io.eprint("usage: mouc lex|tree|modules|decls|types|lowered|c <file.mou>")?
+    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules" || args[0] == "decls" || args[0] == "types" || args[0] == "lowered" || args[0] == "c" || args[0] == "fx") {
+        io.eprint("usage: mouc lex|tree|modules|decls|types|lowered|fx|c <file.mou>")?
         return 2
     }
     let src = io.read_file(args[1])?
     if args[0] == "modules" {
         let std_dir = if args.len > 2 { args[2] } else { "std" }
         for line in load.dump(load.load(args[1], src, std_dir)) { io.print(line)? }
+        return 0
+    }
+    if args[0] == "fx" {
+        let std_dir = if args.len > 2 { args[2] } else { "std" }
+        let program = load.load(args[1], src, std_dir)
+        if program.errors.len > 0 {
+            for e in program.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 0
+        }
+        let checked = check.check(program)
+        let mistakes = check.error_lines(checked)
+        if mistakes.len > 0 {
+            for line in mistakes { io.print(line)? }
+            return 0
+        }
+        let lowered = mir.lower(program, checked)
+        if lowered.errors.len > 0 {
+            for e in lowered.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 0
+        }
+        for line in effects.dump(lowered) { io.print(line)? }
+        for e in effects.check(lowered) { io.print("error {e.line}:{e.col} {e.msg}")? }
         return 0
     }
     if args[0] == "c" {
@@ -67,6 +90,11 @@ fn main() -> int ! io.Error {
         let lost = moves.check(lowered)
         if lost.len > 0 {
             for e in lost { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 1
+        }
+        let ruled = effects.check(lowered)
+        if ruled.len > 0 {
+            for e in ruled { io.print("error {e.line}:{e.col} {e.msg}")? }
             return 1
         }
         let runtime = io.read_file(runtime_path)?

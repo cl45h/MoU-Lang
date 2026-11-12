@@ -1,0 +1,93 @@
+import std.io
+struct P { x: int, tags: [str] }
+enum Tree { Leaf, Node(Tree?, int) }
+fn first(xs: [int]) -> int where xs.len > 0 { xs[0] }
+fn item(xs: [int], i: usize) -> int where i < xs.len { xs[i] }
+fn twice(n: int) -> int { n * 2 }
+fn say() ! io.Error { io.print("x")? }
+
+@noalloc
+fn case0(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+n + xs.len as int + p.x
+}
+
+@noalloc
+fn case1(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let q = P(1, [])
+ q.x
+}
+
+@noalloc
+fn case2(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let s = "abc"
+ let t = s
+ n
+}
+
+@noalloc
+fn case3(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let t = Tree.Leaf
+ n
+}
+
+@noalloc
+fn case4(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let ys = [1, 2]
+ n
+}
+
+@noalloc
+fn case5(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let ys = [0; 8]
+ n
+}
+
+@noalloc
+fn case6(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var ys = xs
+ n
+}
+
+@noalloc
+fn case7(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let q = p
+ n
+}
+
+@noalloc
+fn case8(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+var ys: [int] = []
+ ys.push(1)
+ n
+}
+
+@noalloc
+fn case9(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let s = "n is {n}"
+ n
+}
+
+@noalloc
+fn case10(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let ys = xs[0..1]
+ n
+}
+
+@noalloc
+fn case11(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let t = Tree.Node(None, 1)
+ n
+}
+
+@noalloc
+fn case12(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+let h = fn(k: int) -> int { k + n }
+ n
+}
+
+@noalloc
+fn case13(xs: [int], i: usize, n: int, p: P, g: fn(int) -> int) -> int {
+g(n)
+}
+
+fn main() { }
