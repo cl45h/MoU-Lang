@@ -298,7 +298,7 @@ fn operands_of(rv: mir.Rvalue) -> [mir.Operand] {
     }
 }
 
-struct Counts { uses: [int], defs: [int], def_block: [int], by_call: [int] }
+struct Counts { uses: [int], defs: [int], def_block: [int], by_call: [int], by_result: [bool] }
 
 fn count_through(c: mut Counts, p: mir.Place) {
     for pr in p.proj {
@@ -333,18 +333,19 @@ fn count_written(c: mut Counts, p: mir.Place, block: int) {
 }
 
 // The temporaries that are given a value once and read once, by a call
-// at the end of the same block. A copy kept in such a temporary would
+// that always comes after. A copy kept in such a temporary would
 // make what it holds shared until the function returns, and the next
 // write to the original would copy all of it.
 fn spent(f: mir.Func) -> [bool] {
     var n = f.locals
     if n < 1 { n = 1 }
-    var c = Counts([], [], [], [])
+    var c = Counts([], [], [], [], [])
     for l in 0..n {
         c.uses.push(0)
         c.defs.push(0)
         c.def_block.push(-1)
-        c.by_call.push(-2)
+        c.by_call.push(-1)
+        c.by_result.push(false)
     }
     for k in 0..(f.blocks.len as int) {
         let b = f.blocks[k]
@@ -382,9 +383,10 @@ fn spent(f: mir.Func) -> [bool] {
                     c.uses[w.place.local] += 2
                     count_through(mut c, w.place)
                 }
-                // The result is kept after the arguments are read, in the
-                // block that follows as far as a temporary can tell.
-                count_written(mut c, dest, -1)
+                // The result is kept after the arguments are read: it is
+                // there from the block that follows.
+                count_written(mut c, dest, k)
+                if dest.proj.len == 0 { c.by_result[dest.local] = true }
             }
             mir.Term.Branch(op, _, _) => count_read(mut c, op)
             mir.Term.Return(op) => count_read(mut c, op)
@@ -406,9 +408,47 @@ fn spent(f: mir.Func) -> [bool] {
         for o in f.once {
             if o == l { once = true }
         }
-        out.push(l >= f.params && !named && !once && c.uses[l] == 1 && c.defs[l] == 1 && c.def_block[l] != -1 && c.def_block[l] == c.by_call[l])
+        let given = c.def_block[l]
+        let used = c.by_call[l]
+        if !(l >= f.params && !named && !once && c.uses[l] == 1 && c.defs[l] == 1 && given != -1 && used != -1) {
+            out.push(false)
+            continue
+        }
+        if given == used {
+            out.push(!c.by_result[l])
+            continue
+        }
+        // Given a value in one block and read by a call in another: every
+        // way to the call must go through where the value is given, and
+        // the call must not run again without it.
+        out.push(!reaches(f, [0], used, given) && !reaches(f, next_blocks(f, used), used, given))
     }
     out
+}
+
+fn next_blocks(f: mir.Func, k: int) -> [int] {
+    match f.blocks[k].term {
+        mir.Term.Goto(t) => [t]
+        mir.Term.Branch(_, a, b) => [a, b]
+        mir.Term.Call(_, _, _, _, next) => [next]
+        _ => []
+    }
+}
+
+// Whether `target` can be reached from `start` without going through `avoid`.
+fn reaches(f: mir.Func, start: [int], target: int, avoid: int) -> bool {
+    var seen: [bool] = []
+    for b in f.blocks { seen.push(false) }
+    var work = start
+    while work.len > 0 {
+        var b = 0
+        if let Some(x) = work.pop() { b = x }
+        if b == avoid || seen[b] { continue }
+        seen[b] = true
+        if b == target { return true }
+        for t in next_blocks(f, b) { work.push(t) }
+    }
+    false
 }
 
 fn rep_type(r: Rep) -> str {

@@ -296,7 +296,7 @@ struct Cx {
 }
 
 /// The temporaries that are given a value once and read once, by a call
-/// at the end of the same block. A copy kept in such a temporary would
+/// that always comes after. A copy kept in such a temporary would
 /// make whatever it holds shared until the function returns, and the
 /// next write to the original would copy all of it.
 pub fn spent(f: &Func) -> Vec<bool> {
@@ -327,6 +327,8 @@ pub fn spent(f: &Func) -> Vec<bool> {
     let mut uses = vec![0u32; n];
     let mut defs = vec![(0u32, usize::MAX); n];
     let mut by_call = vec![usize::MAX; n];
+    // Temporaries that hold the result of a call.
+    let mut by_result = vec![false; n];
     for (k, b) in f.blocks.iter().enumerate() {
         for st in &b.stmts {
             written(&st.place, k, &mut uses, &mut defs);
@@ -353,23 +355,58 @@ pub fn spent(f: &Func) -> Vec<bool> {
                     uses[place.local] += 2;
                     through(place, &mut uses);
                 }
-                // The result is stored after the arguments are read, in
-                // the block that follows as far as a temporary can tell.
-                written(dest, usize::MAX, &mut uses, &mut defs);
+                // The result is stored after the arguments are read: it
+                // is there from the block that follows.
+                written(dest, k, &mut uses, &mut defs);
+                if dest.proj.is_empty() {
+                    by_result[dest.local] = true;
+                }
             }
             Term::Branch(op, _, _) | Term::Return(op) => read(op, &mut uses),
             _ => {}
         }
     }
+    let next = |k: usize| match &f.blocks[k].term {
+        Term::Goto(t) => vec![*t],
+        Term::Branch(_, a, b) => vec![*a, *b],
+        Term::Call { next, .. } => vec![*next],
+        _ => Vec::new(),
+    };
+    // Whether `target` can be reached from `start` without going through `avoid`.
+    let reaches = |start: Vec<usize>, target: usize, avoid: usize| {
+        let mut seen = vec![false; f.blocks.len()];
+        let mut work = start;
+        while let Some(b) = work.pop() {
+            if b == avoid || std::mem::replace(&mut seen[b], true) {
+                continue;
+            }
+            if b == target {
+                return true;
+            }
+            work.extend(next(b));
+        }
+        false
+    };
     (0..n)
         .map(|l| {
-            l >= f.params
+            let (given, used) = (defs[l].1, by_call[l]);
+            let single = l >= f.params
                 && f.names.get(l).is_none_or(|name| name.is_none())
                 && !f.once.contains(&l)
                 && uses[l] == 1
                 && defs[l].0 == 1
-                && defs[l].1 != usize::MAX
-                && defs[l].1 == by_call[l]
+                && given != usize::MAX
+                && used != usize::MAX;
+            if !single {
+                return false;
+            }
+            if given == used {
+                return !by_result[l];
+            }
+            // Given a value in one block and read by a call in another:
+            // every way to the call must go through where the value is
+            // given, and the call must not run again without it.
+            !reaches(vec![0], used, given) && !reaches(next(used), used, given)
         })
         .collect()
 }
@@ -1339,6 +1376,10 @@ mod tests {
         let built = Command::new(cc).arg("-O1").arg("-o").arg(&exe).arg(&c).arg("-lm").output().ok()?;
         assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
         let run = Command::new(&exe).output().unwrap();
+        // Nothing is left behind in the directory of temporary files.
+        let _ = std::fs::remove_file(&c);
+        let _ = std::fs::remove_file(&exe);
+        let _ = std::fs::remove_dir(&dir);
         Some((String::from_utf8(run.stdout).unwrap(), run.status.code().unwrap_or(-1)))
     }
 
