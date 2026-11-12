@@ -623,7 +623,11 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
                 args.iter().for_each(|a| projected(a, &mut reps));
                 through(dest, &mut reps);
                 for (_, place) in writeback {
-                    reps[place.local] = Rep::Boxed;
+                    // A whole struct of C goes to the call as a block
+                    // made for it, and is read back from what the call leaves.
+                    if !(place.proj.is_empty() && matches!(reps[place.local], Rep::Rec(_))) {
+                        reps[place.local] = Rep::Boxed;
+                    }
                 }
             }
             Term::Branch(op, _, _) | Term::Return(op) => projected(op, &mut reps),

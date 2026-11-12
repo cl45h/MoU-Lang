@@ -437,6 +437,8 @@ struct VarSlot { name: str, local: int }
 
 // `tasks`: for the scope of a `scope` block, the local of the scope, whose
 // tasks are waited for on the way out; -1 otherwise.
+struct SelfHint { job: int, ty: types.Ty }
+
 struct Scope { vars: [VarSlot], defers: [parser.Expr], tasks: int }
 
 struct LoopCtx {
@@ -579,6 +581,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
         twin_src: Place(0, [])
     )
     var jobs: [Job] = []
+    // The methods whose `self` has a type known here, and the type.
+    var receivers: [SelfHint] = []
     var main: int? = None
     var tests: [int] = []
     let decls = p.file.decls
@@ -631,6 +635,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                             lw.set_method_id(key, mangled, id)
                             lw.note_decl(id, f)
                             let limits = lw.limits(p, m)
+                            if let Some(_) = method.self_mode { receivers.push(SelfHint(id, method.self_ty)) }
                             jobs.push(Job.Fn(FnJob("{key}.{f.name}", f, method.sig, method.self_mode, check.Span(m.line, m.col), 0, false, limits)))
                         }
                         _ => {}
@@ -707,6 +712,10 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                 fns.push(lw.constant(name, value, at))
             }
         }
+    }
+    // The receiver of a method is kept like any parameter of its type.
+    for r in receivers {
+        if fns[r.job].scalars.len > 0 { fns[r.job].scalars[0] = scalar_of(c.structs, r.ty) }
     }
     for f in lw.extra { fns.push(f) }
     var structs: [StructShape] = []

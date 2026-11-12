@@ -777,7 +777,11 @@ fn infer(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> [Rep] {
             mir.Term.Call(_, args, writeback, dest, _) => {
                 for a in args { mark_projected(mut reps, a) }
                 mark_through(mut reps, dest)
-                for w in writeback { reps[w.place.local] = Rep.Boxed }
+                for w in writeback {
+                    // A whole struct of C goes to the call as a block
+                    // made for it, and is read back from what the call leaves.
+                    if !(w.place.proj.len == 0 && rec_of(reps[w.place.local]) >= 0) { reps[w.place.local] = Rep.Boxed }
+                }
             }
             mir.Term.Branch(op, _, _) => mark_projected(mut reps, op)
             mir.Term.Return(op) => mark_projected(mut reps, op)

@@ -776,6 +776,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         copies: Vec::new(),
     };
     let mut jobs = Vec::new();
+    // The methods whose `self` has a type known here, and the type.
+    let mut receivers: Vec<(usize, Ty)> = Vec::new();
     let mut main = None;
     let mut tests = Vec::new();
     for (i, d) in file.decls.iter().enumerate() {
@@ -812,6 +814,9 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
                     lw.fn_decls.insert(jobs.len(), f);
                     let name = format!("{key}.{}", f.name);
                     let limits = lw.limits(file, m);
+                    if method.self_mode.is_some() {
+                        receivers.push((jobs.len(), method.self_ty.clone()));
+                    }
                     jobs.push(Job::Fn { name, f, sig: &method.sig, self_mode: method.self_mode, span: m.span, inst: 0, path: false, limits });
                 }
             }
@@ -871,6 +876,12 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
             }
         })
         .collect();
+    // The receiver of a method is kept like any parameter of its type.
+    for (j, ty) in &receivers {
+        if let Some(first) = fns[*j].scalars.first_mut() {
+            *first = scalar_of(info, ty);
+        }
+    }
     fns.append(&mut lw.extra);
     if !lw.errors.is_empty() {
         lw.errors.sort_by_key(|e| (e.span.line, e.span.col));
