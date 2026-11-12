@@ -1,0 +1,12 @@
+import std.io
+import ctime
+
+fn main() ! io.Error {
+    let t = ctime.now()
+    io.print("{t.tv_sec > 1700000000} {t.tv_usec >= 0 && t.tv_usec < 1000000}")?
+    let d = ctime.divide(17, 5)
+    io.print("{d.quot} {d.rem}")?
+    var day = ctime.Tm(0, 0, 12, 12, 10, 126, 0, 0, 0)
+    let secs = ctime.stamp(mut day)
+    io.print("{secs} {day.tm_wday} {day.tm_yday}")?
+}

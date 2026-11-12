@@ -1,0 +1,28 @@
+@profile(system)
+
+import c "sys/time.h" as st { fn gettimeofday(tv: mut TimeVal, tz: ptr?) -> i32 }
+import c "stdlib.h" as lib { fn div(a: i32, b: i32) -> Div }
+import c "time.h" as tm {
+    fn timegm(t: mut Tm) -> i64
+}
+
+
+@c("struct timeval")
+pub struct TimeVal { tv_sec: i64, tv_usec: i64 }
+
+@c("div_t")
+pub struct Div { quot: i32, rem: i32 }
+
+@c("struct tm")
+pub struct Tm { tm_sec: i32, tm_min: i32, tm_hour: i32, tm_mday: i32, tm_mon: i32, tm_year: i32, tm_wday: i32, tm_yday: i32, tm_isdst: i32 }
+
+pub fn now() -> TimeVal {
+    var tv = TimeVal(0, 0)
+    unsafe { st.gettimeofday(mut tv, None) }
+    tv
+}
+
+pub fn divide(a: i32, b: i32) -> Div { unsafe { lib.div(a, b) } }
+
+// Seconds since 1970 of a date, and the date with its day of the week filled in.
+pub fn stamp(t: mut Tm) -> i64 { unsafe { tm.timegm(mut t) } }

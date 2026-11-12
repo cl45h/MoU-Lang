@@ -1,0 +1,9 @@
+import std.io
+struct S { a: int, b: int }
+fn grow(s: mut S, n: int) { s.a = s.a + n }
+fn outer(s: mut S) { grow(mut s, 5) }
+fn main() ! io.Error {
+    var s = S(1, 2)
+    outer(mut s)
+    io.print("{s.a}")?
+}

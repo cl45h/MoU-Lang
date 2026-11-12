@@ -190,6 +190,63 @@ fn constants(vs: [mir.Value]) -> str ! Fail {
 }
 
 // The C type of a whole number type of the language.
+// A struct a C function changes: the argument, and the number of the struct.
+struct Changed { arg: int, index: str }
+
+// A text without its first `n` characters.
+fn rest(t: str, n: int) -> str {
+    let cs = text.chars(t)
+    var out: [char] = []
+    for k in n..(cs.len as int) { out.push(cs[k]) }
+    text.from_chars(out)
+}
+
+// What makes each struct of C from a tagged value and back, member by member.
+fn c_structs(out: mut [str], p: mir.Program) {
+    for cs in p.cstructs {
+        let i = cs.index
+        let fields = p.structs[i].fields
+        line(mut out, "typedef {cs.name} KX{i}_t;")
+        line(mut out, "static KX{i}_t KX{i}_get(kv v) {{")
+        line(mut out, "    const kv *it = ITEMS(v.u.o);")
+        line(mut out, "    KX{i}_t c;")
+        line(mut out, "    memset(&c, 0, sizeof c);")
+        var made: [str] = []
+        for k in 0..(fields.len as int) {
+            if k >= (cs.kinds.len as int) { break }
+            let f = fields[k]
+            let kind = cs.kinds[k]
+            var read = "({c_int(kind)})it[{k}].u.i"
+            var back = "kint((i128)(c.{f}))"
+            if kind == "bool" {
+                read = "it[{k}].u.t"
+                back = "kbool(c.{f})"
+            }
+            if kind == "f64" {
+                read = "it[{k}].u.f"
+                back = "kf64(c.{f})"
+            }
+            if kind == "f32" {
+                read = "it[{k}].u.g"
+                back = "kf32(c.{f})"
+            }
+            if kind == "ptr" {
+                read = "(void *)(uintptr_t)it[{k}].u.i"
+                back = "kptr_v(c.{f}, {quote(f)})"
+            }
+            if kind == "ptr?" {
+                read = "kptr_c_opt(it[{k}])"
+                back = "kptr_v_opt(c.{f})"
+            }
+            line(mut out, "    c.{f} = {read};")
+            made.push(back)
+        }
+        line(mut out, "    return c;")
+        line(mut out, "}}")
+        line(mut out, "static kv KX{i}_box(KX{i}_t c) {{ return kagg(T_STRUCT, {i}, 0, {cs.kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
+    }
+}
+
 fn c_int(k: str) -> str {
     if k == "isize" { return "ptrdiff_t" }
     if k == "usize" { return "size_t" }
@@ -901,9 +958,14 @@ fn infer(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> [Rep] {
             if l < f.params && is_agg(reps[l]) { reps[l] = Rep.Boxed }
         }
         match b.term {
-            mir.Term.Call(_, _, _, dest, _) => {
+            // What a call hands back to it is written too.
+            mir.Term.Call(_, _, writeback, dest, _) => {
                 let l = dest.local
                 if l < f.params && is_agg(reps[l]) { reps[l] = Rep.Boxed }
+                for w in writeback {
+                    let k = w.place.local
+                    if k < f.params && is_agg(reps[k]) { reps[k] = Rep.Boxed }
+                }
             }
             _ => {}
         }
@@ -1926,10 +1988,27 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         var parts: [str] = []
                         // The strings it is given are held until it returns.
                         var held: [int] = []
+                        // The structs it changes: the argument and the struct.
+                        var changed: [Changed] = []
                         for k in 0..(args.len as int) {
                             if k >= (ext.params.len as int) { break }
                             let v = cx.operand(args[k])?
                             let t = ext.params[k]
+                            if text.starts_with(t, "struct ") {
+                                line(mut out, "        kv e{k} = {v};")
+                                parts.push("KX{rest(t, 7)}_get(e{k})")
+                                held.push(k)
+                                continue
+                            }
+                            if text.starts_with(t, "mut ") {
+                                let i = rest(t, 4)
+                                line(mut out, "        kv e{k} = {v};")
+                                line(mut out, "        KX{i}_t c{k} = KX{i}_get(e{k});")
+                                parts.push("&c{k}")
+                                held.push(k)
+                                changed.push(Changed(k, i))
+                                continue
+                            }
                             if t == "str" || t == "ptr?" {
                                 line(mut out, "        kv e{k} = {v};")
                                 if t == "str" { parts.push("kbytes(e{k})") } else { parts.push("kptr_c_opt(e{k})") }
@@ -1964,8 +2043,19 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if ext.ret == "str?" { r = "kstr_c_opt({call})" }
                         if ext.ret == "ptr" { r = "kptr_v({call}, {quote(ext.name)})" }
                         if ext.ret == "ptr?" { r = "kptr_v_opt({call})" }
+                        if text.starts_with(ext.ret, "struct ") { r = "KX{rest(ext.ret, 7)}_box({call})" }
                         line(mut out, "        kv r = {r};")
                         for k in held { line(mut out, "        krelease(e{k});") }
+                        // What C left in a struct goes back to where it came from.
+                        for ch in changed {
+                            for w in writeback {
+                                if w.arg == ch.arg {
+                                    let back = cx.take(w.place, "KX{ch.index}_box(c{ch.arg})")?
+                                    line(mut out, "        {back}")
+                                    break
+                                }
+                            }
+                        }
                     }
                     mir.Callee.Native(name) => {
                         var parts: [str] = []
@@ -2287,6 +2377,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
         line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
     }
+    c_structs(mut out, p)
     var direct: [Direct?] = []
     for f in p.fns { direct.push(direct_sig(f, p.fns, p.records)) }
     for i in 0..(direct.len as int) {

@@ -685,8 +685,10 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
             }
         };
         b.stmts.iter().for_each(|st| written(st.place.local));
-        if let Term::Call { dest, .. } = &b.term {
+        // What a call hands back to it is written too.
+        if let Term::Call { dest, writeback, .. } = &b.term {
             written(dest.local);
+            writeback.iter().for_each(|(_, place)| written(place.local));
         }
     }
     loop {
@@ -1320,8 +1322,24 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     let mut parts = Vec::new();
                     // The strings it is given are held until it returns.
                     let mut held = Vec::new();
+                    // The structs it changes: the argument and the struct.
+                    let mut changed = Vec::new();
                     for (k, (a, t)) in args.iter().zip(&x.params).enumerate() {
                         let v = operand(cx, a)?;
+                        if let Some(i) = t.strip_prefix("struct ") {
+                            writeln!(out, "        kv e{k} = {v};").unwrap();
+                            parts.push(format!("KX{i}_get(e{k})"));
+                            held.push(k);
+                            continue;
+                        }
+                        if let Some(i) = t.strip_prefix("mut ") {
+                            writeln!(out, "        kv e{k} = {v};").unwrap();
+                            writeln!(out, "        KX{i}_t c{k} = KX{i}_get(e{k});").unwrap();
+                            parts.push(format!("&c{k}"));
+                            held.push(k);
+                            changed.push((k, i));
+                            continue;
+                        }
                         if *t == "str" || *t == "ptr?" {
                             writeln!(out, "        kv e{k} = {v};").unwrap();
                             parts.push(if *t == "str" { format!("kbytes(e{k})") } else { format!("kptr_c_opt(e{k})") });
@@ -1346,11 +1364,18 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         "str?" => format!("kstr_c_opt({call})"),
                         "ptr" => format!("kptr_v({call}, {})", quote(&x.name)),
                         "ptr?" => format!("kptr_v_opt({call})"),
+                        t if t.starts_with("struct ") => format!("KX{}_box({call})", &t[7..]),
                         _ => format!("kint((i128)({call}))"),
                     };
                     writeln!(out, "        kv r = {r};").unwrap();
                     for k in held {
                         writeln!(out, "        krelease(e{k});").unwrap();
+                    }
+                    // What C left in a struct goes back to where it came from.
+                    for (k, i) in changed {
+                        if let Some((_, place)) = writeback.iter().find(|(w, _)| *w == k) {
+                            writeln!(out, "        {}", cx.take(place, &format!("KX{i}_box(c{k})"))?).unwrap();
+                        }
                     }
                 } else if let Callee::Native(name) = callee {
                     let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
@@ -1541,6 +1566,32 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
         let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
         writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+    }
+    // The structs of C: how each is read from a tagged value and made
+    // into one, member by member.
+    for (i, name, kinds) in &p.cstructs {
+        let fields = &p.structs[*i].1;
+        writeln!(out, "typedef {name} KX{i}_t;").unwrap();
+        writeln!(out, "static KX{i}_t KX{i}_get(kv v) {{").unwrap();
+        writeln!(out, "    const kv *it = ITEMS(v.u.o);").unwrap();
+        writeln!(out, "    KX{i}_t c;").unwrap();
+        writeln!(out, "    memset(&c, 0, sizeof c);").unwrap();
+        let mut made = Vec::new();
+        for (k, (f, kind)) in fields.iter().zip(kinds).enumerate() {
+            let (read, back) = match *kind {
+                "bool" => (format!("it[{k}].u.t"), format!("kbool(c.{f})")),
+                "f64" => (format!("it[{k}].u.f"), format!("kf64(c.{f})")),
+                "f32" => (format!("it[{k}].u.g"), format!("kf32(c.{f})")),
+                "ptr" => (format!("(void *)(uintptr_t)it[{k}].u.i"), format!("kptr_v(c.{f}, {})", quote(f))),
+                "ptr?" => (format!("kptr_c_opt(it[{k}])"), format!("kptr_v_opt(c.{f})")),
+                int => (format!("({})it[{k}].u.i", c_int(int)), format!("kint((i128)(c.{f}))")),
+            };
+            writeln!(out, "    c.{f} = {read};").unwrap();
+            made.push(back);
+        }
+        writeln!(out, "    return c;").unwrap();
+        writeln!(out, "}}").unwrap();
+        writeln!(out, "static kv KX{i}_box(KX{i}_t c) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
     }
     let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns, &p.records)).collect();
     for (i, sig) in direct.iter().enumerate() {

@@ -181,6 +181,10 @@ pub struct Extern { name: str, header: str, params: [str], ret: str }
 
 pub struct StructShape { name: str, fields: [str] }
 
+// A struct that is a type of a C header: the struct, the name of that
+// type, and the type of each field as C takes it.
+pub struct CShape { index: int, name: str, kinds: [str] }
+
 pub struct VariantShape { name: str, fields: [str?] }
 
 pub struct EnumShape { name: str, variants: [VariantShape] }
@@ -201,6 +205,8 @@ pub struct Program {
     // The structs from this one on are `dyn` values.
     dyn_from: int
     externs: [Extern]
+    // The structs that are a type of a C header.
+    cstructs: [CShape]
     errors: [lexer.Error]
 }
 
@@ -813,10 +819,37 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
     var externs: [Extern] = []
     for x in c.externs {
         var params: [str] = []
-        for q in x.sig.params { params.push(c_type(q.ty)) }
+        for q in x.sig.params {
+            // A `mut` struct goes as its address.
+            let changed = match q.mode {
+                parser.Mode.Mut => true
+                _ => false
+            }
+            var kind = c_type(q.ty)
+            if changed {
+                match q.ty {
+                    types.Ty.Struct(i, _) => {
+                        kind = "mut {i}"
+                    }
+                    _ => {}
+                }
+            }
+            params.push(kind)
+        }
         externs.push(Extern(x.name, x.header, params, c_type(x.sig.ret)))
     }
-    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, sorted_errors(lw.errors))
+    // By the number of the struct.
+    var cstructs: [CShape] = []
+    for i in 0..(c.structs.len as int) {
+        for cs in c.cstructs {
+            if cs.index == i {
+                var kinds: [str] = []
+                for f in c.structs[i].fields { kinds.push(c_type(f.ty)) }
+                cstructs.push(CShape(i, cs.name, kinds))
+            }
+        }
+    }
+    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, cstructs, sorted_errors(lw.errors))
 }
 
 fn c_type(t: types.Ty) -> str {
@@ -837,6 +870,8 @@ fn c_type(t: types.Ty) -> str {
                 _ => "unit"
             }
         }
+        // A struct of C, by its number.
+        types.Ty.Struct(i, _) => "struct {i}"
         _ => "unit"
     }
 }
@@ -3002,8 +3037,9 @@ impl Lower {
                 }
             }
             Some(check.Res.Extern(x)) => {
-                let ops = self.arg_ops(args)
-                self.finish_call(Callee.Extern(x), ops, [], at)
+                // A struct it takes as `mut` is read back after the call.
+                let sig = self.c.externs[x].sig
+                self.invoke(Callee.Extern(x), None, sig, None, 0, args, at)
             }
             Some(check.Res.Builtin(name)) => {
                 if name == "panic" {
@@ -3508,5 +3544,6 @@ pub fn dump(p: Program) -> [str] {
     }
     out.push("dyn_from {p.dyn_from}")
     for x in p.externs { out.push("extern {x.name} {x.header} ({text.join(x.params, ", ")}) -> {x.ret}") }
+    for cs in p.cstructs { out.push("cstruct {cs.index} {cs.name} ({text.join(cs.kinds, ", ")})") }
     out
 }

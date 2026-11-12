@@ -397,6 +397,9 @@ pub struct Program {
     /// The structs from this one on are `dyn` values.
     pub dyn_from: usize,
     pub externs: Vec<Extern>,
+    /// The structs that are a type of a C header: the struct, the name of
+    /// that type, and the type of each field as C takes it.
+    pub cstructs: Vec<(usize, String, Vec<&'static str>)>,
 }
 
 /// Whether a value of type `t` holds, without an array in between, a value
@@ -609,6 +612,9 @@ pub fn dump(p: &Program) -> String {
     let _ = writeln!(out, "dyn_from {}", p.dyn_from);
     for x in &p.externs {
         let _ = writeln!(out, "extern {} {} ({}) -> {}", x.name, x.header, x.params.join(", "), x.ret);
+    }
+    for (i, name, kinds) in &p.cstructs {
+        let _ = writeln!(out, "cstruct {i} {name} ({})", kinds.join(", "));
     }
     out
 }
@@ -950,20 +956,30 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         Ty::Optional(inner) if **inner == Ty::Str => "str?",
         Ty::Builtin("ptr") => "ptr",
         Ty::Optional(inner) if **inner == Ty::Builtin("ptr") => "ptr?",
+        // A struct of C, by its number.
+        Ty::Struct(i, _) => Box::leak(format!("struct {i}").into_boxed_str()),
         _ => "unit",
     };
+    // A `mut` one goes as its address.
+    let c_param = |p: &crate::check::ParamSig| match (&p.ty, p.mode) {
+        (Ty::Struct(i, _), Mode::Mut) => &*Box::leak(format!("mut {i}").into_boxed_str()),
+        _ => c_type(&p.ty),
+    };
+    let mut cstructs: Vec<(usize, String, Vec<&'static str>)> =
+        info.cstructs.iter().map(|(i, name)| (*i, name.clone(), info.structs[*i].fields.iter().map(|f| c_type(&f.ty)).collect())).collect();
+    cstructs.sort_by_key(|c| c.0);
     let externs = info
         .externs
         .iter()
         .map(|x| Extern {
             name: x.name.clone(),
             header: x.header.clone(),
-            params: x.sig.params.iter().map(|p| c_type(&p.ty)).collect(),
+            params: x.sig.params.iter().map(c_param).collect(),
             ret: c_type(&x.sig.ret),
         })
         .collect();
     let values = vec![None; lw.const_ids.len()];
-    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs })
+    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs })
 }
 
 impl<'a> Lower<'a> {
@@ -2512,8 +2528,9 @@ impl<'a> Lower<'a> {
                 Operand::Const(Value::Unit)
             }
             Some(Res::Extern(x)) => {
-                let ops = args.iter().map(|a| self.expr(&a.value)).collect();
-                self.finish_call(Callee::Extern(*x), ops, Vec::new(), span)
+                // A struct it takes as `mut` is read back after the call.
+                let sig = &self.info.externs[*x].sig;
+                self.invoke(Callee::Extern(*x), None, sig, None, 0, args, span)
             }
             Some(Res::Builtin("task.spawn")) => {
                 let Some(a) = args.first() else { return Operand::Const(Value::Unit) };

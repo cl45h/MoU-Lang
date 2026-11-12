@@ -392,7 +392,9 @@ impl Gen {
                 let (a, b, c) = (self.int("int", 2), self.int("u8", 2), self.boolean(2));
                 self.line(&format!("var {name} = S({a}, {b}, {c})"));
                 let n = self.int("int", 2);
-                self.line(&format!("grow(mut {name}, {n})"));
+                // Straight, or through a function that hands it on as `mut`.
+                let how = if self.rng.chance(50) { "grow" } else { "regrow" };
+                self.line(&format!("{how}(mut {name}, {n})"));
                 let v = self.fresh("v");
                 self.line(&format!("let {v}: int = total({name}) +% {name}.a"));
                 self.vars.push((v, "int", false));
@@ -455,6 +457,7 @@ impl Gen {
         g.line("    s.a = s.a +% n");
         g.line("    if s.c { s.b = s.b +% 1 }");
         g.line("}");
+        g.line("fn regrow(s: mut S, n: int) { grow(mut s, n +% 1) }");
         g.line("");
         let fns = 2 + g.rng.below(5);
         for _ in 0..fns {

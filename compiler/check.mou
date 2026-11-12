@@ -44,6 +44,10 @@ pub struct ImplInfo { targs: [types.Ty], self_ty: types.Ty, tparams: [TParam] }
 
 pub struct FieldInfo { name: str, ty: types.Ty, optional: bool }
 
+pub struct Pending { module: int, alias: str, header: str, decls: [parser.Decl] }
+
+pub struct CStruct { index: int, name: str }
+
 pub struct StructInfo { name: str, module: int, generic: bool, tparams: [str], fields: [FieldInfo] }
 
 pub struct VariantField { label: str?, ty: types.Ty }
@@ -208,6 +212,11 @@ pub struct Checker {
     alias_depth: int
     externs: [Extern]
     extern_ids: [ExternId]
+    // The headers of C whose functions are taken in once the structs
+    // they may name have their fields.
+    foreign_todo: [Pending]
+    // The structs marked `@c`, and the type of C each one is.
+    cstructs: [CStruct]
     imports: [ImportEntry]
     structs: [StructInfo]
     enums: [EnumInfo]
@@ -388,6 +397,30 @@ fn has_tparam(all: [TParam], name: str) -> bool {
 }
 
 // What a C function can take and give for now.
+// The name of a type of C an annotation gives: one string, of letters,
+// digits, `_` and spaces.
+fn c_name(args: [parser.Expr]) -> str? {
+    if args.len != 1 { return None }
+    match args[0].kind {
+        parser.Kind.Str(parts) => {
+            if parts.len != 1 { return None }
+            match parts[0] {
+                parser.StrPart.Text(s) => {
+                    var any = false
+                    for ch in text.chars(s) {
+                        if !(text.is_alpha(ch) || text.is_digit(ch) || ch == '_' || ch == ' ') { return None }
+                        any = true
+                    }
+                    if !any { return None }
+                    Some(s)
+                }
+                _ => None
+            }
+        }
+        _ => None
+    }
+}
+
 fn c_plain(t: types.Ty) -> bool {
     match t {
         types.Ty.Float(_) => true
@@ -1131,8 +1164,28 @@ impl Checker {
     // ---- declarations ----
 
     // Takes in the functions a module declares of a C header.
+    fn pass_foreign(mut self) {
+        let todo = self.foreign_todo
+        self.foreign_todo = []
+        for t in todo { self.foreign(t.module, t.alias, t.header, t.decls) }
+    }
+
+    // Whether a type is a struct marked `@c`.
+    pub fn is_cstruct(self, t: types.Ty) -> bool {
+        match t {
+            types.Ty.Struct(i, targs) => {
+                if targs.len > 0 { return false }
+                for c in self.cstructs {
+                    if c.index == i { return true }
+                }
+                false
+            }
+            _ => false
+        }
+    }
+
     fn foreign(mut self, module: int, alias: str, header: str, decls: [parser.Decl]) {
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str` and `ptr` for now"
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr` and structs marked `@c`"
         self.module = module
         for d in decls {
             let at = Span(d.line, d.col)
@@ -1150,8 +1203,20 @@ impl Checker {
                             parser.Mode.Let => true
                             _ => false
                         }
-                        if (!c_plain(ty) && !is_text(ty) && !is_address(ty)) || !by_value { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
-                        params.push(types.ParamSig(p.name, parser.Mode.Let, ty, false))
+                        let changed = match p.mode {
+                            parser.Mode.Mut => true
+                            _ => false
+                        }
+                        // A struct of C goes by value, or as its address when it is `mut`.
+                        let record = self.is_cstruct(ty)
+                        var fits = by_value && (c_plain(ty) || is_text(ty) || is_address(ty))
+                        if record { fits = by_value || changed }
+                        if !fits { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
+                        if record && changed {
+                            params.push(types.ParamSig(p.name, parser.Mode.Mut, ty, false))
+                        } else {
+                            params.push(types.ParamSig(p.name, parser.Mode.Let, ty, false))
+                        }
                     }
                     var ret = types.Ty.Unit
                     if let Some(t) = f.ret { ret = self.resolve(t, at) }
@@ -1163,7 +1228,7 @@ impl Checker {
                         }
                         _ => {}
                     }
-                    if !c_plain(ret) && !is_unit(ret) && !textual && !is_address(ret) { self.err(at, "the result of `{f.name}`: {only}") }
+                    if !c_plain(ret) && !is_unit(ret) && !textual && !is_address(ret) && !self.is_cstruct(ret) { self.err(at, "the result of `{f.name}`: {only}") }
                     self.set_extern_id(module, alias, f.name, self.externs.len as int)
                     self.externs.push(Extern(f.name, header, types.Sig(params, ret)))
                 }
@@ -1204,7 +1269,7 @@ impl Checker {
                     Some(o) => o == "c"
                     None => false
                 }
-                if foreign { self.foreign(m, imp.alias, imp.path, imp.decls) }
+                if foreign { self.foreign_todo.push(Pending(m, imp.alias, imp.path, imp.decls)) }
             }
         }
     }
@@ -1318,6 +1383,32 @@ impl Checker {
                             if let Some(d) = f.default { self.expect(d, ty, "field default") }
                         }
                         fields.push(FieldInfo(f.name, ty, has_expr(f.default)))
+                    }
+                    for a in d.attrs {
+                        if a.name == "c" {
+                            // The struct is one of a C header: its fields are
+                            // the members of that one, by name.
+                            let named = c_name(a.args)
+                            var members = fields.len > 0
+                            for f in fields {
+                                if !c_plain(f.ty) && !is_address(f.ty) { members = false }
+                            }
+                            match named {
+                                None => self.err(at, "`@c` takes the name of the type in C, as in `@c(\"struct timeval\")`")
+                                Some(name) => {
+                                    if self.structs[i].tparams.len > 0 {
+                                        self.err(at, "a struct of C cannot have type parameters")
+                                    } else {
+                                        if !members {
+                                            self.err(at, "a struct of C can only have fields that are numbers of up to 64 bits, `bool` or `ptr`")
+                                        } else {
+                                            self.cstructs.push(CStruct(i, name))
+                                        }
+                                    }
+                                }
+                            }
+                            break
+                        }
                     }
                     self.structs[i].fields = fields
                     self.leave_generic()
@@ -1784,6 +1875,8 @@ fn start(p: load.Program, decls_only: bool) -> Checker {
         alias_depth: 0,
         externs: [],
         extern_ids: [],
+        foreign_todo: [],
+        cstructs: [],
         imports: [],
         structs: [],
         enums: [],
@@ -1838,6 +1931,7 @@ pub fn declarations(p: load.Program) -> Checker {
     c.pass_modules()
     c.pass_names()
     c.pass_fields()
+    c.pass_foreign()
     c.pass_traits()
     c.pass_signatures()
     c
@@ -5554,6 +5648,7 @@ pub fn check(p: load.Program) -> Checker {
     c.pass_modules()
     c.pass_names()
     c.pass_fields()
+    c.pass_foreign()
     c.pass_traits()
     c.pass_signatures()
     c.pass_consts()

@@ -250,6 +250,8 @@ pub struct Info {
     pub dyns: HashMap<(usize, usize), Vec<Res>>,
     /// The C functions the program declares.
     pub externs: Vec<Extern>,
+    /// The structs marked `@c`, and the type of C each one is.
+    pub cstructs: HashMap<usize, String>,
     pub traits: Vec<TraitInfo>,
     /// Calls of functions that return `ref mut` whose result is written to.
     pub ref_writes: std::collections::HashSet<(usize, usize)>,
@@ -282,6 +284,8 @@ fn checker(file: &File) -> Checker<'_> {
         dyns: HashMap::new(),
         externs: Vec::new(),
         extern_ids: HashMap::new(),
+        foreign_todo: Vec::new(),
+        cstructs: HashMap::new(),
         unsafe_depth: 0,
         ref_calls: HashMap::new(),
         ref_writes: Default::default(),
@@ -338,6 +342,7 @@ pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
             methods: c.methods,
             dyns: c.dyns,
             externs: c.externs,
+            cstructs: c.cstructs,
             traits: c.traits,
             ref_writes: c.ref_writes,
         };
@@ -1383,6 +1388,11 @@ struct Checker<'a> {
     externs: Vec<Extern>,
     /// C function of each (module, name of the import, name).
     extern_ids: HashMap<(usize, String, String), usize>,
+    /// The headers of C whose functions are taken in once the structs
+    /// they may name have their fields.
+    foreign_todo: Vec<(usize, String, String, &'a [Decl])>,
+    /// The structs marked `@c`, and the type of C each one is.
+    cstructs: HashMap<usize, String>,
     /// How many `unsafe` blocks are open.
     unsafe_depth: usize,
     /// Calls of functions that return `ref`: whether it is `ref mut`, and
@@ -1469,7 +1479,7 @@ impl<'a> Checker<'a> {
     /// Takes in the functions a module declares of a C header.
     fn foreign(&mut self, module: usize, alias: &str, header: &str, decls: &'a [Decl]) {
         let plain = |t: &Ty| matches!(t, Ty::Float(_) | Ty::Bool) || matches!(t, Ty::Int(k) if !k.ends_with("128"));
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str` and `ptr` for now";
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr` and structs marked `@c`";
         // An address goes as `ptr`, or as `ptr?` when it may be null.
         let address = |t: &Ty| *t == Ty::Builtin("ptr") || *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
         self.module = module;
@@ -1488,10 +1498,14 @@ impl<'a> Checker<'a> {
                     Some(t) => self.resolve(t, d.span),
                     None => Ty::Unknown,
                 };
-                if (!plain(&ty) && ty != Ty::Str && !address(&ty)) || p.mode != Mode::Let {
+                // A struct of C goes by value, or as its address when it is `mut`.
+                let record = matches!(&ty, Ty::Struct(i, targs) if targs.is_empty() && self.cstructs.contains_key(i));
+                let fits = if record { matches!(p.mode, Mode::Let | Mode::Mut) } else { p.mode == Mode::Let && (plain(&ty) || ty == Ty::Str || address(&ty)) };
+                if !fits {
                     self.err(d.span, format!("the parameter `{}` of `{}`: {only}", p.name, f.name));
                 }
-                params.push(ParamSig { name: p.name.clone(), mode: Mode::Let, ty, optional: false });
+                let mode = if record && p.mode == Mode::Mut { Mode::Mut } else { Mode::Let };
+                params.push(ParamSig { name: p.name.clone(), mode, ty, optional: false });
             }
             let ret = match &f.ret {
                 Some(t) => self.resolve(t, d.span),
@@ -1499,7 +1513,8 @@ impl<'a> Checker<'a> {
             };
             // A C string comes back as `str`, or as `str?` when it may be null.
             let text = ret == Ty::Str || ret == Ty::Optional(Box::new(Ty::Str));
-            if !plain(&ret) && ret != Ty::Unit && !text && !address(&ret) {
+            let record = matches!(&ret, Ty::Struct(i, targs) if targs.is_empty() && self.cstructs.contains_key(i));
+            if !plain(&ret) && ret != Ty::Unit && !text && !address(&ret) && !record {
                 self.err(d.span, format!("the result of `{}`: {only}", f.name));
             }
             self.extern_ids.insert((module, alias.to_string(), f.name.clone()), self.externs.len());
@@ -1761,7 +1776,7 @@ impl<'a> Checker<'a> {
                 self.imports.insert((0, name.clone()), imp.path.clone());
                 self.globals.insert((0, name.clone()), Global::Import);
                 if imp.origin.as_deref() == Some("c") {
-                    self.foreign(0, &name, &imp.path, &imp.decls);
+                    self.foreign_todo.push((0, name.clone(), imp.path.clone(), &imp.decls));
                 }
             }
         } else {
@@ -1781,7 +1796,7 @@ impl<'a> Checker<'a> {
                     };
                     self.globals.insert((m, imp.alias.clone()), global);
                     if imp.origin.as_deref() == Some("c") {
-                        self.foreign(m, &imp.alias, &imp.path, &imp.decls);
+                        self.foreign_todo.push((m, imp.alias.clone(), imp.path.clone(), &imp.decls));
                     }
                 }
             }
@@ -1867,6 +1882,33 @@ impl<'a> Checker<'a> {
                         }
                         fields.push(FieldInfo { name: f.name.clone(), ty, optional: f.default.is_some() });
                     }
+                    if let Some(a) = d.attrs.iter().find(|a| a.name == "c") {
+                        // The struct is one of a C header: its fields are
+                        // the members of that one, by name.
+                        let written = match a.args.as_slice() {
+                            [Expr { kind: ExprKind::Str(parts), .. }] => match parts.as_slice() {
+                                [StrPart::Lit(s)] => Some(s.clone()),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        let member = |t: &Ty| {
+                            matches!(t, Ty::Float(_) | Ty::Bool | Ty::Builtin("ptr"))
+                                || matches!(t, Ty::Int(k) if !k.ends_with("128"))
+                                || *t == Ty::Optional(Box::new(Ty::Builtin("ptr")))
+                        };
+                        let named = written.filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ' '));
+                        match named {
+                            None => self.err(d.span, "`@c` takes the name of the type in C, as in `@c(\"struct timeval\")`"),
+                            Some(_) if !self.structs[i].tparams.is_empty() => self.err(d.span, "a struct of C cannot have type parameters"),
+                            Some(_) if fields.is_empty() || !fields.iter().all(|f| member(&f.ty)) => {
+                                self.err(d.span, "a struct of C can only have fields that are numbers of up to 64 bits, `bool` or `ptr`");
+                            }
+                            Some(name) => {
+                                self.cstructs.insert(i, name);
+                            }
+                        }
+                    }
                     self.structs[i].fields = fields;
                     self.leave_generic();
                 }
@@ -1903,6 +1945,9 @@ impl<'a> Checker<'a> {
                 }
                 _ => {}
             }
+        }
+        for (m, alias, header, decls) in std::mem::take(&mut self.foreign_todo) {
+            self.foreign(m, &alias, &header, decls);
         }
         // Pass 3: signatures of traits, functions and methods.
         for (di, d) in file.decls.iter().enumerate() {
