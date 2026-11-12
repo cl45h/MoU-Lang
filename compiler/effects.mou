@@ -99,11 +99,22 @@ fn same_ints(a: [int], b: [int]) -> bool {
 
 fn same_key(a: Key, b: Key) -> bool { a.local == b.local && same_ints(a.fields, b.fields) }
 
+// Written without a pair of the two, which would be made anew each time:
+// the states of a function are compared local by local, many times over.
 fn same_opt_key(a: Key?, b: Key?) -> bool {
-    match (a, b) {
-        (Some(x), Some(y)) => same_key(x, y)
-        (None, None) => true
-        _ => false
+    match a {
+        Some(x) => {
+            match b {
+                Some(y) => same_key(x, y)
+                None => false
+            }
+        }
+        None => {
+            match b {
+                Some(_) => false
+                None => true
+            }
+        }
     }
 }
 
@@ -118,10 +129,19 @@ fn starts_with(all: [int], start: [int]) -> bool {
 struct Cmp { op: str, a: mir.Operand, b: mir.Operand }
 
 fn same_opt_cmp(a: Cmp?, b: Cmp?) -> bool {
-    match (a, b) {
-        (Some(x), Some(y)) => x.op == y.op && x.a == y.a && x.b == y.b
-        (None, None) => true
-        _ => false
+    match a {
+        Some(x) => {
+            match b {
+                Some(y) => x.op == y.op && x.a == y.a && x.b == y.b
+                None => false
+            }
+        }
+        None => {
+            match b {
+                Some(_) => false
+                None => true
+            }
+        }
     }
 }
 
@@ -558,12 +578,17 @@ impl State {
     fn join(self, o: State) -> State {
         var out = State([], [], [], [], [], [], [], [])
         for l in 0..self.iv.len {
-            out.iv.push(Range(smaller(self.iv[l].lo, o.iv[l].lo), larger(self.iv[l].hi, o.iv[l].hi)))
+            // Most locals are the same on both sides: what is there is kept.
+            let mine = self.iv[l]
+            let theirs = o.iv[l]
+            if same_range(mine, theirs) { out.iv.push(mine) } else { out.iv.push(Range(smaller(mine.lo, theirs.lo), larger(mine.hi, theirs.hi))) }
             out.nz.push(self.nz[l] && o.nz[l])
             if self.eq[l] == o.eq[l] { out.eq.push(self.eq[l]) } else { out.eq.push(-1) }
             if same_opt_key(self.len_of[l], o.len_of[l]) { out.len_of.push(self.len_of[l]) } else { out.len_of.push(None) }
             if same_opt_cmp(self.cmp[l], o.cmp[l]) { out.cmp.push(self.cmp[l]) } else { out.cmp.push(None) }
-            out.items.push(Range(smaller(self.items[l].lo, o.items[l].lo), larger(self.items[l].hi, o.items[l].hi)))
+            let held = self.items[l]
+            let other = o.items[l]
+            if same_range(held, other) { out.items.push(held) } else { out.items.push(Range(smaller(held.lo, other.lo), larger(held.hi, other.hi))) }
         }
         for f in self.below {
             if o.is_below(f.local, f.key) { out.below.push(f) }
