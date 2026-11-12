@@ -402,6 +402,190 @@ fn holds(info: &Info, t: &Ty, target: (bool, usize), seen: &mut Vec<(bool, usize
     }
 }
 
+/// A lowered program as text, in the form the lowering written in Mou
+/// (`compiler/mir.mou`) prints it.
+pub fn dump(p: &Program) -> String {
+    use std::fmt::Write;
+    fn quote(s: &str) -> String {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+    }
+    fn value(v: &Value) -> String {
+        match v {
+            Value::Int(i) => format!("int {i}"),
+            Value::Float(f) => format!("float {f:?}"),
+            Value::F32(f) => format!("f32 {f:?}"),
+            Value::Bool(b) => format!("bool {b}"),
+            Value::Char(c) => format!("char {}", *c as u32),
+            Value::Str(s) => format!("str {}", quote(s)),
+            Value::Unit => "()".to_string(),
+            Value::None => "none".to_string(),
+            Value::Fn(f) => format!("fn {f}"),
+            Value::Enum(e, v, fields) if fields.is_empty() => format!("enum {e}.{v}"),
+            other => format!("{other:?}"),
+        }
+    }
+    fn place(p: &Place) -> String {
+        let mut out = format!("L{}", p.local);
+        for pr in &p.proj {
+            match pr {
+                Proj::Field(k) => out.push_str(&format!(".{k}")),
+                Proj::Index(i) => out.push_str(&format!("[{}]", operand(i))),
+                Proj::Path(l) => out.push_str(&format!("@{l}")),
+            }
+        }
+        out
+    }
+    fn operand(op: &Operand) -> String {
+        match op {
+            Operand::Const(v) => value(v),
+            Operand::Place(p) => place(p),
+        }
+    }
+    fn operands(ops: &[Operand]) -> String {
+        ops.iter().map(operand).collect::<Vec<_>>().join(", ")
+    }
+    fn num(n: Num) -> String {
+        match n {
+            Num::Int(k) => k.to_string(),
+            Num::Float => "float".to_string(),
+            Num::F64 => "f64".to_string(),
+            Num::Dyn => "dyn".to_string(),
+        }
+    }
+    fn conv(c: &Conv) -> String {
+        let opt = |c: &Option<Box<Conv>>| c.as_ref().map_or("_".to_string(), |c| conv(c));
+        match c {
+            Conv::Fit(k) => format!("fit {k}"),
+            Conv::ToFloat(single) => format!("tofloat {single}"),
+            Conv::Wrap(c) => format!("wrap({})", opt(c)),
+            Conv::Inside(c) => format!("inside({})", conv(c)),
+            Conv::Elems(c) => format!("elems({})", conv(c)),
+            Conv::Tuple(cs) => format!("tuple({})", cs.iter().map(|c| c.as_ref().map_or("_".to_string(), conv)).collect::<Vec<_>>().join(", ")),
+            Conv::Res(a, b) => format!("res({}, {})", opt(a), opt(b)),
+        }
+    }
+    fn rvalue(rv: &Rvalue) -> String {
+        use Rvalue::*;
+        match rv {
+            Use(a) => format!("use {}", operand(a)),
+            Unary(op, n, a) => {
+                let op = match op {
+                    UnOp::Neg => "neg",
+                    UnOp::Not => "not",
+                    UnOp::BitNot => "bitnot",
+                };
+                format!("{op} {} {}", num(*n), operand(a))
+            }
+            Binary(op, n, a, b) => format!("{} {} {}, {}", op.symbol(), num(*n), operand(a), operand(b)),
+            CastInt(a, k) => format!("castint {k} {}", operand(a)),
+            CastFloat(a, single) => format!("castfloat {single} {}", operand(a)),
+            Convert(a, c) => format!("convert {} {}", conv(c), operand(a)),
+            Tuple(ops) => format!("tuple({})", operands(ops)),
+            Struct(i, ops) => format!("struct {i}({})", operands(ops)),
+            Enum(i, v, ops) => format!("enum {i}.{v}({})", operands(ops)),
+            Array(ops) => format!("array[{}]", operands(ops)),
+            Repeat(a, b) => format!("repeat {}, {}", operand(a), operand(b)),
+            Some(a) => format!("some {}", operand(a)),
+            Ok(a) => format!("ok {}", operand(a)),
+            Err(a) => format!("err {}", operand(a)),
+            Is(a, v) => format!("is {v} {}", operand(a)),
+            Len(a) => format!("len {}", operand(a)),
+            Slice(a, b) => format!("slice {}, {}", operand(a), operand(b)),
+            Format(parts) => {
+                let parts: Vec<String> = parts
+                    .iter()
+                    .map(|part| match part {
+                        FmtPart::Lit(s) => quote(s),
+                        FmtPart::Val(o) => operand(o),
+                    })
+                    .collect();
+                format!("format({})", parts.join(", "))
+            }
+            Chars(a) => format!("chars {}", operand(a)),
+            Const(k) => format!("const {k}"),
+            RangeStart(a, n) => format!("rangestart {} {}", num(*n), operand(a)),
+            RangeHas(a, b) => format!("rangehas {}, {}", operand(a), operand(b)),
+            RangeLast(a, b) => format!("rangelast {}, {}", operand(a), operand(b)),
+            Succ(a, n) => format!("succ {} {}", num(*n), operand(a)),
+            Push(p, a) => format!("push {}, {}", place(p), operand(a)),
+            Pop(p) => format!("pop {}", place(p)),
+            Get(a, b) => format!("get {}, {}", operand(a), operand(b)),
+            Closure(f, ops) => format!("closure {f}({})", operands(ops)),
+            Capture(k) => format!("capture {k}"),
+            Uninit => "uninit".to_string(),
+            Moved => "moved".to_string(),
+        }
+    }
+    fn scalar(s: &Option<Scalar>) -> String {
+        match s {
+            Option::Some(Scalar::Int(k)) => k.to_string(),
+            Option::Some(Scalar::Bool) => "bool".to_string(),
+            Option::Some(Scalar::F64) => "f64".to_string(),
+            Option::None => "_".to_string(),
+        }
+    }
+    let mut out = String::new();
+    for (i, f) in p.fns.iter().enumerate() {
+        let _ = writeln!(out, "fn {i} {} params={} locals={} body={} limits={} ret={} at={}:{}", f.name, f.params, f.locals, f.body, f.limits, scalar(&f.ret), f.span.line, f.span.col);
+        let names: Vec<String> = f.names.iter().enumerate().filter_map(|(l, n)| n.as_ref().map(|n| format!("{l}={n}"))).collect();
+        let _ = writeln!(out, "  names {}", names.join(" "));
+        let once: Vec<String> = f.once.iter().map(|l| l.to_string()).collect();
+        let _ = writeln!(out, "  once {}", once.join(" "));
+        let scalars: Vec<String> = f.scalars.iter().map(scalar).collect();
+        let _ = writeln!(out, "  scalars {}", scalars.join(" "));
+        let hints: Vec<String> = f.hints.iter().enumerate().filter(|(_, h)| h.is_some()).map(|(l, h)| format!("{l}={}", scalar(h))).collect();
+        let _ = writeln!(out, "  hints {}", hints.join(" "));
+        let copies: Vec<String> = f.copies.iter().map(|s| format!("{}:{}", s.line, s.col)).collect();
+        let _ = writeln!(out, "  copies {}", copies.join(" "));
+        for (k, b) in f.blocks.iter().enumerate() {
+            let _ = writeln!(out, "  b{k} {}:{}", b.span.line, b.span.col);
+            for st in &b.stmts {
+                let _ = writeln!(out, "    {} = {} @{}:{}", place(&st.place), rvalue(&st.rv), st.span.line, st.span.col);
+            }
+            let term = match &b.term {
+                Term::Goto(t) => format!("goto b{t}"),
+                Term::Branch(c, yes, no) => format!("branch {} b{yes} b{no}", operand(c)),
+                Term::Call { callee, args, writeback, dest, next } => {
+                    let callee = match callee {
+                        Callee::Fn(f) => format!("fn {f}"),
+                        Callee::Indirect(op) => format!("indirect {}", operand(op)),
+                        Callee::Print => "print".to_string(),
+                        Callee::Native(n) => format!("native {n}"),
+                        Callee::Panic => "panic".to_string(),
+                        Callee::Extern(x) => format!("extern {x}"),
+                    };
+                    let back: Vec<String> = writeback.iter().map(|(i, p)| format!("{i}->{}", place(p))).collect();
+                    format!("call {callee}({}) back[{}] -> {} b{next}", operands(args), back.join(", "), place(dest))
+                }
+                Term::Return(op) => format!("return {}", operand(op)),
+                Term::Panic(msg) => format!("panic {}", quote(msg)),
+                Term::Unreachable => "unreachable".to_string(),
+            };
+            let _ = writeln!(out, "    {term}");
+        }
+    }
+    let ints = |xs: &[usize]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ");
+    let _ = writeln!(out, "consts {}", ints(&p.consts));
+    let _ = writeln!(out, "main {}", p.main.map_or("_".to_string(), |m| m.to_string()));
+    let _ = writeln!(out, "tests {}", ints(&p.tests));
+    for (i, (name, fields)) in p.structs.iter().enumerate() {
+        let record: Vec<String> = p.records[i].iter().map(|k| k.to_string()).collect();
+        let _ = writeln!(out, "struct {i} {name} ({}) record[{}] boxed={}", fields.join(", "), record.join(" "), p.boxed.0[i]);
+    }
+    for (i, (name, variants)) in p.enums.iter().enumerate() {
+        let _ = writeln!(out, "enum {i} {name} boxed={}", p.boxed.1[i]);
+        for (v, fields) in variants {
+            let fields: Vec<String> = fields.iter().map(|f| f.clone().unwrap_or_else(|| "_".to_string())).collect();
+            let _ = writeln!(out, "  variant {v} ({})", fields.join(", "));
+        }
+    }
+    let _ = writeln!(out, "dyn_from {}", p.dyn_from);
+    for x in &p.externs {
+        let _ = writeln!(out, "extern {} {} ({}) -> {}", x.name, x.header, x.params.join(", "), x.ret);
+    }
+    out
+}
+
 /// Inclusive range of an integer kind, as far as the interpreter models it.
 pub fn bounds(kind: &str) -> (i128, i128) {
     match kind {

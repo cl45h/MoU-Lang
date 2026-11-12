@@ -1,0 +1,3311 @@
+// The middle form of a program: for each function, blocks of simple
+// statements that end in a jump, and the lowering of the checked tree
+// into it. It follows `src/mir.rs`, and `mou lowered` prints what that
+// one gives in the form `dump` prints here.
+//
+// Every expression becomes assignments to locals. A `mut` argument goes
+// in and comes back: the law of exclusivity makes that the same as
+// passing where it is.
+
+import std.text
+import check
+import lexer
+import load
+import parser
+import types
+
+pub enum Value {
+    Int(i128)
+    // A number with a fraction, as it is written.
+    Float(str)
+    Bool(bool)
+    Char(char)
+    Str(str)
+    Unit
+    None
+    Fn(int)
+    // A variant without fields of an enum.
+    Enum(int, int)
+}
+
+pub enum Proj { Field(int), Index(Operand), Path(int) }
+
+pub struct Place { local: int, proj: [Proj] }
+
+pub enum Operand { Const(Value), At(Place) }
+
+// How an operation treats its operands.
+pub enum Num {
+    // A whole number of a kind, or `lit` for one written out with no type yet.
+    Int(str)
+    Float
+    F64
+    // The values decide: comparisons, equality, operations on bits.
+    Dyn
+}
+
+pub enum UnOp { Neg, Not, BitNot }
+
+// A conversion between two types the checker takes as compatible.
+pub enum Conv {
+    // A whole number with no type becomes one of a kind: checked when running.
+    Fit(str)
+    // To `f32` when true, to `f64` otherwise.
+    ToFloat(bool)
+    // `T` becomes `T?`.
+    Wrap(Conv?)
+    Inside(Conv)
+    Elems(Conv)
+    Tuple([Conv?])
+    Res(Conv?, Conv?)
+}
+
+pub enum FmtPart { Lit(str), Val(Operand) }
+
+pub enum Rvalue {
+    Use(Operand)
+    Unary(UnOp, Num, Operand)
+    // The operator is kept as it is written: `+`, `<<`, `==`.
+    Binary(str, Num, Operand, Operand)
+    CastInt(Operand, str)
+    CastFloat(Operand, bool)
+    Convert(Operand, Conv)
+    Tuple([Operand])
+    Struct(int, [Operand])
+    Enum(int, int, [Operand])
+    Array([Operand])
+    Repeat(Operand, Operand)
+    Some(Operand)
+    Ok(Operand)
+    Err(Operand)
+    // Whether an enum, an optional or a result holds the given variant
+    // (`None` and `Ok` are 0, `Some` and `Err` are 1).
+    Is(Operand, int)
+    Len(Operand)
+    Slice(Operand, Operand)
+    Format([FmtPart])
+    Chars(Operand)
+    // The value of a constant of the program.
+    Const(int)
+    RangeStart(Operand, Num)
+    RangeHas(Operand, Operand)
+    RangeLast(Operand, Operand)
+    Succ(Operand, Num)
+    Push(Place, Operand)
+    Pop(Place)
+    Get(Operand, Operand)
+    Closure(int, [Operand])
+    Capture(int)
+    // A variable declared without a value. Checked, not run.
+    Uninit
+    // A variable whose value was moved away with `own`.
+    Moved
+}
+
+pub enum Callee {
+    Fn(int)
+    Indirect(Operand)
+    Print
+    Native(str)
+    Panic
+    Extern(int)
+}
+
+// A parameter whose last value goes back to a place of the caller.
+pub struct Writeback { arg: int, place: Place }
+
+pub enum Term {
+    Goto(int)
+    Branch(Operand, int, int)
+    Call(Callee, [Operand], [Writeback], Place, int)
+    Return(Operand)
+    Panic(str)
+    Unreachable
+}
+
+pub struct Stmt { place: Place, rv: Rvalue, at: check.Span }
+
+pub struct Block { stmts: [Stmt], term: Term, at: check.Span, done: bool }
+
+// A type the C that is written can keep in a register.
+pub enum Scalar { Int(str), Bool, F64 }
+
+pub struct Func {
+    name: str
+    // The parameters are the first locals.
+    params: int
+    locals: int
+    blocks: [Block]
+    // The name of each local that is a variable of the program.
+    names: [str?]
+    // Variables declared without a value that cannot change: given one once.
+    once: [int]
+    scalars: [Scalar?]
+    hints: [Scalar?]
+    ret: Scalar?
+    at: check.Span
+    // The effects its declaration rules out.
+    limits: int
+    // The block where its body starts, after its `where` conditions.
+    body: int
+    // Where it copies a value that holds an array into another place.
+    copies: [check.Span]
+}
+
+pub let NOALLOC: int = 1
+pub let NOPANIC: int = 2
+pub let NOIO: int = 4
+// With `NOALLOC`: it comes from the profile of the module, not from an annotation.
+pub let SYSTEM: int = 8
+
+pub struct Extern { name: str, header: str, params: [str], ret: str }
+
+pub struct StructShape { name: str, fields: [str] }
+
+pub struct VariantShape { name: str, fields: [str?] }
+
+pub struct EnumShape { name: str, variants: [VariantShape] }
+
+pub struct Program {
+    fns: [Func]
+    // The functions that work out the constants, in the order they are declared.
+    consts: [int]
+    main: int?
+    tests: [int]
+    structs: [StructShape]
+    // For each struct: how each field is kept when an array holds the
+    // struct in line (1 bool, 2 whole number, 3 `f64`, 4 char), or nothing.
+    records: [[int]]
+    enums: [EnumShape]
+    boxed_structs: [bool]
+    boxed_enums: [bool]
+    // The structs from this one on are `dyn` values.
+    dyn_from: int
+    externs: [Extern]
+    errors: [lexer.Error]
+}
+
+fn at_local(l: int) -> Place { Place(l, []) }
+
+fn local_op(l: int) -> Operand { Operand.At(Place(l, [])) }
+
+fn unit() -> Operand { Operand.Const(Value.Unit) }
+
+fn with_field(p: Place, k: int) -> Place {
+    var proj = p.proj
+    proj.push(Proj.Field(k))
+    Place(p.local, proj)
+}
+
+fn with_index(p: Place, i: Operand) -> Place {
+    var proj = p.proj
+    proj.push(Proj.Index(i))
+    Place(p.local, proj)
+}
+
+fn with_path(p: Place, steps: int) -> Place {
+    var proj = p.proj
+    proj.push(Proj.Path(steps))
+    Place(p.local, proj)
+}
+
+let BIN_OPS: [str] = ["+", "-", "*", "/", "%", "+%", "-%", "*%", "+|", "-|", "*|", "<<", ">>", "&", "|", "^", "==", "!=", "<", "<=", ">", ">="]
+
+fn is_bin_op(op: str) -> bool {
+    for b in BIN_OPS {
+        if b == op { return true }
+    }
+    false
+}
+
+fn scalar_of(t: types.Ty) -> Scalar? {
+    match t {
+        types.Ty.Int(k) => Some(Scalar.Int(k))
+        types.Ty.Bool => Some(Scalar.Bool)
+        types.Ty.Float(k) => {
+            if k == "f64" { return Some(Scalar.F64) }
+            None
+        }
+        _ => None
+    }
+}
+
+fn same_scalar(a: Scalar?, b: Scalar?) -> bool {
+    match (a, b) {
+        (Some(Scalar.Int(x)), Some(Scalar.Int(y))) => x == y
+        (Some(Scalar.Bool), Some(Scalar.Bool)) => true
+        (Some(Scalar.F64), Some(Scalar.F64)) => true
+        (None, None) => true
+        _ => false
+    }
+}
+
+fn is_scalar(s: Scalar?) -> bool {
+    match s {
+        Some(_) => true
+        None => false
+    }
+}
+
+struct Kind { is_enum: bool, index: int }
+
+fn seen_kind(seen: [Kind], k: Kind) -> bool {
+    for s in seen {
+        if s.is_enum == k.is_enum && s.index == k.index { return true }
+    }
+    false
+}
+
+// Whether a value of a type holds, with no array in between, a value of
+// the struct or enum `target`.
+fn holds(c: check.Checker, t: types.Ty, target: Kind, seen: mut [Kind]) -> bool {
+    match t {
+        types.Ty.Struct(i, args) => {
+            let me = Kind(false, i)
+            if !target.is_enum && target.index == i { return true }
+            if seen_kind(seen, me) { return false }
+            seen.push(me)
+            for a in args {
+                if holds(c, a, target, mut seen) { return true }
+            }
+            if i < (c.structs.len as int) {
+                for f in c.structs[i].fields {
+                    if holds(c, f.ty, target, mut seen) { return true }
+                }
+            }
+            false
+        }
+        types.Ty.Enum(i, args) => {
+            let me = Kind(true, i)
+            if target.is_enum && target.index == i { return true }
+            if seen_kind(seen, me) { return false }
+            seen.push(me)
+            for a in args {
+                if holds(c, a, target, mut seen) { return true }
+            }
+            if i < (c.enums.len as int) {
+                for v in c.enums[i].variants {
+                    for f in v.fields {
+                        if holds(c, f.ty, target, mut seen) { return true }
+                    }
+                }
+            }
+            false
+        }
+        types.Ty.Optional(x) => holds(c, x, target, mut seen)
+        types.Ty.Array(x) => holds(c, x, target, mut seen)
+        types.Ty.Tuple(ts) => {
+            for x in ts {
+                if holds(c, x, target, mut seen) { return true }
+            }
+            false
+        }
+        types.Ty.Result(a, b) => holds(c, a, target, mut seen) || holds(c, b, target, mut seen)
+        _ => false
+    }
+}
+
+fn pow2(bits: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..bits { out = out * 2 }
+    out
+}
+
+fn kind_bits(kind: str) -> int {
+    if kind == "i8" || kind == "u8" { return 8 }
+    if kind == "i16" || kind == "u16" { return 16 }
+    if kind == "i32" || kind == "u32" { return 32 }
+    64
+}
+
+// Whether a whole number is a value of an integer kind, as far as the
+// compiler follows it: a `u128` is kept in 128 bits with a sign.
+fn in_bounds(kind: str, v: i128) -> bool {
+    if kind == "lit" || kind == "i128" { return true }
+    if kind == "u128" { return v >= 0 }
+    let bits = kind_bits(kind)
+    if text.starts_with(kind, "i") {
+        let half = pow2(bits - 1)
+        return v >= 0 - half && v <= half - 1
+    }
+    v >= 0 && v <= pow2(bits) - 1
+}
+
+fn has_conv(c: Conv?) -> bool {
+    match c {
+        Some(_) => true
+        None => false
+    }
+}
+
+pub fn conv(source: types.Ty, target: types.Ty) -> Conv? {
+    match (source, target) {
+        (types.Ty.Never, _) => None
+        (types.Ty.Unknown, _) => None
+        (_, types.Ty.Unknown) => None
+        (types.Ty.IntLit, types.Ty.Int(k)) => Some(Conv.Fit(k))
+        (types.Ty.IntLit, types.Ty.Float(k)) => Some(Conv.ToFloat(k == "f32"))
+        (types.Ty.IntLit, types.Ty.FloatLit) => Some(Conv.ToFloat(false))
+        (types.Ty.FloatLit, types.Ty.Float(k)) if k == "f32" => Some(Conv.ToFloat(true))
+        (types.Ty.Optional(a), types.Ty.Optional(b)) => {
+            match conv(a, b) {
+                Some(c) => Some(Conv.Inside(c))
+                None => None
+            }
+        }
+        (_, types.Ty.Optional(b)) => Some(Conv.Wrap(conv(source, b)))
+        (types.Ty.Tuple(a), types.Ty.Tuple(b)) if a.len == b.len => {
+            var cs: [Conv?] = []
+            var any = false
+            for k in 0..a.len {
+                let c = conv(a[k], b[k])
+                if has_conv(c) { any = true }
+                cs.push(c)
+            }
+            if any { return Some(Conv.Tuple(cs)) }
+            None
+        }
+        (types.Ty.Slice(a), types.Ty.Slice(b)) => elems_conv(a, b)
+        (types.Ty.Slice(a), types.Ty.Array(b)) => elems_conv(a, b)
+        (types.Ty.Array(a), types.Ty.Slice(b)) => elems_conv(a, b)
+        (types.Ty.Array(a), types.Ty.Array(b)) => elems_conv(a, b)
+        (types.Ty.Result(a, x), types.Ty.Result(b, y)) => {
+            let ok = conv(a, b)
+            let failed = conv(x, y)
+            if has_conv(ok) || has_conv(failed) { return Some(Conv.Res(ok, failed)) }
+            None
+        }
+        _ => None
+    }
+}
+
+fn elems_conv(a: types.Ty, b: types.Ty) -> Conv? {
+    match conv(a, b) {
+        Some(c) => Some(Conv.Elems(c))
+        None => None
+    }
+}
+
+fn num_of(t: types.Ty) -> Num {
+    match t {
+        types.Ty.Int(k) => Num.Int(k)
+        types.Ty.IntLit => Num.Int("lit")
+        types.Ty.Float(k) => {
+            if k == "f64" { return Num.F64 }
+            Num.Float
+        }
+        types.Ty.FloatLit => Num.F64
+        _ => Num.Dyn
+    }
+}
+
+struct VarSlot { name: str, local: int }
+
+struct Scope { vars: [VarSlot], defers: [parser.Expr] }
+
+struct LoopCtx {
+    brk: int
+    cont: int
+    // Where a `break` value goes, and the type it must have.
+    has_result: bool
+    result: int
+    result_ty: types.Ty
+    // How many scopes were open when the loop started.
+    depth: int
+}
+
+enum Job {
+    Fn(FnJob)
+    Const(str, parser.Expr, check.Span)
+}
+
+struct FnJob {
+    name: str
+    f: parser.FnDecl
+    sig: types.Sig
+    self_mode: parser.Mode?
+    at: check.Span
+    inst: int
+    path: bool
+    limits: int
+}
+
+struct Hint { local: int, scalar: Scalar }
+
+// The state of a function whose lowering waits for a closure inside it.
+struct Saved {
+    blocks: [Block]
+    cur: int
+    locals: int
+    scopes: [Scope]
+    loops: [LoopCtx]
+    ret: types.Ty
+    fails: types.Ty?
+    or_depth: int
+    captures: [int]
+    is_closure: bool
+    vars: [VarSlot]
+    once: [int]
+    hints: [Hint]
+}
+
+struct IdPair { key: int, id: int }
+
+struct MethodId { key: str, name: str, id: int }
+
+struct Lower {
+    c: check.Checker
+    fn_ids: [IdPair]
+    method_ids: [MethodId]
+    const_ids: [int]
+    // The function of each generic instance.
+    instance_ids: [int]
+    // The instance whose types are being read.
+    inst: int
+    fn_decls: [parser.FnDecl?]
+    struct_decls: [parser.StructDecl]
+    errors: [lexer.Error]
+    // The state of the function being lowered.
+    blocks: [Block]
+    cur: int
+    locals: int
+    scopes: [Scope]
+    loops: [LoopCtx]
+    ret: types.Ty
+    fails: types.Ty?
+    at: check.Span
+    // Inside an `|` pattern every alternative binds the same locals.
+    or_depth: int
+    // For a closure: the locals of the function around that it captures.
+    captures: [int]
+    is_closure: bool
+    vars: [VarSlot]
+    once: [int]
+    hints: [Hint]
+    stack: [Saved]
+    // The closures lowered so far; their numbers start at `base`.
+    extra: [Func]
+    base: int
+    // For a function that returns `ref mut`: the one that works out where its result is.
+    path_ids: [IdPair]
+    in_const: bool
+    decl_at: check.Span
+    copies: [check.Span]
+    twin: bool
+    has_twin_src: bool
+    twin_src: Place
+}
+
+fn find_id(pairs: [IdPair], key: int) -> int {
+    for p in pairs {
+        if p.key == key { return p.id }
+    }
+    -1
+}
+
+fn same_span(a: check.Span, b: check.Span) -> bool { a.line == b.line && a.col == b.col }
+
+// Lowers a checked program.
+pub fn lower(p: load.Program, c: check.Checker) -> Program {
+    var lw = Lower(
+        c: c,
+        fn_ids: [],
+        method_ids: [],
+        const_ids: [],
+        instance_ids: [],
+        inst: 0,
+        fn_decls: [],
+        struct_decls: [],
+        errors: [],
+        blocks: [],
+        cur: 0,
+        locals: 0,
+        scopes: [],
+        loops: [],
+        ret: types.Ty.Unit,
+        fails: None,
+        at: check.Span(0, 0),
+        or_depth: 0,
+        captures: [],
+        is_closure: false,
+        vars: [],
+        once: [],
+        hints: [],
+        stack: [],
+        extra: [],
+        base: 0,
+        path_ids: [],
+        in_const: false,
+        decl_at: check.Span(0, 0),
+        copies: [],
+        twin: false,
+        has_twin_src: false,
+        twin_src: Place(0, [])
+    )
+    var jobs: [Job] = []
+    var main: int? = None
+    var tests: [int] = []
+    let decls = p.file.decls
+    let first = p.modules[0]
+    for i in 0..(decls.len as int) {
+        let d = decls[i]
+        let at = check.Span(d.line, d.col)
+        match d.kind {
+            parser.DeclKind.Fn(f) => {
+                let idx = c.fn_of_decl[i]
+                if idx < 0 { continue }
+                if c.fns[idx].generic || c.fns[idx].tparams.len > 0 { continue }
+                let id = jobs.len as int
+                lw.fn_ids.push(IdPair(idx, id))
+                lw.note_decl(id, f)
+                // Only the file of the program itself can hold where it starts.
+                if i >= first.first && i < first.last {
+                    if f.name == "main" {
+                        main = Some(id)
+                    } else {
+                        if text.starts_with(f.name, "test_") && c.fns[idx].sig.params.len == 0 { tests.push(id) }
+                    }
+                }
+                let limits = lw.limits(p, d)
+                jobs.push(Job.Fn(FnJob(f.name, f, c.fns[idx].sig, None, at, 0, false, limits)))
+            }
+            parser.DeclKind.Impl(im) => {
+                var key = ""
+                var found = false
+                for it in c.impl_tys {
+                    if it.decl == i {
+                        key = c.key(it.ty)
+                        found = true
+                    }
+                }
+                if !found { continue }
+                var suffix = ""
+                for s in c.suffixes {
+                    if s.decl == i { suffix = s.suffix }
+                }
+                for m in im.decls {
+                    match m.kind {
+                        parser.DeclKind.Fn(f) => {
+                            let mangled = "{f.name}{suffix}"
+                            let mi = c.method_index(key, mangled)
+                            if mi < 0 { continue }
+                            let method = c.methods[mi].m
+                            if method.tparams.len > 0 { continue }
+                            let id = jobs.len as int
+                            lw.set_method_id(key, mangled, id)
+                            lw.note_decl(id, f)
+                            let limits = lw.limits(p, m)
+                            jobs.push(Job.Fn(FnJob("{key}.{f.name}", f, method.sig, method.self_mode, check.Span(m.line, m.col), 0, false, limits)))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            parser.DeclKind.Const(name, _, value) => {
+                lw.const_ids.push(jobs.len as int)
+                jobs.push(Job.Const(name, value, at))
+            }
+            parser.DeclKind.Struct(s) => lw.struct_decls.push(s)
+            _ => {}
+        }
+    }
+    for k in 0..(c.instances.len as int) {
+        // Every instance takes a place, so that `instance_ids[k]` is instance `k`.
+        let instance = c.instances[k]
+        var d = decls[0]
+        var prefix = ""
+        var self_mode: parser.Mode? = None
+        match instance.target {
+            check.Target.Fn(fi) => {
+                d = decls[c.decl_of_fn[fi]]
+            }
+            check.Target.Method(t, n) => {
+                let m = c.methods[c.method_index(t, n)].m
+                if let Some(md) = c.method_decl(m) { d = md }
+                prefix = "{t}."
+                self_mode = m.self_mode
+            }
+        }
+        match d.kind {
+            parser.DeclKind.Fn(f) => {
+                let id = jobs.len as int
+                lw.instance_ids.push(id)
+                lw.note_decl(id, f)
+                var name = "{prefix}{f.name}"
+                if instance.shown != "" { name = "{prefix}{f.name}[{instance.shown}]" }
+                let limits = lw.limits(p, d)
+                jobs.push(Job.Fn(FnJob(name, f, instance.sig, self_mode, check.Span(d.line, d.col), k + 1, false, limits)))
+            }
+            _ => {}
+        }
+    }
+    // A function that returns `ref mut` is lowered a second time, to work
+    // out where its result is instead of the result.
+    let count = jobs.len as int
+    for i in 0..count {
+        match jobs[i] {
+            Job.Fn(j) => {
+                var mutable = false
+                if let Some(m) = check.ref_kind(j.f) { mutable = m }
+                if !mutable { continue }
+                let id = jobs.len as int
+                lw.path_ids.push(IdPair(i, id))
+                lw.note_decl(id, j.f)
+                jobs.push(Job.Fn(FnJob("{j.name} (place)", j.f, j.sig, j.self_mode, j.at, j.inst, true, j.limits)))
+            }
+            _ => {}
+        }
+    }
+    lw.base = jobs.len as int
+    var fns: [Func] = []
+    for job in jobs {
+        match job {
+            Job.Fn(j) => {
+                lw.inst = j.inst
+                var func = lw.function(j.name, j.f, j.sig, j.self_mode, j.at, j.path)
+                func.limits = j.limits
+                fns.push(func)
+            }
+            Job.Const(name, value, at) => {
+                lw.inst = 0
+                fns.push(lw.constant(name, value, at))
+            }
+        }
+    }
+    for f in lw.extra { fns.push(f) }
+    var structs: [StructShape] = []
+    var records: [[int]] = []
+    for s in c.structs {
+        var names: [str] = []
+        var kinds: [int] = []
+        var plain = s.tparams.len == 0 && !s.generic
+        for f in s.fields {
+            names.push(f.name)
+            var kind = 0
+            match f.ty {
+                types.Ty.Bool => {
+                    kind = 1
+                }
+                types.Ty.Int(k) => {
+                    if k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "u8" || k == "u16" || k == "u32" { kind = 2 }
+                }
+                types.Ty.Float(k) => {
+                    if k == "f64" { kind = 3 }
+                }
+                types.Ty.Char => {
+                    kind = 4
+                }
+                _ => {}
+            }
+            if kind == 0 { plain = false }
+            kinds.push(kind)
+        }
+        structs.push(StructShape(s.name, names))
+        if plain { records.push(kinds) } else { records.push([]) }
+    }
+    // A `dyn Trait` value is a struct of the value and its methods, which
+    // is shown as the value alone.
+    for t in 0..(c.traits.len as int) {
+        var fields: [str] = []
+        fields.push("value")
+        for slot in c.dyn_slots(check.Bound(t, [])) { fields.push(slot.name) }
+        structs.push(StructShape("dyn {c.traits[t].name}", fields))
+        records.push([])
+    }
+    var enums: [EnumShape] = []
+    for e in c.enums {
+        var variants: [VariantShape] = []
+        for v in e.variants {
+            var fields: [str?] = []
+            for f in v.fields { fields.push(f.label) }
+            variants.push(VariantShape(v.name, fields))
+        }
+        enums.push(EnumShape(e.name, variants))
+    }
+    var boxed_structs: [bool] = []
+    for i in 0..(c.structs.len as int) {
+        var inside = false
+        for f in c.structs[i].fields {
+            var seen: [Kind] = []
+            if holds(c, f.ty, Kind(false, i), mut seen) { inside = true }
+        }
+        boxed_structs.push(inside)
+    }
+    for t in c.traits { boxed_structs.push(true) }
+    var boxed_enums: [bool] = []
+    for i in 0..(c.enums.len as int) {
+        var inside = false
+        for v in c.enums[i].variants {
+            for f in v.fields {
+                var seen: [Kind] = []
+                if holds(c, f.ty, Kind(true, i), mut seen) { inside = true }
+            }
+        }
+        boxed_enums.push(inside)
+    }
+    var externs: [Extern] = []
+    for x in c.externs {
+        var params: [str] = []
+        for q in x.sig.params { params.push(c_type(q.ty)) }
+        externs.push(Extern(x.name, x.header, params, c_type(x.sig.ret)))
+    }
+    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, sorted_errors(lw.errors))
+}
+
+fn c_type(t: types.Ty) -> str {
+    match t {
+        types.Ty.Int(k) => k
+        types.Ty.Float(k) => k
+        types.Ty.Bool => "bool"
+        _ => "unit"
+    }
+}
+
+// The errors by line and column, each line and message once.
+fn sorted_errors(errors: [lexer.Error]) -> [lexer.Error] {
+    var at: [int] = []
+    for k in 0..errors.len { at.push(k as int) }
+    for i in 1..at.len {
+        var k = i
+        while k > 0 && earlier(errors[at[k]], errors[at[k - 1]]) {
+            let moved = at[k]
+            at[k] = at[k - 1]
+            at[k - 1] = moved
+            k -= 1
+        }
+    }
+    var out: [lexer.Error] = []
+    for k in at {
+        let e = errors[k]
+        if out.len > 0 {
+            let last = out[out.len - 1]
+            if last.line == e.line && last.msg == e.msg { continue }
+        }
+        out.push(e)
+    }
+    out
+}
+
+fn earlier(x: lexer.Error, y: lexer.Error) -> bool {
+    if x.line != y.line { return x.line < y.line }
+    x.col < y.col
+}
+
+impl Lower {
+    fn note_decl(mut self, id: int, f: parser.FnDecl) {
+        while (self.fn_decls.len as int) <= id { self.fn_decls.push(None) }
+        self.fn_decls[id] = Some(f)
+    }
+
+    fn set_method_id(mut self, key: str, name: str, id: int) {
+        for k in 0..self.method_ids.len {
+            if self.method_ids[k].key == key && self.method_ids[k].name == name {
+                self.method_ids[k] = MethodId(key, name, id)
+                return
+            }
+        }
+        self.method_ids.push(MethodId(key, name, id))
+    }
+
+    fn method_id(self, key: str, name: str) -> int {
+        for m in self.method_ids {
+            if m.name == name && m.key == key { return m.id }
+        }
+        -1
+    }
+
+    fn fail(mut self, at: check.Span, msg: str) { self.errors.push(lexer.Error(msg, at.line, at.col)) }
+
+    // The effects a declaration rules out: its own annotations, and what
+    // the profile of its module does not allow.
+    fn limits(mut self, p: load.Program, d: parser.Decl) -> int {
+        var limits = 0
+        for a in d.attrs {
+            if a.name == "noalloc" {
+                limits = limits | NOALLOC
+            } else {
+                if a.name == "nopanic" {
+                    limits = limits | NOPANIC
+                } else {
+                    if a.name == "noio" {
+                        limits = limits | NOIO
+                    } else {
+                        self.fail(check.Span(d.line, d.col), "unknown annotation `@{a.name}`: a function takes `@noalloc`, `@nopanic` and `@noio`")
+                    }
+                }
+            }
+        }
+        let module = d.line >> 20
+        var system = false
+        if module >= 0 && module < (p.modules.len as int) {
+            match p.modules[module].profile {
+                Some(profile) => {
+                    system = profile == "system"
+                }
+                None => {}
+            }
+        }
+        // A `system` module has no allocator of its own.
+        if system && (limits & NOALLOC) == 0 { limits = limits | NOALLOC | SYSTEM }
+        limits
+    }
+
+    // Whether a value of the type holds an array that can grow.
+    fn holds_array(self, t: types.Ty, seen: mut [types.Ty]) -> bool {
+        for s in seen {
+            if s == t { return false }
+        }
+        match t {
+            types.Ty.Slice(_) => true
+            types.Ty.Array(x) => self.holds_array(x, mut seen)
+            types.Ty.Optional(x) => self.holds_array(x, mut seen)
+            types.Ty.Tuple(ts) => {
+                for x in ts {
+                    if self.holds_array(x, mut seen) { return true }
+                }
+                false
+            }
+            types.Ty.Result(a, b) => self.holds_array(a, mut seen) || self.holds_array(b, mut seen)
+            types.Ty.Struct(i, args) => {
+                seen.push(t)
+                for a in args {
+                    if self.holds_array(a, mut seen) { return true }
+                }
+                if i < (self.c.structs.len as int) {
+                    for f in self.c.structs[i].fields {
+                        if self.holds_array(f.ty, mut seen) { return true }
+                    }
+                }
+                false
+            }
+            types.Ty.Enum(i, args) => {
+                seen.push(t)
+                for a in args {
+                    if self.holds_array(a, mut seen) { return true }
+                }
+                if i < (self.c.enums.len as int) {
+                    for v in self.c.enums[i].variants {
+                        for f in v.fields {
+                            if self.holds_array(f.ty, mut seen) { return true }
+                        }
+                    }
+                }
+                false
+            }
+            types.Ty.Dyn(_, _) => true
+            types.Ty.Fn(_) => true
+            types.Ty.Unknown => true
+            _ => false
+        }
+    }
+
+    fn slot(self, e: parser.Expr) -> int { (self.inst + 1) * self.c.total + e.id }
+
+    fn res(self, e: parser.Expr) -> check.Res? { self.c.res.get(self.slot(e)) }
+
+    // Notes that the value of an expression is copied to another place,
+    // when that copies an array: it is a variable, a field or an item.
+    fn copied(mut self, v: parser.Expr) {
+        var place = false
+        match v.kind {
+            parser.Kind.Name(_) => {
+                match self.res(v) {
+                    Some(check.Res.Local) => {
+                        place = true
+                    }
+                    _ => {}
+                }
+            }
+            parser.Kind.Field(_, _) => {
+                match self.res(v) {
+                    Some(check.Res.Field(_)) => {
+                        place = true
+                    }
+                    _ => {}
+                }
+            }
+            parser.Kind.Index(_, args) => {
+                if args.len == 1 {
+                    place = true
+                    match self.ty(args[0]) {
+                        types.Ty.Range(_) => {
+                            place = false
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        if place {
+            var seen: [types.Ty] = []
+            if self.holds_array(self.ty(v), mut seen) { self.copies.push(check.Span(v.line, v.col)) }
+        }
+    }
+
+    // ---- building blocks ----
+
+    fn unsupported(mut self, at: check.Span, what: str) -> Operand {
+        self.fail(at, "the interpreter does not support {what} yet")
+        unit()
+    }
+
+    fn ty(self, e: parser.Expr) -> types.Ty {
+        match self.c.types.get(self.slot(e)) {
+            Some(t) => t
+            None => types.Ty.Unknown
+        }
+    }
+
+    fn wanted(self, e: parser.Expr) -> types.Ty? { self.c.wants.get(self.slot(e)) }
+
+    // The type of the value a block gives.
+    fn block_ty(self, b: parser.Block) -> types.Ty {
+        match b.tail {
+            Some(t) => self.ty(t)
+            None => types.Ty.Unit
+        }
+    }
+
+    fn temp(mut self) -> int {
+        self.locals += 1
+        self.locals - 1
+    }
+
+    fn new_block(mut self) -> int {
+        self.blocks.push(Block([], Term.Unreachable, self.at, false))
+        self.blocks.len as int - 1
+    }
+
+    fn switch_to(mut self, b: int) { self.cur = b }
+
+    fn terminate(mut self, term: Term) {
+        if self.blocks[self.cur].done { return }
+        let stmts = self.blocks[self.cur].stmts
+        self.blocks[self.cur] = Block(stmts, term, self.at, true)
+    }
+
+    // Ends the current block and goes on in one nothing jumps to.
+    fn diverge(mut self, term: Term) -> Operand {
+        self.terminate(term)
+        let dead = self.new_block()
+        self.switch_to(dead)
+        unit()
+    }
+
+    fn emit(mut self, place: Place, rv: Rvalue) {
+        let at = self.at
+        self.blocks[self.cur].stmts.push(Stmt(place, rv, at))
+    }
+
+    fn set(mut self, local: int, op: Operand) { self.emit(at_local(local), Rvalue.Use(op)) }
+
+    // Keeps an rvalue in a new local.
+    fn tmp(mut self, rv: Rvalue) -> Operand {
+        let t = self.temp()
+        self.emit(at_local(t), rv)
+        local_op(t)
+    }
+
+    // A place that holds the operand, so that a part of it can be taken.
+    fn stash(mut self, op: Operand) -> Place {
+        match op {
+            Operand.At(p) => p
+            _ => {
+                let t = self.temp()
+                self.set(t, op)
+                at_local(t)
+            }
+        }
+    }
+
+    // Copies the value of a place to a new local.
+    fn read(mut self, place: Place) -> Operand { self.tmp(Rvalue.Use(Operand.At(place))) }
+
+    // The same, for a place whose type is known.
+    fn read_as(mut self, place: Place, ty: types.Ty) -> Operand {
+        let t = self.temp()
+        self.emit(at_local(t), Rvalue.Use(Operand.At(place)))
+        if let Some(s) = scalar_of(ty) { self.hints.push(Hint(t, s)) }
+        local_op(t)
+    }
+
+    fn convert(mut self, op: Operand, source: types.Ty, target: types.Ty) -> Operand {
+        match conv(source, target) {
+            None => op
+            Some(c) => {
+                match (c, op) {
+                    (Conv.Fit(k), Operand.Const(Value.Int(v))) => {
+                        // A number that is written out and does not fit is
+                        // not a matter for when the program runs.
+                        if !in_bounds(k, v) {
+                            let shown = if k == "i64" { "int" } else { k }
+                            let at = self.at
+                            self.fail(at, "the number {v} does not fit in `{shown}`")
+                        }
+                        op
+                    }
+                    (Conv.ToFloat(single), Operand.Const(Value.Int(v))) => {
+                        if single { return self.tmp(Rvalue.Convert(op, c)) }
+                        Operand.Const(Value.Float(whole_as_float(v)))
+                    }
+                    _ => self.tmp(Rvalue.Convert(op, c))
+                }
+            }
+        }
+    }
+
+    fn declare(mut self, name: str, local: int) {
+        self.vars.push(VarSlot(name, local))
+        if self.scopes.len == 0 { return }
+        let last = self.scopes.len - 1
+        for k in 0..self.scopes[last].vars.len {
+            if self.scopes[last].vars[k].name == name {
+                self.scopes[last].vars[k] = VarSlot(name, local)
+                return
+            }
+        }
+        self.scopes[last].vars.push(VarSlot(name, local))
+    }
+
+    fn lookup(mut self, name: str) -> int? {
+        let here = find_var(self.scopes, name)
+        if here >= 0 { return Some(here) }
+        if !self.is_closure || self.stack.len == 0 { return None }
+        // A name of the function around: the closure captures its value.
+        var outer = -1
+        match self.capture(name, self.stack.len as int - 1) {
+            Some(l) => {
+                outer = l
+            }
+            None => return None
+        }
+        let l = self.temp()
+        let rv = Rvalue.Capture(self.captures.len as int)
+        self.captures.push(outer)
+        let at = self.at
+        self.blocks[0].stmts = put_first(self.blocks[0].stmts, Stmt(at_local(l), rv, at))
+        self.scopes[0].vars = set_var(self.scopes[0].vars, name, l)
+        Some(l)
+    }
+
+    // The local that holds a name in a function that waits, capturing it
+    // from further out when that function is itself a closure.
+    fn capture(mut self, name: str, level: int) -> int? {
+        let here = find_var(self.stack[level].scopes, name)
+        if here >= 0 { return Some(here) }
+        if level == 0 || !self.stack[level].is_closure { return None }
+        var outer = -1
+        match self.capture(name, level - 1) {
+            Some(l) => {
+                outer = l
+            }
+            None => return None
+        }
+        let at = self.at
+        let l = self.stack[level].locals
+        self.stack[level].locals += 1
+        let rv = Rvalue.Capture(self.stack[level].captures.len as int)
+        self.stack[level].captures.push(outer)
+        self.stack[level].blocks[0].stmts = put_first(self.stack[level].blocks[0].stmts, Stmt(at_local(l), rv, at))
+        self.stack[level].scopes[0].vars = set_var(self.stack[level].scopes[0].vars, name, l)
+        Some(l)
+    }
+
+    fn suspend(mut self) {
+        self.stack.push(Saved(self.blocks, self.cur, self.locals, self.scopes, self.loops, self.ret, self.fails, self.or_depth, self.captures, self.is_closure, self.vars, self.once, self.hints))
+        self.blocks = []
+        self.scopes = []
+        self.loops = []
+        self.captures = []
+        self.vars = []
+        self.once = []
+        self.hints = []
+    }
+
+    fn resume(mut self) {
+        match self.stack.pop() {
+            Some(saved) => {
+                self.blocks = saved.blocks
+                self.cur = saved.cur
+                self.locals = saved.locals
+                self.scopes = saved.scopes
+                self.loops = saved.loops
+                self.ret = saved.ret
+                self.fails = saved.fails
+                self.or_depth = saved.or_depth
+                self.captures = saved.captures
+                self.is_closure = saved.is_closure
+                self.vars = saved.vars
+                self.once = saved.once
+                self.hints = saved.hints
+            }
+            None => {}
+        }
+    }
+
+    // `comptime e`: a constant without a name, worked out while compiling.
+    fn at_compile(mut self, e: parser.Expr, inner: parser.Expr) -> Operand {
+        let at = check.Span(e.line, e.col)
+        self.suspend()
+        let outer_copies = self.copies
+        let outer_decl = self.decl_at
+        self.start(at)
+        // As in a closure, a name of the function around is noticed.
+        self.is_closure = true
+        self.ret = types.Ty.Unknown
+        self.fails = None
+        self.in_const = true
+        let v = self.expr(inner)
+        self.in_const = false
+        self.terminate(Term.Return(v))
+        let captured = self.captures.len > 0
+        self.captures = []
+        let func = self.finish("comptime", 0)
+        self.copies = outer_copies
+        self.decl_at = outer_decl
+        self.resume()
+        self.at = at
+        if captured {
+            self.fail(at, "`comptime` is computed when the program is compiled, so it cannot use a variable of the function it is in")
+            return unit()
+        }
+        let f = self.base + self.extra.len as int
+        self.extra.push(func)
+        self.const_ids.push(f)
+        self.tmp(Rvalue.Const(self.const_ids.len as int - 1))
+    }
+
+    fn closure(mut self, e: parser.Expr, params: [parser.Param], body: parser.Block) -> Operand {
+        let at = check.Span(e.line, e.col)
+        var sig = types.Sig([], types.Ty.Unit)
+        match self.ty(e) {
+            types.Ty.Fn(s) => {
+                sig = s
+            }
+            _ => return self.unsupported(at, "this closure")
+        }
+        for p in params {
+            match p.ty {
+                Some(_) => {}
+                None => return self.unsupported(at, "closures whose parameters have no type")
+            }
+        }
+        self.suspend()
+        let outer_copies = self.copies
+        let outer_decl = self.decl_at
+        self.start(at)
+        self.is_closure = true
+        for p in params {
+            let l = self.temp()
+            self.declare(p.name, l)
+        }
+        let nparams = self.locals
+        self.ret = sig.ret
+        self.fails = None
+        match sig.ret {
+            types.Ty.Result(t, x) => {
+                self.ret = t
+                self.fails = Some(x)
+            }
+            _ => {}
+        }
+        let t = self.block_ty(body)
+        let v = self.block(body)
+        let r = self.ret_value(v, t)
+        self.terminate(Term.Return(r))
+        let captures = self.captures
+        self.captures = []
+        let func = self.finish("closure", nparams)
+        self.copies = outer_copies
+        self.decl_at = outer_decl
+        self.resume()
+        let f = self.base + self.extra.len as int
+        self.extra.push(func)
+        var ops: [Operand] = []
+        for l in captures { ops.push(local_op(l)) }
+        self.at = at
+        self.tmp(Rvalue.Closure(f, ops))
+    }
+
+    // Emits what every scope from `depth` on deferred, the inner ones first.
+    fn run_defers(mut self, depth: int) {
+        var k = self.scopes.len as int - 1
+        while k >= depth {
+            let defers = self.scopes[k].defers
+            if defers.len > 0 {
+                // What is deferred only sees the names of its own scope.
+                var inner: [Scope] = []
+                while (self.scopes.len as int) > k + 1 {
+                    if let Some(s) = self.scopes.pop() { inner.push(s) }
+                }
+                var d = defers.len as int - 1
+                while d >= 0 {
+                    let _ = self.expr(defers[d])
+                    d -= 1
+                }
+                var back = inner.len as int - 1
+                while back >= 0 {
+                    self.scopes.push(inner[back])
+                    back -= 1
+                }
+            }
+            k -= 1
+        }
+    }
+
+    // ---- functions ----
+
+    fn start(mut self, at: check.Span) {
+        self.blocks = []
+        self.locals = 0
+        self.scopes = []
+        self.scopes.push(Scope([], []))
+        self.loops = []
+        self.at = at
+        self.decl_at = at
+        self.copies = []
+        self.or_depth = 0
+        self.captures = []
+        self.is_closure = false
+        self.vars = []
+        self.once = []
+        self.hints = []
+        let entry = self.new_block()
+        self.switch_to(entry)
+    }
+
+    fn finish(mut self, name: str, params: int) -> Func {
+        var names: [str?] = []
+        var hints: [Scalar?] = []
+        for k in 0..self.locals {
+            names.push(None)
+            hints.push(None)
+        }
+        for v in self.vars { names[v.local] = Some(v.name) }
+        for h in self.hints { hints[h.local] = Some(h.scalar) }
+        let func = Func(name, params, self.locals, self.blocks, names, self.once, [], hints, None, self.decl_at, 0, 0, self.copies)
+        self.vars = []
+        self.once = []
+        self.hints = []
+        self.blocks = []
+        self.copies = []
+        func
+    }
+
+    fn function(mut self, name: str, f: parser.FnDecl, sig: types.Sig, self_mode: parser.Mode?, at: check.Span, path: bool) -> Func {
+        self.start(at)
+        var scalars: [Scalar?] = []
+        if let Some(_) = self_mode {
+            let l = self.temp()
+            self.declare("self", l)
+            scalars.push(None)
+        }
+        for p in sig.params {
+            let l = self.temp()
+            self.declare(p.name, l)
+            scalars.push(scalar_of(p.ty))
+        }
+        let params = self.locals
+        self.ret = sig.ret
+        self.fails = None
+        match sig.ret {
+            types.Ty.Result(t, x) => {
+                self.ret = t
+                self.fails = Some(x)
+            }
+            _ => {}
+        }
+        for w in f.conds {
+            let ok = self.new_block()
+            let bad = self.new_block()
+            self.jump(w, ok, bad)
+            self.at = check.Span(w.line, w.col)
+            self.switch_to(bad)
+            self.terminate(Term.Panic("a `where` condition of `{name}` does not hold"))
+            self.switch_to(ok)
+        }
+        let body_start = self.cur
+        match f.body {
+            Some(body) => {
+                if path {
+                    let v = self.path_expr(body)
+                    self.terminate(Term.Return(v))
+                } else {
+                    let t = self.ty(body)
+                    let v = self.expr(body)
+                    let r = self.ret_value(v, t)
+                    self.terminate(Term.Return(r))
+                }
+            }
+            None => {
+                let _ = self.unsupported(at, "functions without a body")
+            }
+        }
+        var func = self.finish(name, params)
+        func.scalars = scalars
+        func.ret = None
+        if !path { func.ret = scalar_of(sig.ret) }
+        func.body = body_start
+        func
+    }
+
+    fn constant(mut self, name: str, value: parser.Expr, at: check.Span) -> Func {
+        self.start(at)
+        self.ret = types.Ty.Unknown
+        self.fails = None
+        self.in_const = true
+        let v = self.expr(value)
+        self.in_const = false
+        self.terminate(Term.Return(v))
+        self.finish("constant {name}", 0)
+    }
+
+    // Wraps a value that is returned the way the signature of the function asks.
+    fn ret_value(mut self, v: Operand, t: types.Ty) -> Operand {
+        let ret = self.ret
+        let fails = self.fails
+        var failing = false
+        if let Some(_) = fails { failing = true }
+        if types.assignable(ret, t) {
+            let w = self.convert(v, t, ret)
+            if failing { return self.tmp(Rvalue.Ok(w)) }
+            return w
+        }
+        if let Some(et) = fails {
+            var known = true
+            match et {
+                types.Ty.Unknown => {
+                    known = false
+                }
+                _ => {}
+            }
+            if known && types.assignable(et, t) {
+                let w = self.convert(v, t, et)
+                return self.tmp(Rvalue.Err(w))
+            }
+        }
+        // The function returns nothing: the value of its body is thrown away.
+        if failing { return self.tmp(Rvalue.Ok(unit())) }
+        unit()
+    }
+
+    // ---- statements ----
+
+    fn block(mut self, b: parser.Block) -> Operand {
+        self.scopes.push(Scope([], []))
+        for s in b.stmts { self.stmt(s) }
+        var v = unit()
+        if let Some(e) = b.tail { v = self.expr(e) }
+        self.run_defers(self.scopes.len as int - 1)
+        let _ = self.scopes.pop()
+        v
+    }
+
+    fn stmt(mut self, s: parser.Stmt) {
+        match s {
+            parser.Stmt.Let(mutable, pat, _, value) => {
+                match value {
+                    Some(v) => {
+                        var t = self.ty(v)
+                        if let Some(w) = self.wanted(v) { t = w }
+                        self.copied(v)
+                        let op = self.expr(v)
+                        let place = self.stash(op)
+                        self.pattern(pat, place, t, -1)
+                    }
+                    None => {
+                        match pat {
+                            parser.Pattern.Bind(_, name) => {
+                                let l = self.temp()
+                                self.declare(name, l)
+                                self.emit(at_local(l), Rvalue.Uninit)
+                                if !mutable { self.once.push(l) }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            parser.Stmt.Assign(target, op, value) => {
+                if op == "=" {
+                    self.copied(value)
+                    let v = self.expr(value)
+                    let place = self.place(target)
+                    self.at = check.Span(target.line, target.col)
+                    self.emit(place, Rvalue.Use(v))
+                    return
+                }
+                let bin = without_last(op)
+                let tt = self.ty(target)
+                let vt = self.ty(value)
+                // The value is worked out first, so the target is not held across it.
+                var v = self.expr(value)
+                let shift = bin == "<<" || bin == ">>"
+                var j = tt
+                if !shift {
+                    j = types.Ty.Unknown
+                    if let Some(x) = types.join(tt, vt) { j = x }
+                    v = self.convert(v, vt, j)
+                }
+                let place = self.place(target)
+                let cur = self.read_as(place, tt)
+                self.at = check.Span(target.line, target.col)
+                if !is_bin_op(bin) {
+                    let _ = self.unsupported(check.Span(target.line, target.col), "this assignment operator")
+                    return
+                }
+                // A part of a value: the result is worked out as a number
+                // of the machine and then stored.
+                if place.proj.len > 0 && is_scalar(scalar_of(tt)) && same_scalar(scalar_of(tt), scalar_of(j)) {
+                    let t = self.temp()
+                    self.emit(at_local(t), Rvalue.Binary(bin, num_of(j), cur, v))
+                    if let Some(sc) = scalar_of(tt) { self.hints.push(Hint(t, sc)) }
+                    self.emit(place, Rvalue.Use(local_op(t)))
+                    return
+                }
+                self.emit(place, Rvalue.Binary(bin, num_of(j), cur, v))
+            }
+            parser.Stmt.Defer(e) => {
+                if self.scopes.len > 0 { self.scopes[self.scopes.len - 1].defers.push(e) }
+            }
+            parser.Stmt.Do(e) => {
+                let _ = self.expr(e)
+            }
+            parser.Stmt.Item(d) => {
+                let _ = self.unsupported(check.Span(d.line, d.col), "declarations inside a block")
+            }
+        }
+    }
+}
+
+fn find_var(scopes: [Scope], name: str) -> int {
+    var s = scopes.len as int - 1
+    while s >= 0 {
+        for v in scopes[s].vars {
+            if v.name == name { return v.local }
+        }
+        s -= 1
+    }
+    -1
+}
+
+fn set_var(vars: [VarSlot], name: str, local: int) -> [VarSlot] {
+    var out: [VarSlot] = []
+    var found = false
+    for v in vars {
+        if v.name == name {
+            out.push(VarSlot(name, local))
+            found = true
+        } else {
+            out.push(v)
+        }
+    }
+    if !found { out.push(VarSlot(name, local)) }
+    out
+}
+
+fn put_first(stmts: [Stmt], first: Stmt) -> [Stmt] {
+    var out: [Stmt] = []
+    out.push(first)
+    for s in stmts { out.push(s) }
+    out
+}
+
+// An operator that also assigns, without its `=`: `+` for `+=`.
+fn without_last(s: str) -> str {
+    let cs = text.chars(s)
+    var out: [char] = []
+    for k in 0..cs.len {
+        if k + 1 < cs.len { out.push(cs[k]) }
+    }
+    text.from_chars(out)
+}
+
+// A whole number as a number with a fraction, in the form the compiler
+// in Rust prints an `f64`.
+fn whole_as_float(v: i128) -> str { float_text("{v}") }
+
+// ---- places, patterns and conditions ----
+
+fn span_of(e: parser.Expr) -> check.Span { check.Span(e.line, e.col) }
+
+fn int_op(v: int) -> Operand { Operand.Const(Value.Int(v as i128)) }
+
+impl Lower {
+    // The place an expression stands for, or a temporary that holds its value.
+    fn place(mut self, e: parser.Expr) -> Place {
+        let res = self.res(e)
+        match e.kind {
+            parser.Kind.Name(name) => {
+                match res {
+                    Some(check.Res.Local) => {
+                        if let Some(l) = self.lookup(name) { return at_local(l) }
+                    }
+                    _ => {}
+                }
+            }
+            parser.Kind.Field(base, _) => {
+                match res {
+                    Some(check.Res.Field(k)) => {
+                        let p = self.place(base)
+                        return with_field(p, k)
+                    }
+                    _ => {}
+                }
+            }
+            parser.Kind.Index(base, args) => {
+                if args.len == 1 {
+                    let indexable = match self.ty(base) {
+                        types.Ty.Slice(_) => true
+                        types.Ty.Array(_) => true
+                        _ => false
+                    }
+                    let ranged = match self.ty(args[0]) {
+                        types.Ty.Range(_) => true
+                        _ => false
+                    }
+                    if indexable && !ranged {
+                        let p = self.place(base)
+                        let i = self.expr(args[0])
+                        return with_index(p, i)
+                    }
+                }
+            }
+            // The result of a `ref mut` function that is written to: the
+            // call works out where it is inside what it was taken from.
+            parser.Kind.Call(_, _) => {
+                if self.c.ref_writes.has(self.slot(e)) {
+                    self.twin = true
+                    let steps = self.expr(e)
+                    self.twin = false
+                    if self.has_twin_src {
+                        let src = self.twin_src
+                        self.has_twin_src = false
+                        let held = self.stash(steps)
+                        return with_path(src, held.local)
+                    }
+                    return self.stash(steps)
+                }
+            }
+            _ => {}
+        }
+        let op = self.expr(e)
+        self.stash(op)
+    }
+
+    fn join_paths(mut self, a: Operand, b: Operand, at: check.Span) -> Operand { self.finish_call(Callee.Native("path.join"), [a, b], [], at) }
+
+    // Lowers the body of a function that returns `ref mut` to the steps
+    // that lead from its first parameter to the result.
+    fn path_expr(mut self, e: parser.Expr) -> Operand {
+        match e.kind {
+            parser.Kind.Blk(b) => return self.path_block(b)
+            parser.Kind.If(cond, then, otherwise) => {
+                if let Some(els) = otherwise {
+                    let else_bb = self.new_block()
+                    let end = self.new_block()
+                    let res = self.temp()
+                    self.scopes.push(Scope([], []))
+                    self.cond(cond, else_bb)
+                    let tv = self.path_block(then)
+                    let _ = self.scopes.pop()
+                    self.set(res, tv)
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(else_bb)
+                    let ev = self.path_expr(els)
+                    self.set(res, ev)
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(end)
+                    return local_op(res)
+                }
+            }
+            _ => {}
+        }
+        let p = self.place(e)
+        let at = span_of(e)
+        self.at = at
+        // Fields and indices known here go together; steps another
+        // function worked out are joined to them.
+        var all: Operand? = None
+        var known: [Operand] = []
+        for pr in p.proj {
+            match pr {
+                Proj.Field(k) => {
+                    known.push(int_op(0))
+                    known.push(int_op(k))
+                }
+                Proj.Index(i) => {
+                    known.push(int_op(1))
+                    known.push(i)
+                }
+                Proj.Path(l) => {
+                    let more = local_op(l)
+                    var before: Operand? = None
+                    match all {
+                        None => {
+                            if known.len > 0 {
+                                before = Some(self.tmp(Rvalue.Array(known)))
+                                known = []
+                            }
+                        }
+                        Some(a) => {
+                            if known.len > 0 {
+                                let k = self.tmp(Rvalue.Array(known))
+                                known = []
+                                before = Some(self.join_paths(a, k, at))
+                            } else {
+                                before = Some(a)
+                            }
+                        }
+                    }
+                    match before {
+                        Some(b) => {
+                            all = Some(self.join_paths(b, more, at))
+                        }
+                        None => {
+                            all = Some(more)
+                        }
+                    }
+                }
+            }
+        }
+        match all {
+            Some(a) => {
+                if known.len == 0 { return a }
+                let k = self.tmp(Rvalue.Array(known))
+                self.join_paths(a, k, at)
+            }
+            None => self.tmp(Rvalue.Array(known))
+        }
+    }
+
+    fn path_block(mut self, b: parser.Block) -> Operand {
+        self.scopes.push(Scope([], []))
+        for s in b.stmts { self.stmt(s) }
+        var v = unit()
+        match b.tail {
+            Some(t) => {
+                v = self.path_expr(t)
+            }
+            None => {
+                v = self.tmp(Rvalue.Array([]))
+            }
+        }
+        self.run_defers(self.scopes.len as int - 1)
+        let _ = self.scopes.pop()
+        v
+    }
+
+    // ---- patterns ----
+
+    // Jumps to `fail` when the condition is false. With no block to fail
+    // to (a negative number), the pattern is known to match always and
+    // nothing is tested.
+    fn test(mut self, rv: Rvalue, fail: int) {
+        if fail < 0 { return }
+        let c = self.tmp(rv)
+        let ok = self.new_block()
+        self.terminate(Term.Branch(c, ok, fail))
+        self.switch_to(ok)
+    }
+
+    fn patterns(mut self, ps: [parser.Pattern], place: Place, tys: [types.Ty], fail: int) {
+        for k in 0..(ps.len as int) {
+            var t = types.Ty.Unknown
+            if k < (tys.len as int) { t = tys[k] }
+            self.pattern(ps[k], with_field(place, k), t, fail)
+        }
+    }
+
+    fn pattern(mut self, p: parser.Pattern, place: Place, ty: types.Ty, fail: int) {
+        let here = Operand.At(place)
+        match p {
+            parser.Pattern.Wildcard => {}
+            parser.Pattern.Rest => {}
+            parser.Pattern.Bind(_, name) => {
+                var l = -1
+                if self.or_depth > 0 && self.scopes.len > 0 {
+                    for v in self.scopes[self.scopes.len - 1].vars {
+                        if v.name == name { l = v.local }
+                    }
+                }
+                if l < 0 { l = self.temp() }
+                if let Some(s) = scalar_of(ty) { self.hints.push(Hint(l, s)) }
+                self.set(l, here)
+                self.declare(name, l)
+            }
+            parser.Pattern.Literal(e) => {
+                if fail < 0 { return }
+                let et = self.ty(e)
+                var j = types.Ty.Unknown
+                if let Some(x) = types.join(ty, et) { j = x }
+                let v = self.expr(e)
+                let v2 = self.convert(v, et, j)
+                let cur = self.read(place)
+                let cur2 = self.convert(cur, ty, j)
+                self.test(Rvalue.Binary("==", Num.Dyn, cur2, v2), fail)
+            }
+            parser.Pattern.Range(lo, hi, inclusive) => {
+                if fail < 0 { return }
+                let cur = self.read(place)
+                let lt = self.ty(lo)
+                let v = self.expr(lo)
+                let v2 = self.convert(v, lt, ty)
+                self.test(Rvalue.Binary(">=", Num.Dyn, cur, v2), fail)
+                if let Some(h) = hi {
+                    let ht = self.ty(h)
+                    let w = self.expr(h)
+                    let w2 = self.convert(w, ht, ty)
+                    let op = if inclusive { "<=" } else { "<" }
+                    self.test(Rvalue.Binary(op, Num.Dyn, cur, w2), fail)
+                }
+            }
+            parser.Pattern.Ctor(path, args) => {
+                var name = ""
+                if path.len > 0 { name = path[path.len - 1] }
+                match ty {
+                    types.Ty.Optional(inner) => {
+                        if name == "Some" {
+                            self.test(Rvalue.Is(here, 1), fail)
+                            self.patterns(args, place, [inner], fail)
+                        } else {
+                            self.test(Rvalue.Is(here, 0), fail)
+                        }
+                    }
+                    types.Ty.Enum(i, targs) => {
+                        let v = variant_index(self.c, i, name)
+                        if v < 0 { return }
+                        self.test(Rvalue.Is(here, v), fail)
+                        let tys = self.c.variant_field_tys(i, v, targs)
+                        self.patterns(args, place, tys, fail)
+                    }
+                    types.Ty.Struct(i, targs) => {
+                        let tys = self.c.struct_field_tys(i, targs)
+                        self.patterns(args, place, tys, fail)
+                    }
+                    _ => {
+                        let at = self.at
+                        let _ = self.unsupported(at, "patterns on values whose type is not checked")
+                    }
+                }
+            }
+            parser.Pattern.Struct(path, fields, _) => {
+                var name = ""
+                if path.len > 0 { name = path[path.len - 1] }
+                var names: [str] = []
+                var tys: [types.Ty] = []
+                match ty {
+                    types.Ty.Struct(i, targs) => {
+                        for f in self.c.structs[i].fields { names.push(f.name) }
+                        tys = self.c.struct_field_tys(i, targs)
+                    }
+                    types.Ty.Enum(i, targs) => {
+                        let v = variant_index(self.c, i, name)
+                        if v < 0 { return }
+                        self.test(Rvalue.Is(here, v), fail)
+                        for f in self.c.enums[i].variants[v].fields {
+                            var label = ""
+                            if let Some(n) = f.label { label = n }
+                            names.push(label)
+                        }
+                        tys = self.c.variant_field_tys(i, v, targs)
+                    }
+                    _ => {
+                        let at = self.at
+                        let _ = self.unsupported(at, "patterns on values whose type is not checked")
+                        return
+                    }
+                }
+                for f in fields {
+                    var k = -1
+                    for i in 0..(names.len as int) {
+                        if names[i] == f.name && k < 0 { k = i }
+                    }
+                    if k < 0 { continue }
+                    let field = with_field(place, k)
+                    match f.pat {
+                        Some(sub) => self.pattern(sub, field, tys[k], fail)
+                        None => {
+                            let l = self.temp()
+                            self.set(l, Operand.At(field))
+                            self.declare(f.name, l)
+                        }
+                    }
+                }
+            }
+            parser.Pattern.Tuple(ps) => {
+                var ts: [types.Ty] = []
+                match ty {
+                    types.Ty.Tuple(xs) => {
+                        ts = xs
+                    }
+                    _ => {
+                        let at = self.at
+                        let _ = self.unsupported(at, "patterns on values whose type is not checked")
+                        return
+                    }
+                }
+                let count = ps.len as int
+                var rest = count
+                for k in 0..count {
+                    match ps[k] {
+                        parser.Pattern.Rest => {
+                            if rest == count { rest = k }
+                        }
+                        _ => {}
+                    }
+                }
+                for k in 0..count {
+                    // The items after a `..` are counted from the end.
+                    var at_item = k
+                    if k > rest {
+                        at_item = ts.len as int + k - count
+                        if at_item < 0 { at_item = 0 }
+                    }
+                    var t = types.Ty.Unknown
+                    if at_item < (ts.len as int) { t = ts[at_item] }
+                    self.pattern(ps[k], with_field(place, at_item), t, fail)
+                }
+            }
+            parser.Pattern.Slice(ps) => {
+                var elem = types.Ty.Unknown
+                match ty {
+                    types.Ty.Slice(x) => {
+                        elem = x
+                    }
+                    types.Ty.Array(x) => {
+                        elem = x
+                    }
+                    _ => {
+                        let at = self.at
+                        let _ = self.unsupported(at, "patterns on values whose type is not checked")
+                        return
+                    }
+                }
+                let n = self.tmp(Rvalue.Len(here))
+                let count = ps.len as int
+                var rest = -1
+                for k in 0..count {
+                    match ps[k] {
+                        parser.Pattern.Rest => {
+                            if rest < 0 { rest = k }
+                        }
+                        _ => {}
+                    }
+                }
+                let fixed = if rest >= 0 { count - 1 } else { count }
+                let cmp = if rest >= 0 { ">=" } else { "==" }
+                self.test(Rvalue.Binary(cmp, Num.Dyn, n, int_op(fixed)), fail)
+                for k in 0..count {
+                    var index = int_op(k)
+                    if rest >= 0 && k > rest { index = self.tmp(Rvalue.Binary("-", Num.Int("usize"), n, int_op(count - k))) }
+                    self.pattern(ps[k], with_index(place, index), elem, fail)
+                }
+            }
+            parser.Pattern.Or(alts) => {
+                if fail < 0 {
+                    if alts.len > 0 { self.pattern(alts[0], place, ty, -1) }
+                    return
+                }
+                let ok = self.new_block()
+                self.or_depth += 1
+                let count = alts.len as int
+                for k in 0..count {
+                    var next = fail
+                    if k + 1 != count { next = self.new_block() }
+                    self.pattern(alts[k], place, ty, next)
+                    self.terminate(Term.Goto(ok))
+                    if next != fail { self.switch_to(next) }
+                }
+                self.or_depth -= 1
+                self.switch_to(ok)
+            }
+        }
+    }
+
+    // ---- expressions ----
+
+    // Lowers an expression, converting it to the type the place it is in
+    // asks for. What comes back is a constant or a new temporary, never a variable.
+    fn expr(mut self, e: parser.Expr) -> Operand {
+        let op = self.expr_raw(e)
+        match self.wanted(e) {
+            Some(want) => {
+                let source = self.ty(e)
+                self.at = span_of(e)
+                self.convert(op, source, want)
+            }
+            None => op
+        }
+    }
+
+    // Ends the block by going to `yes` or to `no` on a condition. `&&`,
+    // `||` and `!` become jumps, so that each way out knows which of the
+    // comparisons held.
+    fn jump(mut self, e: parser.Expr, yes: int, no: int) {
+        match e.kind {
+            parser.Kind.Binary(op, lhs, rhs) => {
+                if op == "&&" || op == "||" {
+                    let more = self.new_block()
+                    if op == "&&" {
+                        self.jump(lhs, more, no)
+                    } else {
+                        self.jump(lhs, yes, more)
+                    }
+                    self.switch_to(more)
+                    self.jump(rhs, yes, no)
+                    return
+                }
+            }
+            parser.Kind.Unary(op, inner) => {
+                if op == "!" {
+                    match self.ty(inner) {
+                        types.Ty.Bool => {
+                            self.jump(inner, no, yes)
+                            return
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        let v = self.expr(e)
+        self.at = span_of(e)
+        self.terminate(Term.Branch(v, yes, no))
+    }
+
+    // Goes to `fail` unless the condition holds; what an `if let` binds
+    // is declared in the scope that is open.
+    fn cond(mut self, c: parser.Cond, fail: int) {
+        match c {
+            parser.Cond.Test(e) => {
+                let ok = self.new_block()
+                self.jump(e, ok, fail)
+                self.switch_to(ok)
+            }
+            parser.Cond.Bind(pat, e) => {
+                let t = self.ty(e)
+                let v = self.expr(e)
+                let place = self.stash(v)
+                self.pattern(pat, place, t, fail)
+            }
+        }
+    }
+}
+
+fn variant_index(c: check.Checker, i: int, name: str) -> int {
+    for k in 0..(c.enums[i].variants.len as int) {
+        if c.enums[i].variants[k].name == name { return k }
+    }
+    -1
+}
+
+// ---- each kind of expression ----
+
+impl Lower {
+    fn expr_raw(mut self, e: parser.Expr) -> Operand {
+        let at = span_of(e)
+        self.at = at
+        match e.kind {
+            parser.Kind.Int(s) => {
+                match whole_value(s) {
+                    Some(v) => Operand.Const(Value.Int(v))
+                    None => self.unsupported(at, "integer literals of 2^127 or more")
+                }
+            }
+            parser.Kind.Float(s) => Operand.Const(Value.Float(float_text(s)))
+            parser.Kind.Char(ch) => Operand.Const(Value.Char(ch))
+            parser.Kind.Bool(b) => Operand.Const(Value.Bool(b))
+            parser.Kind.Str(parts) => {
+                var out: [FmtPart] = []
+                for part in parts {
+                    match part {
+                        parser.StrPart.Text(s) => out.push(FmtPart.Lit(s))
+                        parser.StrPart.Value(inner) => out.push(FmtPart.Val(self.expr(inner)))
+                    }
+                }
+                if out.len == 0 { return Operand.Const(Value.Str("")) }
+                if out.len == 1 {
+                    match out[0] {
+                        FmtPart.Lit(s) => return Operand.Const(Value.Str(s))
+                        _ => {}
+                    }
+                }
+                self.at = at
+                self.tmp(Rvalue.Format(out))
+            }
+            parser.Kind.Name(name) => {
+                match self.res(e) {
+                    Some(check.Res.Local) => {
+                        match self.lookup(name) {
+                            Some(l) => self.read(at_local(l))
+                            None => self.unsupported(at, "this name")
+                        }
+                    }
+                    Some(check.Res.NoneValue) => Operand.Const(Value.None)
+                    Some(check.Res.Fn(i)) => {
+                        let f = find_id(self.fn_ids, i)
+                        if f < 0 { return self.unsupported(at, "generic functions") }
+                        Operand.Const(Value.Fn(f))
+                    }
+                    Some(check.Res.Const(i)) => self.tmp(Rvalue.Const(i))
+                    _ => self.unsupported(at, "generic functions and imported modules")
+                }
+            }
+            parser.Kind.Tuple(items) => {
+                if items.len == 0 { return unit() }
+                var ops: [Operand] = []
+                for i in items { ops.push(self.expr(i)) }
+                self.tmp(Rvalue.Tuple(ops))
+            }
+            parser.Kind.Array(items) => {
+                var elem = types.Ty.Unknown
+                match self.ty(e) {
+                    types.Ty.Array(t) => {
+                        elem = t
+                    }
+                    _ => {}
+                }
+                var ops: [Operand] = []
+                for item in items {
+                    let t = self.ty(item)
+                    let v = self.expr(item)
+                    ops.push(self.convert(v, t, elem))
+                }
+                self.tmp(Rvalue.Array(ops))
+            }
+            parser.Kind.Repeat(value, count) => {
+                let v = self.expr(value)
+                let n = self.expr(count)
+                self.at = at
+                self.tmp(Rvalue.Repeat(v, n))
+            }
+            parser.Kind.Blk(b) => self.block(b)
+            parser.Kind.Unsafe(b) => self.block(b)
+            parser.Kind.Comptime(inner) => {
+                if self.in_const { return self.expr(inner) }
+                self.at_compile(e, inner)
+            }
+            parser.Kind.If(cond, then, otherwise) => {
+                let j = self.ty(e)
+                let else_bb = self.new_block()
+                let end = self.new_block()
+                let res = self.temp()
+                self.scopes.push(Scope([], []))
+                self.cond(cond, else_bb)
+                let tv = self.block(then)
+                let _ = self.scopes.pop()
+                match otherwise {
+                    Some(els) => {
+                        let tv2 = self.convert(tv, self.block_ty(then), j)
+                        self.set(res, tv2)
+                        self.terminate(Term.Goto(end))
+                        self.switch_to(else_bb)
+                        let et = self.ty(els)
+                        let ev = self.expr(els)
+                        let ev2 = self.convert(ev, et, j)
+                        self.set(res, ev2)
+                        self.terminate(Term.Goto(end))
+                        self.switch_to(end)
+                        local_op(res)
+                    }
+                    None => {
+                        self.terminate(Term.Goto(end))
+                        self.switch_to(else_bb)
+                        self.terminate(Term.Goto(end))
+                        self.switch_to(end)
+                        unit()
+                    }
+                }
+            }
+            parser.Kind.Match(scrutinee, arms) => {
+                let st = self.ty(scrutinee)
+                let j = self.ty(e)
+                let v = self.expr(scrutinee)
+                let place = self.stash(v)
+                let res = self.temp()
+                let end = self.new_block()
+                for arm in arms {
+                    let next = self.new_block()
+                    self.scopes.push(Scope([], []))
+                    self.pattern(arm.pat, place, st, next)
+                    if let Some(g) = arm.guard {
+                        let c = self.expr(g)
+                        let ok = self.new_block()
+                        self.terminate(Term.Branch(c, ok, next))
+                        self.switch_to(ok)
+                    }
+                    let bt = self.ty(arm.body)
+                    let bv = self.expr(arm.body)
+                    let bv2 = self.convert(bv, bt, j)
+                    self.set(res, bv2)
+                    let _ = self.scopes.pop()
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(next)
+                }
+                self.at = at
+                self.terminate(Term.Panic("no arm of this `match` matched the value"))
+                self.switch_to(end)
+                local_op(res)
+            }
+            parser.Kind.For(pat, iter, body) => self.for_loop(e, pat, iter, body)
+            parser.Kind.While(cond, body) => {
+                let head = self.new_block()
+                let exit = self.new_block()
+                self.terminate(Term.Goto(head))
+                self.switch_to(head)
+                self.scopes.push(Scope([], []))
+                self.cond(cond, exit)
+                self.loops.push(plain_loop(exit, head, self.scopes.len as int))
+                let _ = self.block(body)
+                let _ = self.loops.pop()
+                let _ = self.scopes.pop()
+                self.terminate(Term.Goto(head))
+                self.switch_to(exit)
+                unit()
+            }
+            parser.Kind.Loop(body) => {
+                let head = self.new_block()
+                let exit = self.new_block()
+                let res = self.temp()
+                self.terminate(Term.Goto(head))
+                self.switch_to(head)
+                self.loops.push(LoopCtx(exit, head, true, res, self.ty(e), self.scopes.len as int))
+                let _ = self.block(body)
+                let _ = self.loops.pop()
+                self.terminate(Term.Goto(head))
+                self.switch_to(exit)
+                local_op(res)
+            }
+            parser.Kind.Break(value) => {
+                if self.loops.len == 0 { return unit() }
+                let l = self.loops[self.loops.len - 1]
+                if let Some(v) = value {
+                    if l.has_result {
+                        let t = self.ty(v)
+                        let op = self.expr(v)
+                        let op2 = self.convert(op, t, l.result_ty)
+                        self.set(l.result, op2)
+                    }
+                }
+                self.run_defers(l.depth)
+                self.diverge(Term.Goto(l.brk))
+            }
+            parser.Kind.Continue => {
+                if self.loops.len == 0 { return unit() }
+                let l = self.loops[self.loops.len - 1]
+                self.run_defers(l.depth)
+                self.diverge(Term.Goto(l.cont))
+            }
+            parser.Kind.Return(value) => {
+                var v = unit()
+                var t = types.Ty.Unit
+                if let Some(x) = value {
+                    v = self.expr(x)
+                    t = self.ty(x)
+                }
+                let r = self.ret_value(v, t)
+                self.run_defers(0)
+                self.at = at
+                self.diverge(Term.Return(r))
+            }
+            parser.Kind.Closure(params, _, _, body) => self.closure(e, params, body)
+            parser.Kind.Scope(_, _) => self.unsupported(at, "`scope` blocks")
+            parser.Kind.With(_, _) => self.unsupported(at, "`with` blocks")
+            parser.Kind.Unary(op, inner) => {
+                let t = self.ty(inner)
+                let v = self.expr(inner)
+                var un = UnOp.BitNot
+                if op == "-" { un = UnOp.Neg }
+                if op == "!" { un = UnOp.Not }
+                self.at = at
+                self.tmp(Rvalue.Unary(un, num_of(t), v))
+            }
+            parser.Kind.Binary(op, lhs, rhs) => self.binary(e, op, lhs, rhs)
+            parser.Kind.Range(lo, hi, inclusive) => {
+                var first = Operand.Const(Value.None)
+                if let Some(b) = lo {
+                    let v = self.expr(b)
+                    first = self.tmp(Rvalue.Some(v))
+                }
+                var last = Operand.Const(Value.None)
+                if let Some(b) = hi {
+                    let v = self.expr(b)
+                    last = self.tmp(Rvalue.Some(v))
+                }
+                self.tmp(Rvalue.Tuple([first, last, Operand.Const(Value.Bool(inclusive))]))
+            }
+            parser.Kind.Cast(inner, _) => self.cast(e, inner)
+            parser.Kind.Call(callee, args) => self.call(e, callee, args)
+            parser.Kind.Index(base, args) => self.index(e, base, args)
+            parser.Kind.Field(base, name) => self.field(e, base, name)
+            parser.Kind.Try(inner) => self.try_(e, inner)
+            parser.Kind.Catch(inner, binding, handler) => self.catch_(e, inner, binding, handler)
+        }
+    }
+
+    fn for_loop(mut self, e: parser.Expr, pat: parser.Pattern, iter: parser.Expr, body: parser.Block) -> Operand {
+        let at = span_of(e)
+        let it = self.ty(iter)
+        // `for i in a..b` over whole numbers counts in two locals; no
+        // range value is built.
+        match (it, iter.kind) {
+            (types.Ty.Range(t), parser.Kind.Range(Some(lo), Some(hi), inclusive)) => {
+                var counted = false
+                var k = "i64"
+                match t {
+                    types.Ty.Int(kind) => {
+                        counted = true
+                        k = kind
+                    }
+                    types.Ty.IntLit => {
+                        counted = true
+                    }
+                    _ => {}
+                }
+                if counted {
+                    let first = self.expr(lo)
+                    let last = self.expr(hi)
+                    let i = self.temp()
+                    let end = self.temp()
+                    self.hints.push(Hint(i, Scalar.Int(k)))
+                    self.hints.push(Hint(end, Scalar.Int(k)))
+                    self.set(i, first)
+                    self.set(end, last)
+                    let cursor = local_op(i)
+                    let stop = local_op(end)
+                    let head = self.new_block()
+                    let body_bb = self.new_block()
+                    let step = self.new_block()
+                    let exit = self.new_block()
+                    self.terminate(Term.Goto(head))
+                    self.switch_to(head)
+                    let op = if inclusive { "<=" } else { "<" }
+                    let more = self.tmp(Rvalue.Binary(op, Num.Dyn, cursor, stop))
+                    self.terminate(Term.Branch(more, body_bb, exit))
+                    self.switch_to(body_bb)
+                    self.scopes.push(Scope([], []))
+                    self.pattern(pat, at_local(i), t, -1)
+                    self.loops.push(plain_loop(exit, step, self.scopes.len as int))
+                    let _ = self.block(body)
+                    let _ = self.loops.pop()
+                    let _ = self.scopes.pop()
+                    self.terminate(Term.Goto(step))
+                    self.switch_to(step)
+                    self.at = at
+                    if inclusive {
+                        // The last value may be the largest of its type.
+                        let done = self.tmp(Rvalue.Binary("==", Num.Dyn, cursor, stop))
+                        let advance = self.new_block()
+                        self.terminate(Term.Branch(done, exit, advance))
+                        self.switch_to(advance)
+                    }
+                    self.emit(at_local(i), Rvalue.Succ(cursor, Num.Int(k)))
+                    self.terminate(Term.Goto(head))
+                    self.switch_to(exit)
+                    return unit()
+                }
+            }
+            _ => {}
+        }
+        let v = self.expr(iter)
+        let head = self.new_block()
+        let body_bb = self.new_block()
+        let step = self.new_block()
+        let exit = self.new_block()
+        let i = self.temp()
+        let cursor = local_op(i)
+        // What each turn binds, and its type.
+        var item = at_local(i)
+        var elem = types.Ty.Unknown
+        var counter = Num.Int("usize")
+        var ranged = false
+        match it {
+            types.Ty.Range(t) => {
+                ranged = true
+                counter = Num.Dyn
+                match t {
+                    types.Ty.Int(k) => {
+                        counter = Num.Int(k)
+                    }
+                    types.Ty.IntLit => {
+                        counter = Num.Int("i64")
+                    }
+                    _ => {}
+                }
+                self.emit(at_local(i), Rvalue.RangeStart(v, counter))
+                elem = t
+            }
+            types.Ty.Slice(t) => {
+                self.set(i, int_op(0))
+                let held = self.stash(v)
+                item = with_index(held, cursor)
+                elem = t
+            }
+            types.Ty.Array(t) => {
+                self.set(i, int_op(0))
+                let held = self.stash(v)
+                item = with_index(held, cursor)
+                elem = t
+            }
+            types.Ty.Str => {
+                self.set(i, int_op(0))
+                let chars = self.tmp(Rvalue.Chars(v))
+                let held = self.stash(chars)
+                item = with_index(held, cursor)
+                elem = types.Ty.Char
+            }
+            _ => {
+                let _ = self.unsupported(span_of(iter), "iterating over this type")
+                return unit()
+            }
+        }
+        var count = unit()
+        if !ranged { count = self.tmp(Rvalue.Len(local_op(item.local))) }
+        self.terminate(Term.Goto(head))
+        self.switch_to(head)
+        var more = unit()
+        if ranged {
+            more = self.tmp(Rvalue.RangeHas(v, cursor))
+        } else {
+            more = self.tmp(Rvalue.Binary("<", Num.Dyn, cursor, count))
+        }
+        self.terminate(Term.Branch(more, body_bb, exit))
+        self.switch_to(body_bb)
+        self.scopes.push(Scope([], []))
+        self.pattern(pat, item, elem, -1)
+        self.loops.push(plain_loop(exit, step, self.scopes.len as int))
+        let _ = self.block(body)
+        let _ = self.loops.pop()
+        let _ = self.scopes.pop()
+        self.terminate(Term.Goto(step))
+        self.switch_to(step)
+        self.at = at
+        if ranged {
+            let last = self.tmp(Rvalue.RangeLast(v, cursor))
+            let advance = self.new_block()
+            self.terminate(Term.Branch(last, exit, advance))
+            self.switch_to(advance)
+            self.emit(at_local(i), Rvalue.Succ(cursor, counter))
+        } else {
+            self.emit(at_local(i), Rvalue.Binary("+", counter, cursor, int_op(1)))
+        }
+        self.terminate(Term.Goto(head))
+        self.switch_to(exit)
+        unit()
+    }
+}
+
+// The value of a whole number as it is written, when it is below 2^127.
+fn whole_value(written: str) -> i128? {
+    match check.int_value(written) {
+        Some(limbs) => {
+            if limbs[3] >= 2147483648 { return None }
+            var v: i128 = 0
+            var i = 3
+            while i >= 0 {
+                v = v * 4294967296 + (limbs[i] as i128)
+                i -= 1
+            }
+            Some(v)
+        }
+        None => None
+    }
+}
+
+// A number with a fraction as the compiler in Rust prints an `f64`: the
+// shortest digits that give the number back, with an exponent only for
+// the very large and the very small.
+fn float_text(written: str) -> str {
+    var digits: [char] = []
+    var exp = 0
+    var seen_dot = false
+    var negative = false
+    var exp_text: [char] = []
+    var in_exp = false
+    var exp_negative = false
+    for ch in text.chars(written) {
+        if ch == '_' { continue }
+        if in_exp {
+            if ch == '-' { exp_negative = true }
+            if text.is_digit(ch) { exp_text.push(ch) }
+            continue
+        }
+        if ch == '-' {
+            negative = true
+            continue
+        }
+        if ch == 'e' || ch == 'E' {
+            in_exp = true
+            continue
+        }
+        if ch == '.' {
+            seen_dot = true
+            continue
+        }
+        if text.is_digit(ch) {
+            digits.push(ch)
+            if !seen_dot { exp += 1 }
+        }
+    }
+    if exp_text.len > 0 {
+        var n = 0
+        for d in exp_text { n = n * 10 + (d as int - '0' as int) }
+        if exp_negative { exp -= n } else { exp += n }
+    }
+    // Zeros at the start do not count; each one moves the point.
+    var start = 0
+    while start < (digits.len as int) && digits[start] == '0' {
+        start += 1
+        exp -= 1
+    }
+    var end = digits.len as int
+    while end > start && digits[end - 1] == '0' { end -= 1 }
+    let sign = if negative { "-" } else { "" }
+    if start >= end { return "{sign}0.0" }
+    var ds: [char] = []
+    for k in start..end { ds.push(digits[k]) }
+    // The value is 0.ds times ten to the `exp`.
+    let count = ds.len as int
+    let sci = exp - 1
+    if sci >= 16 || sci < -4 {
+        var out: [char] = []
+        out.push(ds[0])
+        if count > 1 {
+            out.push('.')
+            for k in 1..count { out.push(ds[k]) }
+        }
+        return "{sign}{text.from_chars(out)}e{sci}"
+    }
+    var out: [char] = []
+    if exp <= 0 {
+        out.push('0')
+        out.push('.')
+        for k in 0..(0 - exp) { out.push('0') }
+        for d in ds { out.push(d) }
+        return "{sign}{text.from_chars(out)}"
+    }
+    for k in 0..exp {
+        if k < count { out.push(ds[k]) } else { out.push('0') }
+    }
+    out.push('.')
+    if count > exp {
+        for k in exp..count { out.push(ds[k]) }
+    } else {
+        out.push('0')
+    }
+    "{sign}{text.from_chars(out)}"
+}
+
+// ---- casts, parts of values, errors and calls ----
+
+fn plain_loop(brk: int, cont: int, depth: int) -> LoopCtx { LoopCtx(brk, cont, false, 0, types.Ty.Unit, depth) }
+
+fn has_dot(s: str) -> bool {
+    for ch in text.chars(s) {
+        if ch == '.' { return true }
+    }
+    false
+}
+
+struct Receiver { op: Operand, back: bool, place: Place }
+
+impl Lower {
+    fn cast(mut self, e: parser.Expr, inner: parser.Expr) -> Operand {
+        let at = span_of(e)
+        let v = self.expr(inner)
+        self.at = at
+        match self.ty(e) {
+            types.Ty.Dyn(t, _) => {
+                // A value that is already a `dyn` stays as it is.
+                var table: [check.Res] = []
+                var found = false
+                let key = self.slot(e)
+                for d in self.c.dyns {
+                    if d.key == key {
+                        table = d.table
+                        found = true
+                    }
+                }
+                if !found { return v }
+                var ops: [Operand] = []
+                ops.push(v)
+                for r in table {
+                    var f = -1
+                    match r {
+                        check.Res.Method(tn, n) => {
+                            f = self.method_id(tn, n)
+                        }
+                        check.Res.Generic(k) => {
+                            if k >= 0 && k < (self.instance_ids.len as int) { f = self.instance_ids[k] }
+                        }
+                        _ => {}
+                    }
+                    if f < 0 { return self.unsupported(at, "this conversion to `dyn`") }
+                    ops.push(Operand.Const(Value.Fn(f)))
+                }
+                self.tmp(Rvalue.Struct(self.c.structs.len as int + t, ops))
+            }
+            types.Ty.Int(k) => self.tmp(Rvalue.CastInt(v, k))
+            types.Ty.Float(k) => self.tmp(Rvalue.CastFloat(v, k == "f32"))
+            _ => self.unsupported(at, "casts to this type")
+        }
+    }
+
+    fn index(mut self, e: parser.Expr, base: parser.Expr, args: [parser.Expr]) -> Operand {
+        let at = span_of(e)
+        if args.len != 1 || !self.c.types.has(self.slot(base)) { return self.unsupported(at, "generic arguments") }
+        match self.ty(args[0]) {
+            types.Ty.Range(_) => {
+                let b = self.expr(base)
+                let r = self.expr(args[0])
+                self.at = at
+                return self.tmp(Rvalue.Slice(b, r))
+            }
+            _ => {}
+        }
+        let indexable = match self.ty(base) {
+            types.Ty.Slice(_) => true
+            types.Ty.Array(_) => true
+            _ => false
+        }
+        if !indexable { return self.unsupported(at, "indexing a value of this type") }
+        let place = self.place(e)
+        self.at = at
+        self.read_as(place, self.ty(e))
+    }
+
+    fn field(mut self, e: parser.Expr, base: parser.Expr, name: str) -> Operand {
+        let at = span_of(e)
+        match self.res(e) {
+            Some(check.Res.Variant(en, v)) => Operand.Const(Value.Enum(en, v))
+            Some(check.Res.Field(_)) => {
+                let place = self.place(e)
+                self.read_as(place, self.ty(e))
+            }
+            Some(check.Res.Len) => {
+                let b = self.place(base)
+                self.tmp(Rvalue.Len(Operand.At(b)))
+            }
+            // A function or a constant of another module: `module.name`.
+            Some(check.Res.Fn(i)) => {
+                let f = find_id(self.fn_ids, i)
+                if f < 0 { return self.unsupported(at, "generic functions") }
+                Operand.Const(Value.Fn(f))
+            }
+            Some(check.Res.Const(i)) => self.tmp(Rvalue.Const(i))
+            _ => self.unsupported(at, "imported modules and generic types")
+        }
+    }
+
+    fn try_(mut self, e: parser.Expr, inner: parser.Expr) -> Operand {
+        let at = span_of(e)
+        let t = self.ty(inner)
+        let v = self.expr(inner)
+        let place = self.stash(v)
+        let here = Operand.At(place)
+        let good = self.new_block()
+        let bad = self.new_block()
+        self.at = at
+        match t {
+            types.Ty.Result(_, found) => {
+                let failed = self.tmp(Rvalue.Is(here, 1))
+                self.terminate(Term.Branch(failed, bad, good))
+                self.switch_to(bad)
+                let payload = self.read(with_field(place, 0))
+                var declared = types.Ty.Unknown
+                if let Some(x) = self.fails { declared = x }
+                let payload2 = self.convert(payload, found, declared)
+                let r = self.tmp(Rvalue.Err(payload2))
+                self.run_defers(0)
+                self.terminate(Term.Return(r))
+            }
+            types.Ty.Optional(_) => {
+                let some = self.tmp(Rvalue.Is(here, 1))
+                self.terminate(Term.Branch(some, good, bad))
+                self.switch_to(bad)
+                let r = self.ret_value(Operand.Const(Value.None), types.Ty.Optional(types.Ty.Never))
+                self.run_defers(0)
+                self.terminate(Term.Return(r))
+            }
+            _ => return self.unsupported(at, "`?` on a value whose type is not checked")
+        }
+        self.switch_to(good)
+        self.read(with_field(place, 0))
+    }
+
+    fn catch_(mut self, e: parser.Expr, inner: parser.Expr, binding: str?, handler: parser.Block) -> Operand {
+        let at = span_of(e)
+        var ok = types.Ty.Unknown
+        match self.ty(inner) {
+            types.Ty.Result(x, _) => {
+                ok = x
+            }
+            _ => return self.unsupported(at, "`catch` on a value whose type is not checked")
+        }
+        let j = self.ty(e)
+        let v = self.expr(inner)
+        let place = self.stash(v)
+        let good = self.new_block()
+        let bad = self.new_block()
+        let end = self.new_block()
+        let res = self.temp()
+        let failed = self.tmp(Rvalue.Is(Operand.At(place), 1))
+        self.terminate(Term.Branch(failed, bad, good))
+        self.switch_to(bad)
+        self.scopes.push(Scope([], []))
+        if let Some(b) = binding {
+            let l = self.temp()
+            self.set(l, Operand.At(with_field(place, 0)))
+            self.declare(b, l)
+        }
+        let hv = self.block(handler)
+        let hv2 = self.convert(hv, self.block_ty(handler), j)
+        self.set(res, hv2)
+        let _ = self.scopes.pop()
+        self.terminate(Term.Goto(end))
+        self.switch_to(good)
+        let okv = self.read(with_field(place, 0))
+        let okv2 = self.convert(okv, ok, j)
+        self.set(res, okv2)
+        self.terminate(Term.Goto(end))
+        self.switch_to(end)
+        local_op(res)
+    }
+
+    fn binary(mut self, e: parser.Expr, op: str, lhs: parser.Expr, rhs: parser.Expr) -> Operand {
+        if op == "&&" || op == "||" {
+            let res = self.temp()
+            let l = self.expr(lhs)
+            self.set(res, l)
+            let more = self.new_block()
+            let end = self.new_block()
+            if op == "&&" {
+                self.terminate(Term.Branch(local_op(res), more, end))
+            } else {
+                self.terminate(Term.Branch(local_op(res), end, more))
+            }
+            self.switch_to(more)
+            let r = self.expr(rhs)
+            self.set(res, r)
+            self.terminate(Term.Goto(end))
+            self.switch_to(end)
+            return local_op(res)
+        }
+        let lt = self.ty(lhs)
+        let rt = self.ty(rhs)
+        let shift = op == "<<" || op == ">>"
+        var j = lt
+        if !shift {
+            j = types.Ty.Unknown
+            if let Some(x) = types.join(lt, rt) { j = x }
+        }
+        var l = self.expr(lhs)
+        if !shift { l = self.convert(l, lt, j) }
+        var r = self.expr(rhs)
+        if !shift { r = self.convert(r, rt, j) }
+        self.at = span_of(e)
+        if !is_bin_op(op) { return self.unsupported(span_of(e), "this operator") }
+        let wraps = op == "+%" || op == "-%" || op == "*%" || op == "+|" || op == "-|" || op == "*|"
+        let untyped = match num_of(j) {
+            Num.Int(k) => k == "lit"
+            _ => false
+        }
+        var num = num_of(j)
+        // Wrapping and saturating between numbers with no type is made as
+        // `int`, so both have to be one.
+        if wraps && untyped {
+            let int = types.Ty.Int("i64")
+            l = self.convert(l, types.Ty.IntLit, int)
+            r = self.convert(r, types.Ty.IntLit, int)
+            num = Num.Int("i64")
+        }
+        if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" || op == "&" || op == "|" || op == "^" { num = Num.Dyn }
+        self.tmp(Rvalue.Binary(op, num, l, r))
+    }
+
+    // ---- calls ----
+
+    fn arg_ops(mut self, args: [parser.Arg]) -> [Operand] {
+        var ops: [Operand] = []
+        for a in args { ops.push(self.expr(a.value)) }
+        ops
+    }
+
+    fn decl_of(self, f: int) -> parser.FnDecl? {
+        if f < 0 || f >= (self.fn_decls.len as int) { return None }
+        self.fn_decls[f]
+    }
+
+    fn call(mut self, e: parser.Expr, callee: parser.Expr, args: [parser.Arg]) -> Operand {
+        let at = span_of(e)
+        // Whether this call must work out the place of its result.
+        let twin = self.twin
+        self.twin = false
+        match self.res(e) {
+            Some(check.Res.SomeCtor) => {
+                if args.len == 0 { return Operand.Const(Value.None) }
+                let v = self.expr(args[0].value)
+                self.tmp(Rvalue.Some(v))
+            }
+            Some(check.Res.StructCtor(i)) => {
+                var ops = self.arg_ops(args)
+                let count = self.c.structs[i].fields.len as int
+                for k in (ops.len as int)..count {
+                    var dflt: parser.Expr? = None
+                    if i < (self.struct_decls.len as int) {
+                        if k < (self.struct_decls[i].fields.len as int) { dflt = self.struct_decls[i].fields[k].default }
+                    }
+                    ops.push(self.default_value(dflt, 0, at))
+                }
+                self.tmp(Rvalue.Struct(i, ops))
+            }
+            Some(check.Res.Variant(en, v)) => {
+                let ops = self.arg_ops(args)
+                self.tmp(Rvalue.Enum(en, v, ops))
+            }
+            Some(check.Res.Fn(i)) => {
+                let f = find_id(self.fn_ids, i)
+                if f < 0 { return self.unsupported(at, "generic functions") }
+                let sig = self.c.fns[i].sig
+                self.invoke(Callee.Fn(self.pick(f, twin)), None, sig, self.decl_of(f), 0, args, at)
+            }
+            Some(check.Res.Generic(k)) => {
+                if k < 0 || k >= (self.instance_ids.len as int) { return self.unsupported(at, "this generic call") }
+                let f = self.instance_ids[k]
+                var self_mode: parser.Mode? = None
+                match self.c.instances[k].target {
+                    check.Target.Method(t, n) => {
+                        let mi = self.c.method_index(t, n)
+                        if mi >= 0 { self_mode = self.c.methods[mi].m.self_mode }
+                    }
+                    _ => {}
+                }
+                var receiver: Receiver? = None
+                match (self_mode, callee.kind) {
+                    (Some(mode), parser.Kind.Field(base, _)) => {
+                        let mutable = match mode {
+                            parser.Mode.Mut => true
+                            _ => false
+                        }
+                        if mutable {
+                            let p = self.place(base)
+                            receiver = Some(Receiver(Operand.At(p), true, p))
+                        } else {
+                            receiver = Some(Receiver(self.expr(base), false, Place(0, [])))
+                        }
+                    }
+                    _ => {}
+                }
+                let sig = self.c.instances[k].sig
+                self.invoke(Callee.Fn(self.pick(f, twin)), receiver, sig, self.decl_of(f), k + 1, args, at)
+            }
+            Some(check.Res.Assoc(t, n)) => {
+                let f = self.method_id(t, n)
+                let mi = self.c.method_index(t, n)
+                if f < 0 || mi < 0 { return self.unsupported(at, "generic methods") }
+                let sig = self.c.methods[mi].m.sig
+                self.invoke(Callee.Fn(self.pick(f, twin)), None, sig, self.decl_of(f), 0, args, at)
+            }
+            Some(check.Res.Method(t, n)) => {
+                let f = self.method_id(t, n)
+                let mi = self.c.method_index(t, n)
+                if f < 0 || mi < 0 { return self.unsupported(at, "generic methods") }
+                let m = self.c.methods[mi].m
+                match callee.kind {
+                    parser.Kind.Field(base, _) => {
+                        let mutable = match m.self_mode {
+                            Some(parser.Mode.Mut) => true
+                            _ => false
+                        }
+                        var receiver = Receiver(unit(), false, Place(0, []))
+                        if mutable {
+                            let p = self.place(base)
+                            receiver = Receiver(Operand.At(p), true, p)
+                        } else {
+                            receiver = Receiver(self.expr(base), false, Place(0, []))
+                        }
+                        self.invoke(Callee.Fn(self.pick(f, twin)), Some(receiver), m.sig, self.decl_of(f), 0, args, at)
+                    }
+                    _ => self.unsupported(at, "this call")
+                }
+            }
+            Some(check.Res.Dyn(k, is_mut)) => {
+                match (callee.kind, self.ty(callee_base(callee))) {
+                    (parser.Kind.Field(base, _), types.Ty.Dyn(t, targs)) => {
+                        let slots = self.c.dyn_slots(check.Bound(t, targs))
+                        if k < 0 || k >= (slots.len as int) { return self.unsupported(at, "this call") }
+                        // The value is the first field; its methods follow.
+                        let p = self.place(base)
+                        let f = self.read(with_field(p, k + 1))
+                        let inner = with_field(p, 0)
+                        var receiver = Receiver(unit(), false, Place(0, []))
+                        if is_mut {
+                            receiver = Receiver(Operand.At(inner), true, inner)
+                        } else {
+                            receiver = Receiver(self.read(inner), false, Place(0, []))
+                        }
+                        self.invoke(Callee.Indirect(f), Some(receiver), slots[k].sig, None, 0, args, at)
+                    }
+                    _ => self.unsupported(at, "this call")
+                }
+            }
+            Some(check.Res.Extern(x)) => {
+                let ops = self.arg_ops(args)
+                self.finish_call(Callee.Extern(x), ops, [], at)
+            }
+            Some(check.Res.Builtin(name)) => {
+                if name == "panic" {
+                    let ops = self.arg_ops(args)
+                    return self.finish_call(Callee.Panic, ops, [], at)
+                }
+                if name == "assert" {
+                    if args.len == 0 { return unit() }
+                    let pass = self.new_block()
+                    let fail = self.new_block()
+                    self.jump(args[0].value, pass, fail)
+                    self.at = at
+                    // The message is only worked out when the assertion fails.
+                    self.switch_to(fail)
+                    var message = Operand.Const(Value.Str("assertion failed"))
+                    if args.len > 1 { message = self.expr(args[1].value) }
+                    let _ = self.finish_call(Callee.Panic, [message], [], at)
+                    self.terminate(Term.Goto(pass))
+                    self.switch_to(pass)
+                    return unit()
+                }
+                if name == "io.print" {
+                    let ops = self.arg_ops(args)
+                    return self.finish_call(Callee.Print, ops, [], at)
+                }
+                if has_dot(name) {
+                    let ops = self.arg_ops(args)
+                    return self.finish_call(Callee.Native(name), ops, [], at)
+                }
+                match callee.kind {
+                    parser.Kind.Field(base, _) => {
+                        if name == "push" {
+                            let p = self.place(base)
+                            if args.len == 0 { return unit() }
+                            let v = self.expr(args[0].value)
+                            return self.tmp(Rvalue.Push(p, v))
+                        }
+                        if name == "pop" {
+                            let p = self.place(base)
+                            return self.tmp(Rvalue.Pop(p))
+                        }
+                        let b = self.expr(base)
+                        if args.len == 0 { return Operand.Const(Value.None) }
+                        let i = self.expr(args[0].value)
+                        self.tmp(Rvalue.Get(b, i))
+                    }
+                    _ => self.unsupported(at, "this call")
+                }
+            }
+            _ => {
+                match self.ty(callee) {
+                    types.Ty.Fn(sig) => {
+                        let f = self.expr(callee)
+                        self.invoke(Callee.Indirect(f), None, sig, None, 0, args, at)
+                    }
+                    _ => self.unsupported(at, "generic functions, imported modules and methods of built-in types")
+                }
+            }
+        }
+    }
+
+    // The function to call: the one that works out a place when the call asks for it.
+    fn pick(self, f: int, twin: bool) -> int {
+        if !twin { return f }
+        let t = find_id(self.path_ids, f)
+        if t < 0 { return f }
+        t
+    }
+
+    // Lowers a default value, which only sees the names of the top of
+    // the program. `inst` is the instance the default was checked in:
+    // the one of what is called.
+    fn default_value(mut self, dflt: parser.Expr?, inst: int, at: check.Span) -> Operand {
+        match dflt {
+            Some(d) => {
+                let saved = self.scopes
+                let caller = self.inst
+                self.inst = inst
+                self.scopes = []
+                self.scopes.push(Scope([], []))
+                let v = self.expr(d)
+                self.scopes = saved
+                self.inst = caller
+                v
+            }
+            None => self.unsupported(at, "this call")
+        }
+    }
+
+    fn invoke(mut self, callee: Callee, receiver: Receiver?, sig: types.Sig, decl: parser.FnDecl?, inst: int, args: [parser.Arg], at: check.Span) -> Operand {
+        var ops: [Operand] = []
+        var writeback: [Writeback] = []
+        if let Some(r) = receiver {
+            if r.back { writeback.push(Writeback(0, r.place)) }
+            ops.push(r.op)
+        }
+        let offset = ops.len as int
+        let count = args.len as int
+        let wanted = sig.params.len as int
+        for i in 0..count {
+            let a = args[i]
+            var by_mut = false
+            var by_own = false
+            if i < wanted {
+                match sig.params[i].mode {
+                    parser.Mode.Mut => {
+                        by_mut = true
+                    }
+                    parser.Mode.Own => {
+                        by_own = true
+                    }
+                    _ => {}
+                }
+            }
+            if by_mut {
+                let p = self.place(a.value)
+                writeback.push(Writeback(offset + i, p))
+                ops.push(Operand.At(p))
+                continue
+            }
+            ops.push(self.expr(a.value))
+            // `own x` leaves the variable without a value.
+            let given = match a.mode {
+                parser.Mode.Own => true
+                _ => false
+            }
+            if by_own && given {
+                match a.value.kind {
+                    parser.Kind.Name(name) => {
+                        if let Some(l) = self.lookup(name) {
+                            self.at = span_of(a.value)
+                            self.emit(at_local(l), Rvalue.Moved)
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for i in count..wanted {
+            var dflt: parser.Expr? = None
+            if let Some(d) = decl {
+                var seen = 0
+                for p in d.params {
+                    if p.name == "self" { continue }
+                    if seen == i { dflt = p.default }
+                    seen += 1
+                }
+            }
+            ops.push(self.default_value(dflt, inst, at))
+        }
+        // A call that works out a place: its result is part of the first argument.
+        match callee {
+            Callee.Fn(f) => {
+                var is_path = false
+                for p in self.path_ids {
+                    if p.id == f { is_path = true }
+                }
+                if is_path {
+                    self.has_twin_src = false
+                    for w in writeback {
+                        if w.arg == 0 && !self.has_twin_src {
+                            self.twin_src = w.place
+                            self.has_twin_src = true
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.finish_call(callee, ops, writeback, at)
+    }
+
+    fn finish_call(mut self, callee: Callee, args: [Operand], writeback: [Writeback], at: check.Span) -> Operand {
+        let dest = self.temp()
+        let next = self.new_block()
+        self.at = at
+        self.terminate(Term.Call(callee, args, writeback, at_local(dest), next))
+        self.switch_to(next)
+        local_op(dest)
+    }
+}
+
+// What a method is called on: `base` in `base.name(...)`.
+fn callee_base(callee: parser.Expr) -> parser.Expr {
+    match callee.kind {
+        parser.Kind.Field(base, _) => base
+        _ => callee
+    }
+}
+
+// ---- the lowered program as text ----
+
+fn quote(s: str) -> str {
+    var out: [char] = []
+    out.push('"')
+    for ch in text.chars(s) {
+        if ch == '\\' {
+            out.push('\\')
+            out.push('\\')
+        } else {
+            if ch == '"' {
+                out.push('\\')
+                out.push('"')
+            } else {
+                if ch == '\n' {
+                    out.push('\\')
+                    out.push('n')
+                } else {
+                    out.push(ch)
+                }
+            }
+        }
+    }
+    out.push('"')
+    text.from_chars(out)
+}
+
+fn value_text(v: Value) -> str {
+    match v {
+        Value.Int(i) => "int {i}"
+        Value.Float(f) => "float {f}"
+        Value.Bool(b) => "bool {b}"
+        Value.Char(ch) => "char {ch as int}"
+        Value.Str(s) => "str {quote(s)}"
+        Value.Unit => "()"
+        Value.None => "none"
+        Value.Fn(f) => "fn {f}"
+        Value.Enum(e, variant) => "enum {e}.{variant}"
+    }
+}
+
+fn place_text(p: Place) -> str {
+    var out = "L{p.local}"
+    for pr in p.proj {
+        match pr {
+            Proj.Field(k) => {
+                out = "{out}.{k}"
+            }
+            Proj.Index(i) => {
+                out = "{out}[{operand_text(i)}]"
+            }
+            Proj.Path(l) => {
+                out = "{out}@{l}"
+            }
+        }
+    }
+    out
+}
+
+fn operand_text(op: Operand) -> str {
+    match op {
+        Operand.Const(v) => value_text(v)
+        Operand.At(p) => place_text(p)
+    }
+}
+
+fn operands_text(ops: [Operand]) -> str {
+    var out: [str] = []
+    for o in ops { out.push(operand_text(o)) }
+    text.join(out, ", ")
+}
+
+fn num_text(n: Num) -> str {
+    match n {
+        Num.Int(k) => k
+        Num.Float => "float"
+        Num.F64 => "f64"
+        Num.Dyn => "dyn"
+    }
+}
+
+fn opt_conv_text(c: Conv?) -> str {
+    match c {
+        Some(x) => conv_text(x)
+        None => "_"
+    }
+}
+
+fn conv_text(c: Conv) -> str {
+    match c {
+        Conv.Fit(k) => "fit {k}"
+        Conv.ToFloat(single) => "tofloat {single}"
+        Conv.Wrap(x) => "wrap({opt_conv_text(x)})"
+        Conv.Inside(x) => "inside({conv_text(x)})"
+        Conv.Elems(x) => "elems({conv_text(x)})"
+        Conv.Tuple(cs) => {
+            var out: [str] = []
+            for x in cs { out.push(opt_conv_text(x)) }
+            "tuple({text.join(out, ", ")})"
+        }
+        Conv.Res(a, b) => "res({opt_conv_text(a)}, {opt_conv_text(b)})"
+    }
+}
+
+fn rvalue_text(rv: Rvalue) -> str {
+    match rv {
+        Rvalue.Use(a) => "use {operand_text(a)}"
+        Rvalue.Unary(op, n, a) => {
+            let name = match op {
+                UnOp.Neg => "neg"
+                UnOp.Not => "not"
+                UnOp.BitNot => "bitnot"
+            }
+            "{name} {num_text(n)} {operand_text(a)}"
+        }
+        Rvalue.Binary(op, n, a, b) => "{op} {num_text(n)} {operand_text(a)}, {operand_text(b)}"
+        Rvalue.CastInt(a, k) => "castint {k} {operand_text(a)}"
+        Rvalue.CastFloat(a, single) => "castfloat {single} {operand_text(a)}"
+        Rvalue.Convert(a, c) => "convert {conv_text(c)} {operand_text(a)}"
+        Rvalue.Tuple(ops) => "tuple({operands_text(ops)})"
+        Rvalue.Struct(i, ops) => "struct {i}({operands_text(ops)})"
+        Rvalue.Enum(i, v, ops) => "enum {i}.{v}({operands_text(ops)})"
+        Rvalue.Array(ops) => "array[{operands_text(ops)}]"
+        Rvalue.Repeat(a, b) => "repeat {operand_text(a)}, {operand_text(b)}"
+        Rvalue.Some(a) => "some {operand_text(a)}"
+        Rvalue.Ok(a) => "ok {operand_text(a)}"
+        Rvalue.Err(a) => "err {operand_text(a)}"
+        Rvalue.Is(a, v) => "is {v} {operand_text(a)}"
+        Rvalue.Len(a) => "len {operand_text(a)}"
+        Rvalue.Slice(a, b) => "slice {operand_text(a)}, {operand_text(b)}"
+        Rvalue.Format(parts) => {
+            var out: [str] = []
+            for part in parts {
+                match part {
+                    FmtPart.Lit(s) => out.push(quote(s))
+                    FmtPart.Val(o) => out.push(operand_text(o))
+                }
+            }
+            "format({text.join(out, ", ")})"
+        }
+        Rvalue.Chars(a) => "chars {operand_text(a)}"
+        Rvalue.Const(k) => "const {k}"
+        Rvalue.RangeStart(a, n) => "rangestart {num_text(n)} {operand_text(a)}"
+        Rvalue.RangeHas(a, b) => "rangehas {operand_text(a)}, {operand_text(b)}"
+        Rvalue.RangeLast(a, b) => "rangelast {operand_text(a)}, {operand_text(b)}"
+        Rvalue.Succ(a, n) => "succ {num_text(n)} {operand_text(a)}"
+        Rvalue.Push(p, a) => "push {place_text(p)}, {operand_text(a)}"
+        Rvalue.Pop(p) => "pop {place_text(p)}"
+        Rvalue.Get(a, b) => "get {operand_text(a)}, {operand_text(b)}"
+        Rvalue.Closure(f, ops) => "closure {f}({operands_text(ops)})"
+        Rvalue.Capture(k) => "capture {k}"
+        Rvalue.Uninit => "uninit"
+        Rvalue.Moved => "moved"
+    }
+}
+
+fn scalar_text(s: Scalar?) -> str {
+    match s {
+        Some(x) => {
+            match x {
+                Scalar.Int(k) => k
+                Scalar.Bool => "bool"
+                Scalar.F64 => "f64"
+            }
+        }
+        None => "_"
+    }
+}
+
+fn ints_text(xs: [int]) -> str {
+    var out: [str] = []
+    for x in xs { out.push("{x}") }
+    text.join(out, " ")
+}
+
+fn term_text(t: Term) -> str {
+    match t {
+        Term.Goto(b) => "goto b{b}"
+        Term.Branch(c, yes, no) => "branch {operand_text(c)} b{yes} b{no}"
+        Term.Call(callee, args, writeback, dest, next) => {
+            let who = match callee {
+                Callee.Fn(f) => "fn {f}"
+                Callee.Indirect(op) => "indirect {operand_text(op)}"
+                Callee.Print => "print"
+                Callee.Native(n) => "native {n}"
+                Callee.Panic => "panic"
+                Callee.Extern(x) => "extern {x}"
+            }
+            var back: [str] = []
+            for w in writeback { back.push("{w.arg}->{place_text(w.place)}") }
+            "call {who}({operands_text(args)}) back[{text.join(back, ", ")}] -> {place_text(dest)} b{next}"
+        }
+        Term.Return(op) => "return {operand_text(op)}"
+        Term.Panic(msg) => "panic {quote(msg)}"
+        Term.Unreachable => "unreachable"
+    }
+}
+
+// A lowered program as lines of text, in the form `mou lowered` prints it.
+pub fn dump(p: Program) -> [str] {
+    var out: [str] = []
+    if p.errors.len > 0 {
+        for e in p.errors { out.push("error {e.line}:{e.col} {e.msg}") }
+        return out
+    }
+    for i in 0..p.fns.len {
+        let f = p.fns[i]
+        out.push("fn {i} {f.name} params={f.params} locals={f.locals} body={f.body} limits={f.limits} ret={scalar_text(f.ret)} at={f.at.line}:{f.at.col}")
+        var names: [str] = []
+        for l in 0..f.names.len {
+            if let Some(n) = f.names[l] { names.push("{l}={n}") }
+        }
+        out.push("  names {text.join(names, " ")}")
+        out.push("  once {ints_text(f.once)}")
+        var scalars: [str] = []
+        for s in f.scalars { scalars.push(scalar_text(s)) }
+        out.push("  scalars {text.join(scalars, " ")}")
+        var hints: [str] = []
+        for l in 0..f.hints.len {
+            match f.hints[l] {
+                Some(_) => hints.push("{l}={scalar_text(f.hints[l])}")
+                None => {}
+            }
+        }
+        out.push("  hints {text.join(hints, " ")}")
+        var copies: [str] = []
+        for s in f.copies { copies.push("{s.line}:{s.col}") }
+        out.push("  copies {text.join(copies, " ")}")
+        for k in 0..f.blocks.len {
+            let b = f.blocks[k]
+            out.push("  b{k} {b.at.line}:{b.at.col}")
+            for st in b.stmts { out.push("    {place_text(st.place)} = {rvalue_text(st.rv)} @{st.at.line}:{st.at.col}") }
+            out.push("    {term_text(b.term)}")
+        }
+    }
+    out.push("consts {ints_text(p.consts)}")
+    let main = match p.main {
+        Some(m) => "{m}"
+        None => "_"
+    }
+    out.push("main {main}")
+    out.push("tests {ints_text(p.tests)}")
+    for i in 0..p.structs.len {
+        let s = p.structs[i]
+        out.push("struct {i} {s.name} ({text.join(s.fields, ", ")}) record[{ints_text(p.records[i])}] boxed={p.boxed_structs[i]}")
+    }
+    for i in 0..p.enums.len {
+        let e = p.enums[i]
+        out.push("enum {i} {e.name} boxed={p.boxed_enums[i]}")
+        for v in e.variants {
+            var fields: [str] = []
+            for f in v.fields {
+                match f {
+                    Some(n) => fields.push(n)
+                    None => fields.push("_")
+                }
+            }
+            out.push("  variant {v.name} ({text.join(fields, ", ")})")
+        }
+    }
+    out.push("dyn_from {p.dyn_from}")
+    for x in p.externs { out.push("extern {x.name} {x.header} ({text.join(x.params, ", ")}) -> {x.ret}") }
+    out
+}

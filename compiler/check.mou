@@ -294,7 +294,7 @@ fn param_names(generics: [parser.GenParam]) -> [str]? {
 
 // How a function gives its result by reference: `true` for
 // `-> ref mut T`, `false` for `-> ref T`.
-fn ref_kind(f: parser.FnDecl) -> bool? {
+pub fn ref_kind(f: parser.FnDecl) -> bool? {
     match f.ret {
         Some(parser.Type.Ref(reg, mutable, _)) => {
             match reg {
@@ -498,7 +498,7 @@ impl Checker {
 
     // The name the methods of a type are filed under: a generic type has
     // one set for all of its type arguments.
-    fn key(self, t: types.Ty) -> str {
+    pub fn key(self, t: types.Ty) -> str {
         match t {
             types.Ty.Struct(i, _) => self.qualified(self.structs[i].module, self.structs[i].name)
             types.Ty.Enum(i, _) => self.qualified(self.enums[i].module, self.enums[i].name)
@@ -662,7 +662,7 @@ impl Checker {
 
     // ---- methods ----
 
-    fn method_index(self, key: str, name: str) -> int {
+    pub fn method_index(self, key: str, name: str) -> int {
         for k in 0..self.methods.len {
             if self.methods[k].name == name && self.methods[k].key == key { return k as int }
         }
@@ -691,7 +691,7 @@ impl Checker {
     }
 
     // The declaration a method is checked from.
-    fn method_decl(self, m: Method) -> parser.Decl? {
+    pub fn method_decl(self, m: Method) -> parser.Decl? {
         match m.default {
             Some(d) => {
                 match self.decls[d.decl].kind {
@@ -1896,7 +1896,7 @@ impl Checker {
     // The methods a `dyn Trait` value carries, in order: those of the
     // trait and of what it requires that take `self` and name `Self`
     // nowhere else.
-    fn dyn_slots(self, bound: Bound) -> [TraitMethod] {
+    pub fn dyn_slots(self, bound: Bound) -> [TraitMethod] {
         var unit: [types.Binding] = []
         types.define(mut unit, "Self", types.Ty.Unit)
         var slots: [TraitMethod] = []
@@ -3065,14 +3065,14 @@ impl Checker {
 
     // ---- patterns ----
 
-    fn struct_field_tys(self, i: int, args: [types.Ty]) -> [types.Ty] {
+    pub fn struct_field_tys(self, i: int, args: [types.Ty]) -> [types.Ty] {
         let env = types.targ_env(self.structs[i].tparams, args)
         var out: [types.Ty] = []
         for f in self.structs[i].fields { out.push(types.subst(f.ty, env)) }
         out
     }
 
-    fn variant_field_tys(self, i: int, variant: int, args: [types.Ty]) -> [types.Ty] {
+    pub fn variant_field_tys(self, i: int, variant: int, args: [types.Ty]) -> [types.Ty] {
         let env = types.targ_env(self.enums[i].tparams, args)
         var out: [types.Ty] = []
         for f in self.enums[i].variants[variant].fields { out.push(types.subst(f.ty, env)) }
@@ -5620,6 +5620,18 @@ fn res_text(r: Res) -> str {
         Res.Generic(k) => "generic {k}"
         Res.Dyn(k, m) => "dyn {k} {m}"
     }
+}
+
+// The mistakes the checker found, each one once, by line and column.
+pub fn error_lines(c: Checker) -> [str] {
+    var out: [str] = []
+    var last = lexer.Error("", -1, -1)
+    for e in sorted_errors(c.errors) {
+        if e.line == last.line && e.col == last.col && e.msg == last.msg { continue }
+        out.push("error {e.line}:{e.col} {e.msg}")
+        last = e
+    }
+    out
 }
 
 // What the checker found out about each expression, as lines of text,

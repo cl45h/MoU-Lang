@@ -1,0 +1,53 @@
+struct P { x: int, y: f64, ok: bool, c: char }
+struct Node { next: Node?, v: int }
+enum Tree { Leaf, Fork(Tree, Tree), Tip(int) }
+enum Color { Red, Green }
+trait Area { fn area(self) -> f64
+    fn twice(self) -> f64 { self.area() * 2.0 } }
+struct Sq { s: f64, tags: [str] = [], n: int = 3 }
+impl Area for Sq { fn area(self) -> f64 { self.s * self.s } }
+let PI: f64 = 3.14159
+let BIG: int = 1_000_000
+let NAMES: [str] = ["a", "b"]
+
+fn grow(xs: mut [int], n: int = 2) -> ref mut int where n > 0 {
+    xs.push(n)
+    xs[0]
+}
+
+fn sum(t: Tree) -> int {
+    match t {
+        Tree.Leaf => 0
+        Tree.Tip(n) if n > 10 => 10
+        Tree.Tip(n) => n
+        Tree.Fork(a, b) => sum(a) + sum(b)
+    }
+}
+
+fn shapes(all: [dyn Area]) -> f64 {
+    var total = 0.0
+    for s in all { total += s.twice() }
+    defer note(total)
+    total
+}
+
+fn note(x: f64) { }
+
+fn main() -> int {
+    var xs = [1, 2, 3]
+    grow(mut xs) = 7
+    grow(mut xs, 5) += 1
+    let sq = Sq(2.0)
+    let d = sq as dyn Area
+    let (a, z) = (1, 4)
+    let col = Color.Green
+    let t = Tree.Fork(Tree.Tip(1), Tree.Leaf)
+    for i in 0..=3 { if i == 2 { continue } }
+    for ch in "hey" { if ch == 'e' { break } }
+    let first = match xs { [h, ..] => h
+        _ => 0 }
+    let parts = "n={xs.len} pi={PI} {NAMES[0]}"
+    let big = 1e21 + 2.5e-5 + 0.0001 as f64
+    assert(a < z, "ordered {a}")
+    sum(t) + first + BIG
+}

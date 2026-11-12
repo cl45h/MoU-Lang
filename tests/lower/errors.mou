@@ -1,0 +1,21 @@
+@fast
+fn annotated() -> int { 1 }
+
+@noalloc
+@nopanic
+fn limited(a: int) -> int { a }
+
+fn fits() -> int {
+    let a: u8 = 255
+    let b: i8 = 1 + 300
+    let c = 1 +% 2
+    var total = 0
+    let d = comptime total + 1
+    let e = comptime 2 * 21
+    fn inner() -> int { 1 }
+    let f = fn(x: int) -> int { x + total }
+    scope s { total = 1 }
+    f(1) + e
+}
+
+fn main() { }

@@ -1,5 +1,5 @@
 // The compiler of Mou written in Mou. So far: the lexer, the parser, the
-// loader of modules, the functions on types and the check of declarations.
+// loader of modules, the checker and the lowering to the middle form.
 //
 //     mou build compiler/main.mou -o mouc
 //     ./mouc lex file.mou        prints the tokens of the file, as `mou lex` does
@@ -11,6 +11,8 @@
 //                                `mou decls` does
 //     ./mouc types file.mou      prints what the checker finds out about each
 //                                expression, as `mou types` does
+//     ./mouc lowered file.mou    prints the program lowered to its middle
+//                                form, as `mou lowered` does
 //     ./mouc typetest            runs the functions on types over a fixed list,
 //                                as `mou typetest` does
 
@@ -18,6 +20,7 @@ import std.io
 import check
 import lexer
 import load
+import mir
 import parser
 import types
 
@@ -27,14 +30,30 @@ fn main() -> int ! io.Error {
         for line in types.selftest() { io.print(line)? }
         return 0
     }
-    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules" || args[0] == "decls" || args[0] == "types") {
-        io.eprint("usage: mouc lex|tree|modules|decls|types <file.mou>")?
+    if args.len < 2 || !(args[0] == "lex" || args[0] == "tree" || args[0] == "modules" || args[0] == "decls" || args[0] == "types" || args[0] == "lowered") {
+        io.eprint("usage: mouc lex|tree|modules|decls|types|lowered <file.mou>")?
         return 2
     }
     let src = io.read_file(args[1])?
     if args[0] == "modules" {
         let std_dir = if args.len > 2 { args[2] } else { "std" }
         for line in load.dump(load.load(args[1], src, std_dir)) { io.print(line)? }
+        return 0
+    }
+    if args[0] == "lowered" {
+        let std_dir = if args.len > 2 { args[2] } else { "std" }
+        let program = load.load(args[1], src, std_dir)
+        if program.errors.len > 0 {
+            for e in program.errors { io.print("error {e.line}:{e.col} {e.msg}")? }
+            return 0
+        }
+        let checked = check.check(program)
+        let mistakes = check.error_lines(checked)
+        if mistakes.len > 0 {
+            for line in mistakes { io.print(line)? }
+            return 0
+        }
+        for line in mir.dump(mir.lower(program, checked)) { io.print(line)? }
         return 0
     }
     if args[0] == "types" {
