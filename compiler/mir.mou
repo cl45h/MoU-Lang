@@ -140,7 +140,10 @@ pub struct Block { stmts: [Stmt], term: Term, at: check.Span, done: bool }
 // A type the C that is written can keep in a register.
 // `Rec`: a struct whose fields are all booleans, integers of up to 64
 // bits or `f64`: it is kept as a struct of C, by its number.
-pub enum Scalar { Int(str), Bool, F64, Rec(int) }
+// `Opt`: an optional boolean (1), whole number with sign of up to 64 bits
+// (2), `f64` (3) or whole number without sign of up to 64 bits (4): it is
+// kept as whether it is there and the value.
+pub enum Scalar { Int(str), Bool, F64, Rec(int), Opt(int) }
 
 pub struct Func {
     name: str
@@ -250,6 +253,21 @@ fn scalar_of(structs: [check.StructInfo], t: types.Ty) -> Scalar? {
             if k == "f64" { return Some(Scalar.F64) }
             None
         }
+        types.Ty.Optional(inner) => {
+            match inner {
+                types.Ty.Bool => Some(Scalar.Opt(1))
+                types.Ty.Float(k) => {
+                    if k == "f64" { return Some(Scalar.Opt(3)) }
+                    None
+                }
+                types.Ty.Int(k) => {
+                    if text.ends_with(k, "128") { return None }
+                    if text.starts_with(k, "u") { return Some(Scalar.Opt(4)) }
+                    Some(Scalar.Opt(2))
+                }
+                _ => None
+            }
+        }
         types.Ty.Struct(i, args) => {
             if args.len > 0 { return None }
             let s = structs[i]
@@ -269,6 +287,7 @@ fn same_scalar(a: Scalar?, b: Scalar?) -> bool {
         (Some(Scalar.Bool), Some(Scalar.Bool)) => true
         (Some(Scalar.F64), Some(Scalar.F64)) => true
         (Some(Scalar.Rec(x)), Some(Scalar.Rec(y))) => x == y
+        (Some(Scalar.Opt(x)), Some(Scalar.Opt(y))) => x == y
         (None, None) => true
         _ => false
     }
@@ -3344,6 +3363,7 @@ fn scalar_text(s: Scalar?) -> str {
                 Scalar.Bool => "bool"
                 Scalar.F64 => "f64"
                 Scalar.Rec(i) => "rec{i}"
+                Scalar.Opt(k) => "opt{k}"
             }
         }
         None => "_"

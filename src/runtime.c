@@ -1644,6 +1644,25 @@ static kv kstr_c(const char *s, const char *name) {
     return kstr(s, strlen(s));
 }
 
+/* An optional boolean, integer or `f64` that the generated code keeps
+   out of a block: whether it is there, and the value. */
+struct KOB { bool has; bool v; };
+struct KOI { bool has; int64_t v; };
+struct KOF { bool has; double v; };
+struct KOU { bool has; uint64_t v; };
+static struct KOB KOB_get(kv v) { return v.tag == T_SOME ? (struct KOB){true, ITEMS(v.u.o)[0].u.t} : (struct KOB){0}; }
+static struct KOI KOI_get(kv v) { return v.tag == T_SOME ? (struct KOI){true, (int64_t)ITEMS(v.u.o)[0].u.i} : (struct KOI){0}; }
+static struct KOF KOF_get(kv v) { return v.tag == T_SOME ? (struct KOF){true, ITEMS(v.u.o)[0].u.f} : (struct KOF){0}; }
+static struct KOU KOU_get(kv v) { return v.tag == T_SOME ? (struct KOU){true, (uint64_t)ITEMS(v.u.o)[0].u.i} : (struct KOU){0}; }
+static struct KOB KOB_take(kv v) { struct KOB r = KOB_get(v); krelease(v); return r; }
+static struct KOI KOI_take(kv v) { struct KOI r = KOI_get(v); krelease(v); return r; }
+static struct KOF KOF_take(kv v) { struct KOF r = KOF_get(v); krelease(v); return r; }
+static struct KOU KOU_take(kv v) { struct KOU r = KOU_get(v); krelease(v); return r; }
+static kv KOB_box(struct KOB s) { return s.has ? kbox(T_SOME, kbool(s.v)) : KNONE; }
+static kv KOI_box(struct KOI s) { return s.has ? kbox(T_SOME, kint((i128)s.v)) : KNONE; }
+static kv KOF_box(struct KOF s) { return s.has ? kbox(T_SOME, kf64(s.v)) : KNONE; }
+static kv KOU_box(struct KOU s) { return s.has ? kbox(T_SOME, kint((i128)s.v)) : KNONE; }
+
 /* An address a C function gave or takes. It is kept as a number; null is
    no address. */
 static kv kptr_v_opt(const void *p) { return p ? kbox(T_SOME, kint((i128)(uintptr_t)p)) : KNONE; }

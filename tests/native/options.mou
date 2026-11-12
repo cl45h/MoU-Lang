@@ -1,0 +1,30 @@
+import std.io
+fn first_even(xs: [int], from: usize) -> int? {
+    var i = from
+    while i < xs.len {
+        if xs[i] % 2 == 0 { return Some(xs[i]) }
+        i += 1
+    }
+    None
+}
+fn half(x: f64) -> f64? { if x > 1.0 { Some(x / 2.0) } else { None } }
+fn main() ! io.Error {
+    var xs: [int] = []
+    for i in 0..1000 { xs.push(i * 2 + 1) }
+    xs.push(8)
+    var found = 0
+    for i in 0..2000 {
+        match first_even(xs, 990) {
+            Some(v) => { found += v }
+            None => {}
+        }
+        if let Some(h) = half(3.0) { found += 1 }
+        let g = xs.get(5)
+        if g != None { found += 1 }
+        let d = match xs.get(5000) { Some(q) => q, None => 2 }
+        found += d
+    }
+    var last: int? = None
+    last = xs.pop()
+    io.print("{found} {last} {half(0.5)} {half(8.0)}")?
+}

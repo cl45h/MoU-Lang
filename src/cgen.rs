@@ -134,7 +134,7 @@ fn operand(cx: &Cx, op: &Operand) -> Result<String, String> {
     match op {
         Operand::Const(v) => constant(v),
         Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] != Rep::Boxed => Ok(cx.boxed(p.local)),
-        Operand::Place(p) if rec_field(&cx.reps, p).is_some() => Ok(tagged(cx.rep(p), &cx.name(p))),
+        Operand::Place(p) if part(&cx.reps, cx.recs, p).is_some() => Ok(tagged(cx.rep(p), &cx.name(p))),
         Operand::Place(p) if p.proj.is_empty() => Ok(format!("kretain(L[{}])", p.local)),
         Operand::Place(p) => {
             if let Some((base, i)) = cx.item(p, false)? {
@@ -287,8 +287,51 @@ enum Rep {
     F64,
     /// A struct of plain fields, kept as a struct of C: its number.
     Rec(usize),
+    /// An optional number or boolean, kept as whether it is there and the
+    /// value: 1 a boolean, 2 an integer with sign, 3 an `f64`, 4 an
+    /// integer without sign.
+    Opt(u8),
     /// A tagged value, in `L`.
     Boxed,
+}
+
+/// The name of the struct of C a value is kept as, when it is kept as one.
+fn agg(r: Rep) -> Option<String> {
+    match r {
+        Rep::Rec(i) => Some(format!("KS{i}")),
+        Rep::Opt(k) => Some(format!("KO{}", ['B', 'I', 'F', 'U'][(k as usize - 1).min(3)])),
+        _ => None,
+    }
+}
+
+/// How what an optional holds is stored.
+fn opt_inner(k: u8) -> Rep {
+    match k {
+        1 => Rep::Bool,
+        3 => Rep::F64,
+        4 => Rep::Int("u64"),
+        _ => Rep::Int("i64"),
+    }
+}
+
+/// The kind of optional that holds a value stored that way.
+fn opt_of(r: Rep) -> Option<u8> {
+    match r {
+        Rep::Bool => Some(1),
+        Rep::F64 => Some(3),
+        Rep::Int(k) => Some(if k.starts_with('u') { 4 } else { 2 }),
+        _ => None,
+    }
+}
+
+/// How a part of a local kept as a struct of C is stored: a field of a
+/// struct, or what an optional holds.
+fn part(reps: &[Rep], recs: &[Vec<u8>], p: &Place) -> Option<Rep> {
+    match (reps[p.local], p.proj.as_slice()) {
+        (Rep::Rec(i), [Proj::Field(k)]) => Some(field_rep(recs[i][*k])),
+        (Rep::Opt(k), [Proj::Field(0)]) => Some(opt_inner(k)),
+        _ => None,
+    }
 }
 
 /// How a field of a struct kept as a struct of C is stored, by the kind
@@ -298,15 +341,6 @@ fn field_rep(kind: u8) -> Rep {
         1 => Rep::Bool,
         3 => Rep::F64,
         _ => Rep::Int("i64"),
-    }
-}
-
-/// The struct a place is a field of and the number of the field, when the
-/// struct is kept as a struct of C.
-fn rec_field(reps: &[Rep], p: &Place) -> Option<(usize, usize)> {
-    match (reps[p.local], p.proj.as_slice()) {
-        (Rep::Rec(i), [Proj::Field(k)]) => Some((i, *k)),
-        _ => None,
     }
 }
 
@@ -440,7 +474,7 @@ fn rep_type(r: Rep) -> String {
         Rep::Int(k) => ctype(k).to_string(),
         Rep::F64 => "double".to_string(),
         Rep::Boxed => "kv".to_string(),
-        Rep::Rec(i) => format!("struct KS{i}"),
+        Rep::Rec(_) | Rep::Opt(_) => format!("struct {}", agg(r).unwrap_or_default()),
         _ => "bool".to_string(),
     }
 }
@@ -451,7 +485,7 @@ fn tagged(r: Rep, value: &str) -> String {
         Rep::Int(_) => format!("kint((i128)({value}))"),
         Rep::F64 => format!("kf64({value})"),
         Rep::Boxed => value.to_string(),
-        Rep::Rec(i) => format!("KS{i}_box({value})"),
+        Rep::Rec(_) | Rep::Opt(_) => format!("{}_box({value})", agg(r).unwrap_or_default()),
         _ => format!("kbool({value})"),
     }
 }
@@ -525,6 +559,7 @@ fn scalar_rep(s: Option<Scalar>) -> Rep {
         Some(Scalar::Bool) => Rep::Bool,
         Some(Scalar::F64) => Rep::F64,
         Some(Scalar::Rec(i)) => Rep::Rec(i),
+        Some(Scalar::Opt(k)) => Rep::Opt(k),
         _ => Rep::Boxed,
     }
 }
@@ -557,9 +592,12 @@ fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
         Rvalue::Binary(op, Num::F64, _, _) if !is_cmp(*op) => F64,
         Rvalue::Unary(UnOp::Neg, Num::F64, _) | Rvalue::CastFloat(_, false) | Rvalue::Convert(_, Conv::ToFloat(false)) => F64,
         Rvalue::Use(Operand::Place(p)) if p.proj.is_empty() => reps[p.local],
-        Rvalue::Use(Operand::Place(p)) if rec_field(reps, p).is_some() => match rec_field(reps, p) {
-            Some((i, k)) => field_rep(recs[i][k]),
-            None => Boxed,
+        Rvalue::Use(Operand::Place(p)) if part(reps, recs, p).is_some() => part(reps, recs, p).unwrap_or(Boxed),
+        // `None` fits any optional; `Some` of a number is kept with it.
+        Rvalue::Use(Operand::Const(Value::None)) => Top,
+        Rvalue::Some(Operand::Place(p)) if p.proj.is_empty() => match reps[p.local] {
+            Top | AnyInt => Top,
+            r => opt_of(r).map_or(Boxed, Opt),
         },
         // A struct of plain fields is made in place, without a block.
         Rvalue::Struct(i, ops) if !recs[*i].is_empty() && !recs[*i].contains(&4) && recs[*i].len() == ops.len() => Rec(*i),
@@ -597,8 +635,9 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
         }
     }
     fn through(p: &Place, reps: &mut [Rep]) {
-        // A field of a struct of C is read and written where it is.
-        if !p.proj.is_empty() && rec_field(reps, p).is_none() {
+        // A part of a struct of C is read and written where it is.
+        let whole = matches!((reps[p.local], p.proj.as_slice()), (Rep::Rec(_), [Proj::Field(_)]) | (Rep::Opt(_), [Proj::Field(0)]));
+        if !p.proj.is_empty() && !whole {
             reps[p.local] = Rep::Boxed;
         }
         for pr in &p.proj {
@@ -625,7 +664,7 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
                 for (_, place) in writeback {
                     // A whole struct of C goes to the call as a block
                     // made for it, and is read back from what the call leaves.
-                    if !(place.proj.is_empty() && matches!(reps[place.local], Rep::Rec(_))) {
+                    if !(place.proj.is_empty() && matches!(reps[place.local], Rep::Rec(_) | Rep::Opt(_))) {
                         reps[place.local] = Rep::Boxed;
                     }
                 }
@@ -638,7 +677,7 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
     // caller and never handed back: one that is written to stays tagged.
     for b in &f.blocks {
         let mut written = |l: usize| {
-            if l < f.params && matches!(reps[l], Rep::Rec(_)) {
+            if l < f.params && matches!(reps[l], Rep::Rec(_) | Rep::Opt(_)) {
                 reps[l] = Rep::Boxed;
             }
         };
@@ -704,17 +743,15 @@ impl Cx<'_> {
         if p.proj.is_empty() {
             return self.reps[p.local];
         }
-        match rec_field(&self.reps, p) {
-            Some((i, k)) => field_rep(self.recs[i][k]),
-            None => Rep::Boxed,
-        }
+        part(&self.reps, self.recs, p).unwrap_or(Rep::Boxed)
     }
 
     /// The C name of a place that holds a machine value: a local, or a
     /// field of a struct of C.
     fn name(&self, p: &Place) -> String {
-        match p.proj.as_slice() {
-            [Proj::Field(k)] => format!("s{}.f{k}", p.local),
+        match (self.reps[p.local], p.proj.as_slice()) {
+            (Rep::Opt(_), [Proj::Field(_)]) => format!("s{}.v", p.local),
+            (_, [Proj::Field(k)]) => format!("s{}.f{k}", p.local),
             _ => format!("s{}", p.local),
         }
     }
@@ -960,6 +997,10 @@ impl Cx<'_> {
             Rvalue::Use(a) => self.truth(a)?,
             Rvalue::Uninit | Rvalue::Moved => "0".into(),
             Rvalue::Unary(UnOp::Not, _, a) => format!("!{}", self.truth(a)?),
+            // Whether an optional kept as a struct of C holds a value.
+            Rvalue::Is(Operand::Place(p), tag) if matches!(self.rep(p), Rep::Opt(_)) => {
+                format!("({}s{}.has)", if *tag == 1 { "" } else { "!" }, p.local)
+            }
             // A character against one that is written out: the common
             // case of reading text, done without the general comparison.
             Rvalue::Binary(op, _, Operand::Place(p), Operand::Const(Value::Char(c)))
@@ -1020,6 +1061,16 @@ impl Cx<'_> {
             Rep::Int(k) => Ok(format!("{} = {};", self.name(place), self.int_rvalue(rv, k)?)),
             Rep::Bool => Ok(format!("{} = {};", self.name(place), self.bool_rvalue(rv)?)),
             Rep::F64 => Ok(format!("{} = {};", self.name(place), self.f64_rvalue(rv)?)),
+            Rep::Opt(k) => {
+                let l = place.local;
+                let name = agg(Rep::Opt(k)).unwrap_or_default();
+                match rv {
+                    Rvalue::Some(op) => Ok(format!("s{l} = (struct {name}){{true, {}}};", self.machine(opt_inner(k), op)?)),
+                    Rvalue::Use(Operand::Const(Value::None)) | Rvalue::Uninit | Rvalue::Moved => Ok(format!("s{l} = (struct {name}){{0}};")),
+                    Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Opt(k) => Ok(format!("s{l} = s{};", q.local)),
+                    _ => Ok(format!("s{l} = {name}_take({});", rvalue(self, rv)?)),
+                }
+            }
             Rep::Rec(i) => {
                 let l = place.local;
                 match rv {
@@ -1070,7 +1121,7 @@ impl Cx<'_> {
             Rep::Int(k) => Ok(format!("{} = ({})({value}).u.i;", self.name(place), ctype(k))),
             Rep::Bool => Ok(format!("{} = ktruth({value});", self.name(place))),
             Rep::F64 => Ok(format!("{} = ({value}).u.f;", self.name(place))),
-            Rep::Rec(i) => Ok(format!("s{} = KS{i}_take({value});", place.local)),
+            r @ (Rep::Rec(_) | Rep::Opt(_)) => Ok(format!("s{} = {}_take({value});", place.local, agg(r).unwrap_or_default())),
             _ => store(self, place, value),
         }
     }
@@ -1080,9 +1131,10 @@ impl Cx<'_> {
         match r {
             Rep::Int(k) => Ok(format!("({})({})", ctype(k), self.int(op)?)),
             Rep::F64 => self.float(op),
-            Rep::Rec(i) => match op {
+            Rep::Rec(_) | Rep::Opt(_) => match op {
                 Operand::Place(p) if self.rep(p) == r => Ok(format!("s{}", p.local)),
-                _ => Ok(format!("KS{i}_take({})", operand(self, op)?)),
+                Operand::Const(Value::None) => Ok(format!("(struct {}){{0}}", agg(r).unwrap_or_default())),
+                _ => Ok(format!("{}_take({})", agg(r).unwrap_or_default(), operand(self, op)?)),
             },
             _ => self.truth(op),
         }
@@ -1093,7 +1145,7 @@ impl Cx<'_> {
         match (self.rep(place), r) {
             (Rep::Int(k), Rep::Int(_)) => Ok(format!("{} = ({})({value});", self.name(place), ctype(k))),
             (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) => Ok(format!("{} = {value};", self.name(place))),
-            (Rep::Rec(i), Rep::Rec(j)) if i == j => Ok(format!("s{} = {value};", place.local)),
+            (Rep::Rec(_) | Rep::Opt(_), got) if got == self.rep(place) => Ok(format!("s{} = {value};", place.local)),
             _ => self.take(place, &tagged(r, value)),
         }
     }
@@ -1104,7 +1156,7 @@ impl Cx<'_> {
             Rep::Int(_) => format!("kint((i128)s{l})"),
             Rep::Bool => format!("kbool(s{l})"),
             Rep::F64 => format!("kf64(s{l})"),
-            Rep::Rec(i) => format!("KS{i}_box(s{l})"),
+            r @ (Rep::Rec(_) | Rep::Opt(_)) => format!("{}_box(s{l})", agg(r).unwrap_or_default()),
             _ => format!("L[{l}]"),
         }
     }
@@ -1137,8 +1189,14 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
             Rep::F64 if l < f.params => writeln!(out, "    double s{l} = a[{l}].u.f;").unwrap(),
             Rep::F64 => writeln!(out, "    double s{l} = 0;").unwrap(),
             // The caller keeps the block the argument came in.
-            Rep::Rec(r) if l < f.params => writeln!(out, "    struct KS{r} s{l} = KS{r}_get(a[{l}]);").unwrap(),
-            Rep::Rec(r) => writeln!(out, "    struct KS{r} s{l} = {{0}};").unwrap(),
+            r @ (Rep::Rec(_) | Rep::Opt(_)) => {
+                let name = agg(*r).unwrap_or_default();
+                if l < f.params {
+                    writeln!(out, "    struct {name} s{l} = {name}_get(a[{l}]);").unwrap();
+                } else {
+                    writeln!(out, "    struct {name} s{l} = {{0}};").unwrap();
+                }
+            }
             _ => {}
         }
     }
@@ -1332,7 +1390,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     if l < f.params && mine.is_some() {
                         continue;
                     }
-                    if l < f.params && matches!(cx.reps[l], Rep::Rec(_)) {
+                    if l < f.params && matches!(cx.reps[l], Rep::Rec(_) | Rep::Opt(_)) {
                         // It was read from the block of the caller, which is still there.
                     } else if l < f.params {
                         writeln!(out, "        a[{l}] = {};", cx.boxed(l)).unwrap();
@@ -1351,7 +1409,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
         Some((params, ret)) => {
             let nothing = match ret {
                 Rep::Boxed => "KUNIT".to_string(),
-                Rep::Rec(r) => format!("(struct KS{r}){{0}}"),
+                Rep::Rec(_) | Rep::Opt(_) => format!("(struct {}){{0}}", agg(*ret).unwrap_or_default()),
                 _ => "0".to_string(),
             };
             writeln!(out, "    return {nothing};").unwrap();
@@ -1364,7 +1422,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
                     Rep::F64 => format!("a[{l}].u.f"),
                     Rep::Boxed => format!("a[{l}]"),
-                    Rep::Rec(r) => format!("KS{r}_get(a[{l}])"),
+                    Rep::Rec(_) | Rep::Opt(_) => format!("{}_get(a[{l}])", agg(*r).unwrap_or_default()),
                     _ => format!("a[{l}].u.t"),
                 })
                 .collect();
