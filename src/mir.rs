@@ -349,6 +349,32 @@ pub enum Scalar {
     Opt(u8),
 }
 
+/// A tuple of two or three plain fields is kept as a struct of C too: its
+/// number is this one plus its shape, the kind of each field (1 a
+/// boolean, 2 an integer, 3 an `f64`, 5 an integer without sign of 64
+/// bits) as the digits of a number in base 6.
+pub const TUPLE_BASE: usize = 1_000_000;
+
+/// The kinds of the fields of such a tuple, by its number.
+pub fn tuple_kinds(i: usize) -> Vec<u8> {
+    let mut code = i.saturating_sub(TUPLE_BASE);
+    let mut kinds = Vec::new();
+    while code > 0 {
+        kinds.push((code % 6) as u8);
+        code /= 6;
+    }
+    kinds
+}
+
+fn field_kind(t: &Ty) -> usize {
+    match t {
+        Ty::Bool => 1,
+        Ty::Float(_) => 3,
+        Ty::Int("u64" | "usize") => 5,
+        _ => 2,
+    }
+}
+
 /// Whether a field of that type can be a member of a struct of C.
 fn plain_field(t: &Ty) -> bool {
     matches!(t, Ty::Bool | Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize") | Ty::Float("f64"))
@@ -365,6 +391,10 @@ fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
             Ty::Int(k) if !k.ends_with("128") => Some(Scalar::Opt(if k.starts_with('u') { 4 } else { 2 })),
             _ => None,
         },
+        Ty::Tuple(ts) if (2..=3).contains(&ts.len()) && ts.iter().all(plain_field) => {
+            let code = ts.iter().rev().fold(0, |code, t| code * 6 + field_kind(t));
+            Some(Scalar::Rec(TUPLE_BASE + code))
+        }
         Ty::Struct(i, args) if args.is_empty() => {
             let s = &info.structs[*i];
             let plain = !s.fields.is_empty() && s.tparams.is_empty() && !s.generic && s.fields.iter().all(|f| plain_field(&f.ty));
@@ -1976,7 +2006,8 @@ impl<'a> Lower<'a> {
             ExprKind::Tuple(items) if items.is_empty() => unit,
             ExprKind::Tuple(items) => {
                 let ops = items.iter().map(|i| self.expr(i)).collect();
-                self.tmp(Rvalue::Tuple(ops))
+                let made = self.tmp(Rvalue::Tuple(ops));
+                self.typed(e, made)
             }
             ExprKind::Array(items) => {
                 let elem = match self.ty(e) {

@@ -339,10 +339,16 @@ fn opt_of(r: Rep) -> Option<u8> {
 /// struct, or what an optional holds.
 fn part(reps: &[Rep], recs: &[Vec<u8>], p: &Place) -> Option<Rep> {
     match (reps[p.local], p.proj.as_slice()) {
-        (Rep::Rec(i), [Proj::Field(k)]) => Some(field_rep(recs[i][*k])),
+        (Rep::Rec(i), [Proj::Field(k)]) => Some(field_rep(kinds_of(recs, i)[*k])),
         (Rep::Opt(k), [Proj::Field(0)]) => Some(opt_inner(k)),
         _ => None,
     }
+}
+
+/// The kinds of the fields of what is kept as a struct of C: a struct of
+/// the program, or a tuple.
+fn kinds_of(recs: &[Vec<u8>], i: usize) -> Vec<u8> {
+    if i >= TUPLE_BASE { tuple_kinds(i) } else { recs[i].clone() }
 }
 
 /// How a field of a struct kept as a struct of C is stored, by the kind
@@ -1114,6 +1120,13 @@ impl Cx<'_> {
                         }
                         Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
                     }
+                    Rvalue::Tuple(ops) if i >= TUPLE_BASE && ops.len() == tuple_kinds(i).len() => {
+                        let mut parts = Vec::new();
+                        for (op, kind) in ops.iter().zip(&tuple_kinds(i)) {
+                            parts.push(self.machine(field_rep(*kind), op)?);
+                        }
+                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                    }
                     Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Rec(i) => Ok(format!("s{l} = s{};", q.local)),
                     Rvalue::Uninit | Rvalue::Moved => Ok(format!("s{l} = (struct KS{i}){{0}};")),
                     _ => Ok(format!("s{l} = KS{i}_take({});", rvalue(self, rv)?)),
@@ -1580,7 +1593,23 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     writeln!(out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}\n").unwrap();
     // The structs kept as structs of C: how each is read from a tagged
     // value and made into one.
-    for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| !k.is_empty() && !k.contains(&4)) {
+    let mut kept: Vec<(usize, Vec<u8>)> = p.records.iter().cloned().enumerate().filter(|(_, k)| !k.is_empty() && !k.contains(&4)).collect();
+    // And the tuples kept that way, by their number.
+    let mut tuples: Vec<usize> = Vec::new();
+    for f in &p.fns {
+        for s in f.scalars.iter().chain(&f.hints).chain(std::iter::once(&f.ret)) {
+            if let Some(Scalar::Rec(i)) = s {
+                if *i >= TUPLE_BASE && !tuples.contains(i) {
+                    tuples.push(*i);
+                }
+            }
+        }
+    }
+    tuples.sort();
+    kept.extend(tuples.into_iter().map(|i| (i, tuple_kinds(i))));
+    for (i, kinds) in &kept {
+        let (i, tag) = (*i, if *i >= TUPLE_BASE { "T_TUPLE".to_string() } else { "T_STRUCT".to_string() });
+        let shown = if i >= TUPLE_BASE { 0 } else { i };
         let member = |k: &u8| rep_type(field_rep(*k));
         let fields: Vec<String> = kinds.iter().enumerate().map(|(f, k)| format!("{} f{f};", member(k))).collect();
         writeln!(out, "struct KS{i} {{ {} }};", fields.join(" ")).unwrap();
@@ -1597,7 +1626,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "static struct KS{i} KS{i}_get(kv v) {{ const kv *it = ITEMS(v.u.o); return (struct KS{i}){{{}}}; }}", read.join(", ")).unwrap();
         writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
         let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
-        writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+        writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
     }
     // The functions C is given to call: each as a function of C that
     // makes tagged values of what it gets and calls the one of the program.

@@ -1,0 +1,25 @@
+import std.io
+
+fn divmod(a: int, b: int) -> (int, int) { (a / b, a % b) }
+fn polar(x: f64, y: f64) -> (f64, f64, bool) { (x * x + y * y, x - y, x > y) }
+fn swap(p: (int, int)) -> (int, int) { (p.1, p.0) }
+fn big(n: u64) -> (u64, i8) { (n, 0 - 3) }
+fn mixed(n: int) -> (int, str) { (n, "x") }
+fn bump(p: mut (int, int)) { p.0 = p.0 + 10 }
+
+fn main() ! io.Error {
+    var sum = 0
+    for i in 1..200000 {
+        let (q, r) = divmod(i, 7)
+        sum = sum +% q +% r
+    }
+    let (m, d, up) = polar(3.0, 2.0)
+    let s = swap((1, 2))
+    var t = (5, 6)
+    t.0 = t.0 * 2
+    bump(mut t)
+    let pairs = [divmod(9, 4), s, t]
+    let b = big(18446744073709551615)
+    let (n, x) = mixed(4)
+    io.print("{sum} {m} {d} {up} {s.0} {s.1} {t.0} {t.1} {pairs[0].1} {pairs.len} {b.0} {b.1} {n}{x} {s == (2, 1)} {t}")?
+}

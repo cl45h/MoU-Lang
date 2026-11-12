@@ -491,12 +491,19 @@ fn is_part(reps: [Rep], p: mir.Place) -> bool {
     }
 }
 
+// The kinds of the fields of what is kept as a struct of C: a struct of
+// the program, or a tuple.
+fn kinds_of(recs: [[int]], i: int) -> [int] {
+    if i >= mir.TUPLE_BASE { return mir.tuple_kinds(i) }
+    recs[i]
+}
+
 // How such a part is stored.
 fn part(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep {
     match p.proj[0] {
         mir.Proj.Field(k) => {
             let i = rec_of(reps[p.local])
-            if i >= 0 { return field_rep(recs[i][k]) }
+            if i >= 0 { return field_rep(kinds_of(recs, i)[k]) }
             opt_inner(opt_kind(reps[p.local]))
         }
         _ => Rep.Boxed
@@ -1806,6 +1813,16 @@ impl Cx {
                             _ => {}
                         }
                     }
+                    mir.Rvalue.Tuple(ops) => {
+                        if i >= mir.TUPLE_BASE {
+                            let kinds = mir.tuple_kinds(i)
+                            if ops.len == kinds.len {
+                                var parts: [str] = []
+                                for k in 0..ops.len { parts.push(self.machine(field_rep(kinds[k]), ops[k])?) }
+                                return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
+                            }
+                        }
+                    }
                     mir.Rvalue.Uninit => return "s{l} = (struct KS{i}){{0}};"
                     mir.Rvalue.Moved => return "s{l} = (struct KS{i}){{0}};"
                     _ => {}
@@ -2524,9 +2541,48 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
     line(mut out, "")
     // The structs kept as structs of C: how each is read from a tagged
     // value and made into one.
+    var kept: [int] = []
     for i in 0..(p.records.len as int) {
-        if !rec_ok(p.records, i) { continue }
-        let kinds = p.records[i]
+        if rec_ok(p.records, i) { kept.push(i) }
+    }
+    // And the tuples kept that way, by their number.
+    var tuples: [int] = []
+    for f in p.fns {
+        var all: [mir.Scalar?] = []
+        for s in f.scalars { all.push(s) }
+        for s in f.hints { all.push(s) }
+        all.push(f.ret)
+        for s in all {
+            match s {
+                Some(mir.Scalar.Rec(i)) => {
+                    var seen = i < mir.TUPLE_BASE
+                    for t in tuples {
+                        if t == i { seen = true }
+                    }
+                    if !seen { tuples.push(i) }
+                }
+                _ => {}
+            }
+        }
+    }
+    for a in 1..tuples.len {
+        var k = a
+        while k > 0 && tuples[k] < tuples[k - 1] {
+            let moved = tuples[k]
+            tuples[k] = tuples[k - 1]
+            tuples[k - 1] = moved
+            k -= 1
+        }
+    }
+    for t in tuples { kept.push(t) }
+    for i in kept {
+        let kinds = kinds_of(p.records, i)
+        var tag = "T_STRUCT"
+        var shown = i
+        if i >= mir.TUPLE_BASE {
+            tag = "T_TUPLE"
+            shown = 0
+        }
         var fields: [str] = []
         var read: [str] = []
         var made: [str] = []
@@ -2543,7 +2599,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "struct KS{i} {{ {text.join(fields, " ")} }};")
         line(mut out, "static struct KS{i} KS{i}_get(kv v) {{ const kv *it = ITEMS(v.u.o); return (struct KS{i}){{{text.join(read, ", ")}}}; }}")
         line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
-        line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
+        line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
     }
     c_callbacks(mut out, p)
     c_structs(mut out, p)

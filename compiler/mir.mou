@@ -243,6 +243,34 @@ fn is_bin_op(op: str) -> bool {
     false
 }
 
+// A tuple of two or three plain fields is kept as a struct of C too: its
+// number is this one plus its shape, the kind of each field (1 a
+// boolean, 2 an integer, 3 an `f64`, 5 an integer without sign of 64
+// bits) as the digits of a number in base 6.
+pub let TUPLE_BASE: int = 1000000
+
+// The kinds of the fields of such a tuple, by its number.
+pub fn tuple_kinds(i: int) -> [int] {
+    var code = i - TUPLE_BASE
+    var kinds: [int] = []
+    while code > 0 {
+        kinds.push(code % 6)
+        code = code / 6
+    }
+    kinds
+}
+
+fn field_kind(t: types.Ty) -> int {
+    match t {
+        types.Ty.Bool => 1
+        types.Ty.Float(_) => 3
+        types.Ty.Int(k) => {
+            if k == "u64" || k == "usize" { 5 } else { 2 }
+        }
+        _ => 2
+    }
+}
+
 // Whether a field of that type can be a member of a struct of C.
 fn plain_field(t: types.Ty) -> bool {
     match t {
@@ -275,6 +303,17 @@ fn scalar_of(structs: [check.StructInfo], t: types.Ty) -> Scalar? {
                 }
                 _ => None
             }
+        }
+        types.Ty.Tuple(ts) => {
+            if ts.len < 2 || ts.len > 3 { return None }
+            var code = 0
+            var k = ts.len as int - 1
+            while k >= 0 {
+                if !plain_field(ts[k]) { return None }
+                code = code * 6 + field_kind(ts[k])
+                k -= 1
+            }
+            Some(Scalar.Rec(TUPLE_BASE + code))
         }
         types.Ty.Struct(i, args) => {
             if args.len > 0 { return None }
@@ -2241,7 +2280,8 @@ impl Lower {
                 if items.len == 0 { return unit() }
                 var ops: [Operand] = []
                 for i in items { ops.push(self.expr(i)) }
-                self.tmp(Rvalue.Tuple(ops))
+                let made = self.tmp(Rvalue.Tuple(ops))
+                self.typed(e, made)
             }
             parser.Kind.Array(items) => {
                 var elem = types.Ty.Unknown

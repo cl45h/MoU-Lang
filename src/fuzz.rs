@@ -199,7 +199,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, depth: usize) {
-        match self.rng.below(21) {
+        match self.rng.below(22) {
             0..=2 => {
                 let kind = KINDS[self.rng.below(KINDS.len())];
                 let name = self.fresh("v");
@@ -386,6 +386,18 @@ impl Gen {
                 self.line(&format!("var {name}: f64 = {p}.x * {p}.y"));
                 self.vars.push((name, "f64", true));
             }
+            20 => {
+                // A tuple: from a function, taken apart, changed and passed on.
+                let (a, b) = (self.int("int", 2), self.int("int", 2));
+                let (q, r, t) = (self.fresh("q"), self.fresh("r"), self.fresh("t"));
+                self.line(&format!("let ({q}, {r}) = pair({a}, {b})"));
+                self.line(&format!("var {t} = turned(({q}, {r}))"));
+                self.line(&format!("{t}.0 = {t}.0 +% {r}"));
+                let v = self.fresh("v");
+                self.line(&format!("let {v}: int = {t}.0 ^ {t}.1"));
+                self.vars.push((q, "int", false));
+                self.vars.push((v, "int", false));
+            }
             19 => {
                 // A struct given to a function, to read and to change.
                 let name = self.fresh("p");
@@ -458,6 +470,8 @@ impl Gen {
         g.line("    if s.c { s.b = s.b +% 1 }");
         g.line("}");
         g.line("fn regrow(s: mut S, n: int) { grow(mut s, n +% 1) }");
+        g.line("fn pair(a: int, b: int) -> (int, int) { (a +% b, a ^ b) }");
+        g.line("fn turned(p: (int, int)) -> (int, int) { (p.1, p.0 +% 1) }");
         g.line("");
         let fns = 2 + g.rng.below(5);
         for _ in 0..fns {
