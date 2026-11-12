@@ -224,6 +224,116 @@ fn rest(t: str, n: int) -> str {
     text.from_chars(out)
 }
 
+// The function an argument names, for C to call.
+fn callback_fn(a: mir.Operand) -> int ! Fail {
+    match a {
+        mir.Operand.Const(v) => {
+            match v {
+                mir.Value.Fn(f) => f
+                _ => return Fail("the C backend needs a callback to be the name of a function")
+            }
+        }
+        _ => return Fail("the C backend needs a callback to be the name of a function")
+    }
+}
+
+struct Callback { func: int, sig: str }
+
+fn cb_type(t: str) -> str {
+    if t == "unit" { return "void" }
+    if t == "bool" { return "bool" }
+    if t == "ptr" || t == "ptr?" { return "void *" }
+    buf_type(t)
+}
+
+// The functions C is given to call: each as a function of C that makes
+// tagged values of what it gets and calls the one of the program.
+fn c_callbacks(out: mut [str], p: mir.Program) {
+    var found: [Callback] = []
+    for f in p.fns {
+        for b in f.blocks {
+            match b.term {
+                mir.Term.Call(callee, args, _, _, _) => {
+                    match callee {
+                        mir.Callee.Extern(x) => {
+                            let params = p.externs[x].params
+                            for k in 0..(args.len as int) {
+                                if k >= (params.len as int) { break }
+                                if !text.starts_with(params[k], "cb ") { continue }
+                                let g = callback_fn(args[k]) catch e { continue }
+                                var seen = false
+                                for c in found {
+                                    if c.func == g { seen = true }
+                                }
+                                if !seen { found.push(Callback(g, rest(params[k], 3))) }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // By the number of the function.
+    for i in 1..found.len {
+        var k = i
+        while k > 0 && found[k].func < found[k - 1].func {
+            let moved = found[k]
+            found[k] = found[k - 1]
+            found[k - 1] = moved
+            k -= 1
+        }
+    }
+    for c in found {
+        let halves = text.split(c.sig, '>')
+        var ret = "unit"
+        if halves.len > 1 { ret = halves[1] }
+        var params: [str] = []
+        for t in text.split(halves[0], ',') {
+            if t != "" { params.push(t) }
+        }
+        var takes: [str] = []
+        var given: [str] = []
+        for k in 0..(params.len as int) {
+            let t = params[k]
+            takes.push("{cb_type(t)} a{k}")
+            var made = "kint((i128)(a{k}))"
+            if t == "bool" { made = "kbool(a{k})" }
+            if t == "f64" { made = "kf64(a{k})" }
+            if t == "f32" { made = "kf32(a{k})" }
+            if t == "ptr?" { made = "kptr_v_opt(a{k})" }
+            given.push(made)
+        }
+        var head = "void"
+        if takes.len > 0 { head = text.join(takes, ", ") }
+        var items = "KUNIT"
+        var count = 1
+        if given.len > 0 {
+            items = text.join(given, ", ")
+            count = given.len as int
+        }
+        line(mut out, "static {cb_type(ret)} KCB{c.func}({head}) {{")
+        line(mut out, "    kv A[{count}] = {{{items}}};")
+        line(mut out, "    kv r = f{c.func}(A, KUNIT);")
+        for k in 0..(params.len as int) { line(mut out, "    krelease(A[{k}]);") }
+        if ret == "unit" {
+            line(mut out, "    krelease(r);")
+        } else {
+            var value = "({c_int(ret)})r.u.i"
+            if ret == "bool" { value = "r.u.t" }
+            if ret == "f64" { value = "r.u.f" }
+            if ret == "f32" { value = "r.u.g" }
+            if ret == "ptr" { value = "(void *)(uintptr_t)r.u.i" }
+            if ret == "ptr?" { value = "kptr_c_opt(r)" }
+            line(mut out, "    {cb_type(ret)} out = {value};")
+            line(mut out, "    krelease(r);")
+            line(mut out, "    return out;")
+        }
+        line(mut out, "}}")
+    }
+}
+
 // What makes each struct of C from a tagged value and back, member by member.
 fn c_structs(out: mut [str], p: mir.Program) {
     for cs in p.cstructs {
@@ -2036,6 +2146,10 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                 held.push(k)
                                 continue
                             }
+                            if text.starts_with(t, "cb ") {
+                                parts.push("KCB{callback_fn(args[k])?}")
+                                continue
+                            }
                             if text.starts_with(t, "struct ") {
                                 line(mut out, "        kv e{k} = {v};")
                                 parts.push("KX{rest(t, 7)}_get(e{k})")
@@ -2431,6 +2545,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
         line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
     }
+    c_callbacks(mut out, p)
     c_structs(mut out, p)
     var direct: [Direct?] = []
     for f in p.fns { direct.push(direct_sig(f, p.fns, p.records)) }

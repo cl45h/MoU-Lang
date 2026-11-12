@@ -872,6 +872,12 @@ impl Walk<'_> {
                         let name = &self.p.externs[*x].name;
                         // What it does is up to who wrote the `unsafe` around it.
                         notes.push((UNSAFE, format!("the C function `{name}` is called here")));
+                        // What C calls back counts as called here.
+                        for a in args {
+                            if let (Operand::Const(Value::Fn(f)), Some(found)) = (a, &mut found) {
+                                found.calls.push((block.span, *f));
+                            }
+                        }
                     }
                     Callee::Print => notes.push((IO, "`io.print` writes to the output".into())),
                     Callee::Native(name) => {

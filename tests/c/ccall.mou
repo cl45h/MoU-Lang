@@ -1,0 +1,25 @@
+@profile(system)
+
+import c "stdlib.h" as lib { fn atexit(f: fn()) -> i32 }
+import c "signal.h" as sig {
+    fn signal(n: i32, handler: fn(i32)) -> ptr?
+    fn raise(n: i32) -> i32
+}
+import c "stdio.h" as io {
+    fn puts(s: str) -> i32
+    fn printf(fmt: str, n: i32) -> i32
+}
+
+fn bye() { unsafe { io.puts("bye") } }
+
+fn caught(n: i32) { unsafe { io.printf("signal %d\n", n) } }
+
+pub fn at_end() -> bool { unsafe { lib.atexit(bye) } == 0 }
+
+// Sets the handler and sends the signal to this program.
+pub fn poke(n: i32) -> i32 {
+    unsafe {
+        sig.signal(n, caught)
+        sig.raise(n)
+    }
+}

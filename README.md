@@ -45,7 +45,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Entrada y salida sin bloquear (tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.
 - Parámetros `comptime`, tipos como valores y reflexión.
-- Callbacks en las llamadas a C (números, `bool`, strings, punteros opacos, structs de C con `@c` y arrays de números ya se pueden), y leer los headers en vez de declarar las funciones a mano.
+- Leer los headers de C en vez de declarar las funciones a mano (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 - Los bloques `with`, que son parte del contexto: se leen, pero el compilador avisa que no los soporta.
 

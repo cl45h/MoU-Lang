@@ -1479,7 +1479,7 @@ impl<'a> Checker<'a> {
     /// Takes in the functions a module declares of a C header.
     fn foreign(&mut self, module: usize, alias: &str, header: &str, decls: &'a [Decl]) {
         let plain = |t: &Ty| matches!(t, Ty::Float(_) | Ty::Bool) || matches!(t, Ty::Int(k) if !k.ends_with("128"));
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers";
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers and functions of numbers";
         // An address goes as `ptr`, or as `ptr?` when it may be null.
         let address = |t: &Ty| *t == Ty::Builtin("ptr") || *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
         self.module = module;
@@ -1502,7 +1502,17 @@ impl<'a> Checker<'a> {
                 // So does an array of numbers: C is given where they are.
                 let record = matches!(&ty, Ty::Struct(i, targs) if targs.is_empty() && self.cstructs.contains_key(i))
                     || matches!(&ty, Ty::Slice(t) if matches!(&**t, Ty::Float(_)) || matches!(&**t, Ty::Int(k) if !k.ends_with("128")));
-                let fits = if record { matches!(p.mode, Mode::Let | Mode::Mut) } else { p.mode == Mode::Let && (plain(&ty) || ty == Ty::Str || address(&ty)) };
+                // A function goes as its address, for C to call: one of
+                // numbers, `bool` and `ptr?`.
+                let nullable = |t: &Ty| *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
+                let callback = match &ty {
+                    Ty::Fn(sig) => {
+                        sig.params.iter().all(|q| q.mode == Mode::Let && (plain(&q.ty) || nullable(&q.ty)))
+                            && (plain(&sig.ret) || sig.ret == Ty::Unit || address(&sig.ret))
+                    }
+                    _ => false,
+                };
+                let fits = if record { matches!(p.mode, Mode::Let | Mode::Mut) } else { p.mode == Mode::Let && (plain(&ty) || ty == Ty::Str || address(&ty) || callback) };
                 if !fits {
                     self.err(d.span, format!("the parameter `{}` of `{}`: {only}", p.name, f.name));
                 }
@@ -4569,7 +4579,15 @@ impl<'a> Checker<'a> {
                             }
                             self.res.insert((self.inst, id(e)), Res::Extern(x));
                             let sig = self.externs[x].sig.clone();
-                            return self.apply(&sig, args, span);
+                            let ret = self.apply(&sig, args, span);
+                            // What C is given to call is a function, by its name.
+                            for (a, p) in args.iter().zip(&sig.params) {
+                                let named = matches!(self.res.get(&(self.inst, id(&a.value))), Some(Res::Fn(_)));
+                                if matches!(p.ty, Ty::Fn(_)) && !named {
+                                    self.err(a.value.span, "a C function is given a function by its name: a closure or a variable cannot go to C");
+                                }
+                            }
+                            return ret;
                         }
                         let module = self.imports.get(&(self.module, b.clone())).cloned();
                         if let Some((native, sig)) = module.and_then(|m| native(&m, name)) {
@@ -5063,6 +5081,7 @@ mod tests {
         bad("import c \"s.h\" as s { fn all() -> [int] }", "a C function can only take and return numbers");
         bad("import c \"s.h\" as s { fn f(n: mut i32) }", "a C function can only take and return numbers");
         bad("@c(\"a;b\")\nstruct S { a: i32 }", "`@c` takes the name of the type in C");
+        bad("import c \"s.h\" as s { fn each(f: fn(str)) }", "a C function can only take and return numbers");
         bad("@c(\"s\")\nstruct S { a: str }", "a struct of C can only have fields");
         bad("import c \"s.h\" as s { fn one() -> int { 1 } }", "is a C function: it is declared with its parameters and its result");
     }

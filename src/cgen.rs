@@ -1347,6 +1347,11 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                             lent.push((k, (how == "mutbuf").then_some(code)));
                             continue;
                         }
+                        if t.starts_with("cb ") {
+                            let Operand::Const(Value::Fn(f)) = a else { return Err("the C backend needs a callback to be the name of a function".into()) };
+                            parts.push(format!("KCB{f}"));
+                            continue;
+                        }
                         if let Some(i) = t.strip_prefix("struct ") {
                             writeln!(out, "        kv e{k} = {v};").unwrap();
                             parts.push(format!("KX{i}_get(e{k})"));
@@ -1593,6 +1598,69 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
         let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
         writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+    }
+    // The functions C is given to call: each as a function of C that
+    // makes tagged values of what it gets and calls the one of the program.
+    let mut callbacks: Vec<(usize, &str)> = Vec::new();
+    for f in &p.fns {
+        for b in &f.blocks {
+            if let Term::Call { callee: Callee::Extern(x), args, .. } = &b.term {
+                for (a, t) in args.iter().zip(&p.externs[*x].params) {
+                    if let (Operand::Const(Value::Fn(g)), Some(sig)) = (a, t.strip_prefix("cb ")) {
+                        if !callbacks.iter().any(|(h, _)| h == g) {
+                            callbacks.push((*g, sig));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    callbacks.sort();
+    for (g, sig) in callbacks {
+        let (params, ret) = sig.split_once('>').unwrap_or((sig, "unit"));
+        let params: Vec<&str> = params.split(',').filter(|t| !t.is_empty()).collect();
+        let ctype = |t: &str| match t {
+            "unit" => "void".to_string(),
+            "bool" => "bool".to_string(),
+            "ptr" | "ptr?" => "void *".to_string(),
+            other => buf_type(other),
+        };
+        let takes: Vec<String> = params.iter().enumerate().map(|(k, t)| format!("{} a{k}", ctype(t))).collect();
+        let given: Vec<String> = params
+            .iter()
+            .enumerate()
+            .map(|(k, t)| match *t {
+                "bool" => format!("kbool(a{k})"),
+                "f64" => format!("kf64(a{k})"),
+                "f32" => format!("kf32(a{k})"),
+                "ptr?" => format!("kptr_v_opt(a{k})"),
+                _ => format!("kint((i128)(a{k}))"),
+            })
+            .collect();
+        writeln!(out, "static {} KCB{g}({}) {{", ctype(ret), if takes.is_empty() { "void".to_string() } else { takes.join(", ") }).unwrap();
+        writeln!(out, "    kv A[{}] = {{{}}};", params.len().max(1), if given.is_empty() { "KUNIT".to_string() } else { given.join(", ") }).unwrap();
+        writeln!(out, "    kv r = f{g}(A, KUNIT);").unwrap();
+        for k in 0..params.len() {
+            writeln!(out, "    krelease(A[{k}]);").unwrap();
+        }
+        let back = match ret {
+            "unit" => None,
+            "bool" => Some("r.u.t".to_string()),
+            "f64" => Some("r.u.f".to_string()),
+            "f32" => Some("r.u.g".to_string()),
+            "ptr" => Some("(void *)(uintptr_t)r.u.i".to_string()),
+            "ptr?" => Some("kptr_c_opt(r)".to_string()),
+            int => Some(format!("({})r.u.i", c_int(int))),
+        };
+        match back {
+            Some(value) => {
+                writeln!(out, "    {} out = {value};", ctype(ret)).unwrap();
+                writeln!(out, "    krelease(r);").unwrap();
+                writeln!(out, "    return out;").unwrap();
+            }
+            None => writeln!(out, "    krelease(r);").unwrap(),
+        }
+        writeln!(out, "}}").unwrap();
     }
     // The structs of C: how each is read from a tagged value and made
     // into one, member by member.

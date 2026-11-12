@@ -421,6 +421,27 @@ fn c_name(args: [parser.Expr]) -> str? {
     }
 }
 
+// Whether a type is a function C can call: one of numbers, `bool` and `ptr?`.
+fn is_callback(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Fn(sig) => {
+            for q in sig.params {
+                let by_value = match q.mode {
+                    parser.Mode.Let => true
+                    _ => false
+                }
+                let nullable = match q.ty {
+                    types.Ty.Optional(_) => is_address(q.ty)
+                    _ => false
+                }
+                if !by_value || !(c_plain(q.ty) || nullable) { return false }
+            }
+            c_plain(sig.ret) || is_unit(sig.ret) || is_address(sig.ret)
+        }
+        _ => false
+    }
+}
+
 // Whether a type is an array of numbers of up to 64 bits.
 fn is_numbers(t: types.Ty) -> bool {
     match t {
@@ -1199,7 +1220,7 @@ impl Checker {
     }
 
     fn foreign(mut self, module: int, alias: str, header: str, decls: [parser.Decl]) {
-        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers"
+        let only = "a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers and functions of numbers"
         self.module = module
         for d in decls {
             let at = Span(d.line, d.col)
@@ -1224,7 +1245,7 @@ impl Checker {
                         // A struct of C goes by value, or as its address when it is `mut`.
                         // So does an array of numbers: C is given where they are.
                         let record = self.is_cstruct(ty) || is_numbers(ty)
-                        var fits = by_value && (c_plain(ty) || is_text(ty) || is_address(ty))
+                        var fits = by_value && (c_plain(ty) || is_text(ty) || is_address(ty) || is_callback(ty))
                         if record { fits = by_value || changed }
                         if !fits { self.err(at, "the parameter `{p.name}` of `{f.name}`: {only}") }
                         if record && changed {
@@ -5057,7 +5078,22 @@ impl Checker {
                 if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`") }
                 self.set_res(e, Res.Extern(x))
                 let sig = self.externs[x].sig
-                return self.apply(sig, args, at)
+                let ret = self.apply(sig, args, at)
+                // What C is given to call is a function, by its name.
+                for k in 0..(args.len as int) {
+                    if k >= (sig.params.len as int) { break }
+                    let a = args[k].value
+                    let named = match self.res.get(self.slot(a)) {
+                        Some(Res.Fn(_)) => true
+                        _ => false
+                    }
+                    let wanted = match sig.params[k].ty {
+                        types.Ty.Fn(_) => true
+                        _ => false
+                    }
+                    if wanted && !named { self.err(at_expr(a), "a C function is given a function by its name: a closure or a variable cannot go to C") }
+                }
+                return ret
             }
             if let Some(path) = self.import_path(b) {
                 if let Some(n) = native(path, name) {

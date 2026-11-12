@@ -834,6 +834,15 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                     _ => {}
                 }
             }
+            // A function goes as its address: its parameters and its result.
+            match q.ty {
+                types.Ty.Fn(sig) => {
+                    var takes: [str] = []
+                    for sp in sig.params { takes.push(c_type(sp.ty)) }
+                    kind = "cb {text.join(takes, ",")}>{c_type(sig.ret)}"
+                }
+                _ => {}
+            }
             // An array of numbers goes as the address of the numbers.
             match q.ty {
                 types.Ty.Slice(item) => {

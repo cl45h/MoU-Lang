@@ -1292,6 +1292,20 @@ impl Walk {
                     mir.Callee.Extern(x) => {
                         // What it does is up to who wrote the `unsafe` around it.
                         notes.push(Note(UNSAFE, "the C function `{self.p.externs[x].name}` is called here"))
+                        // What C calls back counts as called here.
+                        for a in args {
+                            match a {
+                                mir.Operand.Const(v) => {
+                                    match v {
+                                        mir.Value.Fn(f) => {
+                                            if report { found.calls.push(CallSite(here, f)) }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     mir.Callee.Print => notes.push(Note(IO, "`io.print` writes to the output"))
                     mir.Callee.Native(name) => {

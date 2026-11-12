@@ -1,0 +1,8 @@
+import std.io
+import ccall
+
+fn main() ! io.Error {
+    io.print("{ccall.at_end()}")?
+    io.print("{ccall.poke(10)}")?
+    io.print("done")?
+}
