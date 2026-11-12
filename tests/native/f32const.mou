@@ -1,0 +1,17 @@
+import std.io
+let H: f32 = half(3.0)
+let T: [f32] = [H, H * 2.0, 0.1, 1.0 / 3.0, 16777217.0, 1e-30, 3.4e38]
+let N: int = (H * 4.0) as int
+let W: f64 = (T[3] as f64) * 2.0
+let B: bool = H < T[1] && T[2] == 0.1
+let NEG: f32 = neg(H)
+let Z: f64 = flip(0.0)
+let S: str = "{T[3]} {T[4]} {NEG} {Z} {7 as f32}"
+let Q: f32 = (1.0 / 3.0) as f32
+fn half(x: f32) -> f32 { x / 2.0 }
+fn neg(x: f32) -> f32 { -x }
+fn flip(x: f64) -> f64 { -x }
+fn main() ! io.Error {
+    io.print("{H} {T[1]} {T[2]} {T[3]} {T[4]} {T[5]} {T[6]} {N} {W} {B} {NEG} {Z} {Q}")?
+    io.print(S)?
+}

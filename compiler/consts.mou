@@ -7,9 +7,9 @@
 // twice gives the same program, and it has a limit of steps. A panic
 // becomes a mistake of the compilation.
 //
-// A constant that works with `f32` is left to be worked out when the
-// program starts: this file does not do that yet exactly as the compiler
-// in Rust does.
+// An `f32` is kept as its text, the shortest that gives it back, and
+// worked with as the `f64` it is: one operation in `f64` rounded once
+// gives the result of the same operation in `f32`.
 
 import std.raw
 import std.text
@@ -80,6 +80,25 @@ fn float_value(x: f64) -> mir.Value ! Oops {
         if ch == 'n' || ch == 'N' || ch == 'i' { return quit() }
     }
     mir.Value.Float(shown)
+}
+
+// The same for an `f32`: the number is rounded to one.
+fn single_value(x: f64) -> mir.Value ! Oops {
+    let narrow = x as f32
+    let shown = "{narrow}"
+    for ch in text.chars(shown) {
+        if ch == 'n' || ch == 'N' || ch == 'i' { return quit() }
+    }
+    mir.Value.F32(shown)
+}
+
+// The number the text of an `f32` stands for.
+fn single_of(written: str) -> f64 ! Oops { (float_of(written)? as f32) as f64 }
+
+// A number with a fraction of either size.
+fn sized(x: f64, single: bool) -> mir.Value ! Oops {
+    if single { return single_value(x)? }
+    float_value(x)?
 }
 
 fn float_of(written: str) -> f64 ! Oops {
@@ -281,6 +300,7 @@ fn show(p: mir.Program, v: mir.Value, top: bool) -> str {
     match v {
         mir.Value.Int(i) => "{i}"
         mir.Value.Float(f) => f
+        mir.Value.F32(f) => f
         mir.Value.Bool(b) => "{b}"
         mir.Value.Char(ch) => {
             if top { return text.from_chars([ch]) }
@@ -550,6 +570,13 @@ fn compare(a: mir.Value, b: mir.Value) -> int ! Oops {
             if p > q { return 1 }
             0
         }
+        (mir.Value.F32(x), mir.Value.F32(y)) => {
+            let p = single_of(x)?
+            let q = single_of(y)?
+            if p < q { return -1 }
+            if p > q { return 1 }
+            0
+        }
         (mir.Value.Char(x), mir.Value.Char(y)) => {
             if x < y { return -1 }
             if x > y { return 1 }
@@ -567,6 +594,7 @@ fn compare(a: mir.Value, b: mir.Value) -> int ! Oops {
 fn same_values(a: mir.Value, b: mir.Value) -> bool ! Oops {
     match (a, b) {
         (mir.Value.Float(x), mir.Value.Float(y)) => float_of(x)? == float_of(y)?
+        (mir.Value.F32(x), mir.Value.F32(y)) => single_of(x)? == single_of(y)?
         _ => a == b
     }
 }
@@ -579,7 +607,8 @@ fn unary(op: mir.UnOp, n: mir.Num, v: mir.Value) -> mir.Value ! Oops {
                 _ => return internal("a unary operator applied to the wrong kind of value")
             }
         }
-        (mir.UnOp.Neg, mir.Value.Float(f)) => float_value(0.0 - float_of(f)?)?
+        (mir.UnOp.Neg, mir.Value.Float(f)) => float_value(-1.0 * float_of(f)?)?
+        (mir.UnOp.Neg, mir.Value.F32(f)) => single_value(-1.0 * single_of(f)?)?
         (mir.UnOp.Not, mir.Value.Bool(b)) => mir.Value.Bool(!b)
         (mir.UnOp.BitNot, mir.Value.Int(i)) => {
             match n {
@@ -642,6 +671,15 @@ fn binary(op: str, n: mir.Num, a: mir.Value, b: mir.Value) -> mir.Value ! Oops {
             // for when the program runs.
             return quit()
         }
+        (mir.Value.F32(x), mir.Value.F32(y)) => {
+            let p = single_of(x)?
+            let q = single_of(y)?
+            if op == "+" { return single_value(p + q)? }
+            if op == "-" { return single_value(p - q)? }
+            if op == "*" { return single_value(p * q)? }
+            if op == "/" { return single_value(p / q)? }
+            return quit()
+        }
         _ => return internal("an arithmetic operator applied to the wrong kind of value")
     }
 }
@@ -660,14 +698,12 @@ fn convert(c: mir.Conv, v: mir.Value) -> mir.Value ! Oops {
             if i < range.lo || i > range.hi { return panic_of("the value {i} is out of range for `{kind}`") }
             v
         }
-        (mir.Conv.ToFloat(single), mir.Value.Int(i)) => {
-            if single { return quit() }
-            float_value(i as f64)?
-        }
-        (mir.Conv.ToFloat(single), mir.Value.Float(_)) => {
-            if single { return quit() }
+        (mir.Conv.ToFloat(single), mir.Value.Int(i)) => sized(i as f64, single)?
+        (mir.Conv.ToFloat(single), mir.Value.Float(f)) => {
+            if single { return single_value(float_of(f)?)? }
             v
         }
+        (mir.Conv.ToFloat(_), mir.Value.F32(_)) => v
         (mir.Conv.Wrap(inner), _) => mir.Value.Some(opt_convert(inner, v)?)
         (mir.Conv.Inside(x), mir.Value.Some(y)) => mir.Value.Some(convert(x, y)?)
         (mir.Conv.Inside(_), mir.Value.None) => v
@@ -722,14 +758,25 @@ fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir
                     if t >= (range.lo as f64) && t <= (range.hi as f64) && range.lo <= i && i <= range.hi { return mir.Value.Int(i) }
                     return panic_of("`as`: the value {f} does not fit in `{kind}`")
                 }
+                mir.Value.F32(f) => {
+                    let x = single_of(f)?
+                    if !(x > -1.7e38 && x < 1.7e38) { return panic_of("`as`: the value {f} does not fit in `{kind}`") }
+                    let i = x as i128
+                    let t = i as f64
+                    if t >= (range.lo as f64) && t <= (range.hi as f64) && range.lo <= i && i <= range.hi { return mir.Value.Int(i) }
+                    return panic_of("`as`: the value {f} does not fit in `{kind}`")
+                }
                 _ => return internal("a cast of a value that is not a number")
             }
         }
         mir.Rvalue.CastFloat(v, single) => {
-            if single { return quit() }
             match operand(fr, v)? {
-                mir.Value.Int(i) => float_value(i as f64)?
-                mir.Value.Float(f) => mir.Value.Float(f)
+                mir.Value.Int(i) => sized(i as f64, single)?
+                mir.Value.Float(f) => {
+                    if single { return single_value(float_of(f)?)? }
+                    mir.Value.Float(f)
+                }
+                mir.Value.F32(f) => sized(single_of(f)?, single)?
                 _ => return internal("a cast of a value that is not a number")
             }
         }
@@ -1210,6 +1257,7 @@ fn small(v: mir.Value) -> bool {
     match v {
         mir.Value.Int(_) => true
         mir.Value.Float(_) => true
+        mir.Value.F32(_) => true
         mir.Value.Bool(_) => true
         mir.Value.Char(_) => true
         mir.Value.Str(_) => true

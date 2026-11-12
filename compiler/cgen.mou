@@ -150,6 +150,16 @@ fn constant(v: mir.Value) -> str ! Fail {
             "kint2(0x{hex(hi)}ULL, 0x{hex(lo)}ULL)"
         }
         mir.Value.Float(f) => "kf64({f})"
+        // An `f32` is one of the numbers an `f64` holds: it is written as that one.
+        mir.Value.F32(f) => {
+            match text.parse_float(f) {
+                Some(x) => {
+                    let wide = (x as f32) as f64
+                    "kf32((float){wide})"
+                }
+                None => return Fail("a constant `f32` that is not a number")
+            }
+        }
         mir.Value.Bool(b) => {
             if b { return "kbool(1)" }
             "kbool(0)"

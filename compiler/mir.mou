@@ -18,6 +18,8 @@ pub enum Value {
     Int(i128)
     // A number with a fraction, as it is written.
     Float(str)
+    // An `f32`, as the shortest text that gives it back.
+    F32(str)
     Bool(bool)
     Char(char)
     Str(str)
@@ -3271,6 +3273,7 @@ fn value_text(v: Value) -> str {
     match v {
         Value.Int(i) => "int {i}"
         Value.Float(f) => "float {f}"
+        Value.F32(f) => "f32 {f}"
         Value.Bool(b) => "bool {b}"
         Value.Char(ch) => "char {ch as int}"
         Value.Str(s) => "str {quote(s)}"

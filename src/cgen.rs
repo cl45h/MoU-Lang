@@ -66,6 +66,8 @@ fn constant(v: &Value) -> Result<String, String> {
         // digits that give it back: the C compiler reads the same number.
         Value::Float(f) if f.is_finite() => format!("kf64({f:?})"),
         Value::Float(f) => format!("kf64_bits(0x{:016x}ULL)", f.to_bits()),
+        // An `f32` is one of the numbers an `f64` holds: it is written as that one.
+        Value::F32(f) if f.is_finite() => format!("kf32((float){:?})", *f as f64),
         Value::F32(f) => format!("kf32((float)kf64_bits(0x{:016x}ULL).u.f)", (*f as f64).to_bits()),
         Value::Bool(b) => format!("kbool({})", *b as u8),
         Value::Char(c) => format!("kchar({}u)", *c as u32),
