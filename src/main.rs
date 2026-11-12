@@ -38,7 +38,8 @@ commands:
   modules  print the program with all it imports, as the loader written in Mou does
   decls    print what the declarations say, as the checker written in Mou does
   types    print what the checker finds out about each expression, in the same form
-  lowered  print the program lowered to MIR, as the lowering written in Mou does";
+  lowered  print the program lowered to MIR, as the lowering written in Mou does
+  rawc     print the C written straight from the MIR, as the compiler written in Mou does";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -131,6 +132,10 @@ fn main() -> ExitCode {
         }
         "modules" => {
             print!("{}", load::dump(path, &src));
+            Ok(())
+        }
+        "rawc" => {
+            print!("{}", rawc_text(path, &src));
             Ok(())
         }
         "lowered" => {
@@ -246,6 +251,30 @@ fn lower(file: &ast::File) -> Result<mir::Program, Vec<lexer::Error>> {
         Ok(program)
     } else {
         Err(errors)
+    }
+}
+
+/// The C of a program written straight from its MIR: nothing is checked
+/// after the types and no constant is computed while compiling. It is what
+/// the compiler written in Mou gives so far.
+fn rawc_text(path: &str, src: &str) -> String {
+    let errors = |es: Vec<lexer::Error>| es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect();
+    let (sources, file) = load::load(path, src);
+    let file = match file {
+        Ok(file) => file,
+        Err(es) => return errors(es),
+    };
+    let info = match check::analyze(&file) {
+        Ok((_, info)) => info,
+        Err(es) => return errors(es),
+    };
+    let program = match mir::lower(&file, &info) {
+        Ok(program) => program,
+        Err(es) => return errors(es),
+    };
+    match cgen::emit(&program, &sources.paths()) {
+        Ok(c) => c,
+        Err(e) => format!("error 0:0 {e}\n"),
     }
 }
 
@@ -461,18 +490,26 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
 
 #[cfg(test)]
 mod selfhost {
-    use crate::{check, comptime, interp, lexer, load, mir, own};
+    use crate::{cgen, check, comptime, interp, lexer, load, mir, own};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
 
-    /// The lexer, the parser, the loader, the checker and the lowering
-    /// written in Mou give, for every file of the project, what the ones of
-    /// this compiler give. `tests/decls`, `tests/types` and `tests/lower`
-    /// hold programs with mistakes, which both must report in the same words.
+    /// The compiler written in Mou gives, stage by stage and for every file
+    /// of the project, what this compiler gives: tokens, tree, modules,
+    /// declarations, types, MIR and C. `tests/decls`, `tests/types` and
+    /// `tests/lower` hold programs with mistakes, which both must report in
+    /// the same words. At the end it compiles itself, and the compiler that
+    /// comes out writes the same C again.
+    ///
+    /// With a C compiler at hand the stages run as a native program; without
+    /// one they run in the interpreter, and the C is not compared.
     #[test]
     fn the_compiler_in_mou_agrees_with_this_one() {
         let root = env!("CARGO_MANIFEST_DIR");
         let main = format!("{root}/compiler/main.mou");
         let src = std::fs::read_to_string(&main).unwrap();
-        let file = load::load(&main, &src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        let (sources, file) = load::load(&main, &src);
+        let file = file.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         let (_, info) = check::analyze(&file).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         let mut program = mir::lower(&file, &info).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         assert!(own::check(&program).is_empty());
@@ -492,23 +529,63 @@ mod selfhost {
         let mut out = Vec::new();
         interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("typetest: {}", p.msg));
         assert_eq!(String::from_utf8_lossy(&out), check::types_selftest());
+        // The compiler written in Mou as a native program, when there is a
+        // C compiler to make it with.
+        let dir = std::env::temp_dir().join(format!("mou-selfhost-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let build = |c: &str, name: &str| -> Option<PathBuf> {
+            let (source, exe) = (dir.join(format!("{name}.c")), dir.join(name));
+            std::fs::write(&source, c).unwrap();
+            let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+            let built = Command::new(cc).args(["-O0", "-w", "-o"]).arg(&exe).arg(&source).arg("-lm").output().ok()?;
+            assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+            Some(exe)
+        };
+        let (std_dir, runtime) = (format!("{root}/std"), format!("{root}/src/runtime.c"));
+        let native = |exe: &Path, stage: &str, file: &str| {
+            let run = Command::new(exe).args([stage, file, &std_dir, &runtime]).output().unwrap();
+            String::from_utf8_lossy(&run.stdout).into_owned()
+        };
+        let mouc = build(&cgen::emit(&program, &sources.paths()).unwrap(), "mouc");
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
             let shown = path.display().to_string();
-            let stages = [
+            let mut stages = vec![
                 ("lex", lexer::dump(&text)),
                 ("tree", crate::ast::dump(&crate::parser::parse_file(&text))),
                 ("modules", load::dump(&shown, &text)),
                 ("decls", crate::decls_text(&shown, &text)),
-                ("types", crate::types_text(&shown, &text)),
-                ("lowered", crate::lowered_text(&shown, &text)),
             ];
+            // `main.mou` holds every other file of the compiler: what comes
+            // after the declarations is compared once, there.
+            if !shown.contains("/compiler/") || shown.ends_with("/main.mou") {
+                stages.push(("types", crate::types_text(&shown, &text)));
+                stages.push(("lowered", crate::lowered_text(&shown, &text)));
+                if mouc.is_some() {
+                    stages.push(("c", crate::rawc_text(&shown, &text)));
+                }
+            }
             for (stage, expected) in stages {
-                interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), shown.clone(), format!("{root}/std")]);
-                let mut out = Vec::new();
-                interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
-                assert_eq!(String::from_utf8_lossy(&out), expected, "{stage} of {}", path.display());
+                let got = match &mouc {
+                    Some(exe) => native(exe, stage, &shown),
+                    None => {
+                        interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), shown.clone(), std_dir.clone()]);
+                        let mut out = Vec::new();
+                        interp::run(&program, program.main.unwrap(), &mut out).unwrap_or_else(|p| panic!("{}: {}", path.display(), p.msg));
+                        String::from_utf8_lossy(&out).into_owned()
+                    }
+                };
+                assert!(got == expected, "{stage} of {} differs", path.display());
             }
         }
+        // The compiler compiles itself, and what comes out does it again.
+        if let Some(exe) = &mouc {
+            let first = native(exe, "c", &main);
+            assert!(first == crate::rawc_text(&main, &src), "the C of the compiler differs");
+            if let Some(second) = build(&first, "mouc2") {
+                assert!(native(&second, "c", &main) == first, "the compiler compiled by itself does not write itself again");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

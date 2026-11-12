@@ -62,6 +62,9 @@ fn constant(v: &Value) -> Result<String, String> {
             Ok(small) => format!("kint({small}LL)"),
             Err(_) => format!("kint2(0x{:x}ULL, 0x{:x}ULL)", (*i as u128 >> 64) as u64, *i as u128 as u64),
         },
+        // A number that is one is written in decimal, with the fewest
+        // digits that give it back: the C compiler reads the same number.
+        Value::Float(f) if f.is_finite() => format!("kf64({f:?})"),
         Value::Float(f) => format!("kf64_bits(0x{:016x}ULL)", f.to_bits()),
         Value::F32(f) => format!("kf32((float)kf64_bits(0x{:016x}ULL).u.f)", (*f as f64).to_bits()),
         Value::Bool(b) => format!("kbool({})", *b as u8),
@@ -705,6 +708,7 @@ impl Cx {
     /// looking at a tag.
     fn known_f64(&self, op: &Operand) -> Option<String> {
         match op {
+            Operand::Const(Value::Float(f)) if f.is_finite() => Some(format!("({f:?})")),
             Operand::Const(Value::Float(f)) => Some(format!("kdbl(0x{:016x}ULL)", f.to_bits())),
             Operand::Place(p) if self.rep(p) == Rep::F64 => Some(format!("s{}", p.local)),
             _ => None,

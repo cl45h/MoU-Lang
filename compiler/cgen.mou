@@ -1,0 +1,1895 @@
+// Writes the middle form of a program as one C file that needs nothing
+// else. It follows `src/cgen.rs`, and gives the same text.
+//
+// Values with parts keep the tagged form the interpreter uses, through
+// the runtime in `runtime.c`. Locals that only hold whole numbers of 64
+// bits or less, booleans or `f64` are plain C variables.
+
+import std.text
+import mir
+
+// Why the program cannot be written as C.
+pub struct Fail { msg: str }
+
+let KINDS: [str] = ["lit", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "isize", "usize"]
+
+fn kind(k: str) -> int {
+    for i in 0..(KINDS.len as int) {
+        if KINDS[i] == k { return i }
+    }
+    4
+}
+
+fn num(n: mir.Num) -> str {
+    match n {
+        mir.Num.Int(k) => "{kind(k)}"
+        _ => "-1"
+    }
+}
+
+// The bytes of a character in UTF-8.
+fn utf8(ch: char) -> [int] {
+    let c = ch as int
+    if c < 128 { return [c] }
+    if c < 2048 { return [192 + (c >> 6), 128 + (c & 63)] }
+    if c < 65536 { return [224 + (c >> 12), 128 + ((c >> 6) & 63), 128 + (c & 63)] }
+    [240 + (c >> 18), 128 + ((c >> 12) & 63), 128 + ((c >> 6) & 63), 128 + (c & 63)]
+}
+
+fn byte_len(s: str) -> int {
+    var n = 0
+    for ch in text.chars(s) { n += utf8(ch).len as int }
+    n
+}
+
+fn octal3(b: int) -> str { "{b >> 6}{(b >> 3) & 7}{b & 7}" }
+
+// A C string that holds the bytes of `s`.
+fn quote(s: str) -> str {
+    var out: [str] = []
+    out.push("\"")
+    for ch in text.chars(s) {
+        for b in utf8(ch) {
+            if b == 34 || b == 92 || b == 63 {
+                out.push("\\")
+                out.push(text.from_chars([ch]))
+            } else {
+                if b >= 32 && b <= 126 {
+                    out.push(text.from_chars([ch]))
+                } else {
+                    out.push("\\{octal3(b)}")
+                }
+            }
+        }
+    }
+    out.push("\"")
+    text.concat(out)
+}
+
+let LETTERS: [str] = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
+
+fn letter(n: int) -> str {
+    if n >= 0 && n < 26 { return LETTERS[n] }
+    "?"
+}
+
+fn opt_conv_code(c: mir.Conv?) -> str {
+    match c {
+        Some(x) => conv_code(x)
+        None => "_"
+    }
+}
+
+fn conv_code(c: mir.Conv) -> str {
+    match c {
+        mir.Conv.Fit(k) => "F{letter(kind(k))}"
+        mir.Conv.ToFloat(single) => {
+            if single { return "s" }
+            "d"
+        }
+        mir.Conv.Wrap(inner) => "W{opt_conv_code(inner)}"
+        mir.Conv.Inside(x) => "I{conv_code(x)}"
+        mir.Conv.Elems(x) => "E{conv_code(x)}"
+        mir.Conv.Tuple(cs) => {
+            var parts: [str] = []
+            for x in cs { parts.push(opt_conv_code(x)) }
+            "T{letter(cs.len as int)}{text.concat(parts)}"
+        }
+        mir.Conv.Res(ok, failed) => "R{opt_conv_code(ok)}{opt_conv_code(failed)}"
+    }
+}
+
+let HEX: [str] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+// A number from 0 to 2^64 - 1 in base 16.
+fn hex(v: i128) -> str {
+    if v == 0 { return "0" }
+    var out: [str] = []
+    var left = v
+    while left > 0 {
+        out.push(HEX[(left % 16) as int])
+        left = left / 16
+    }
+    var back: [str] = []
+    var k = out.len as int - 1
+    while k >= 0 {
+        back.push(out[k])
+        k -= 1
+    }
+    text.concat(back)
+}
+
+fn two64() -> i128 {
+    let half: i128 = 4294967296
+    half * half
+}
+
+fn i64_min() -> i128 {
+    let half: i128 = 4294967296
+    0 - half * 2147483648
+}
+
+fn i64_max() -> i128 {
+    let half: i128 = 4294967296
+    half * 2147483648 - 1
+}
+
+fn constant(v: mir.Value) -> str ! Fail {
+    match v {
+        mir.Value.Int(i) => {
+            if i == i64_min() { return "kint(INT64_MIN)" }
+            if i > i64_min() && i <= i64_max() { return "kint({i}LL)" }
+            // The two halves of the number as 128 bits with a sign.
+            var lo = i % two64()
+            var hi = i / two64()
+            if lo < 0 {
+                lo = lo + two64()
+                hi = hi - 1
+            }
+            if hi < 0 { hi = hi + two64() }
+            "kint2(0x{hex(hi)}ULL, 0x{hex(lo)}ULL)"
+        }
+        mir.Value.Float(f) => "kf64({f})"
+        mir.Value.Bool(b) => {
+            if b { return "kbool(1)" }
+            "kbool(0)"
+        }
+        mir.Value.Char(ch) => "kchar({ch as int}u)"
+        mir.Value.Str(s) => "kstr({quote(s)}, {byte_len(s)})"
+        mir.Value.Unit => "KUNIT"
+        mir.Value.None => "KNONE"
+        mir.Value.Enum(e, variant) => "kagg(T_ENUM, {e}, {variant}, 0, NULL)"
+        mir.Value.Fn(f) => "kfn({f})"
+    }
+}
+
+// The C type of a whole number type of the language.
+fn c_int(k: str) -> str {
+    if k == "isize" { return "ptrdiff_t" }
+    if k == "usize" { return "size_t" }
+    let cs = text.chars(k)
+    var digits: [char] = []
+    for i in 1..cs.len { digits.push(cs[i]) }
+    if text.starts_with(k, "u") { return "uint{text.from_chars(digits)}_t" }
+    "int{text.from_chars(digits)}_t"
+}
+
+// How a local is kept.
+enum Rep {
+    // Nothing is known yet.
+    Top
+    // Only whole numbers written out so far: any kind fits.
+    AnyInt
+    Int(str)
+    Bool
+    F64
+    // A tagged value, in `L`.
+    Boxed
+}
+
+fn same_rep(a: Rep, b: Rep) -> bool {
+    match (a, b) {
+        (Rep.Top, Rep.Top) => true
+        (Rep.AnyInt, Rep.AnyInt) => true
+        (Rep.Int(x), Rep.Int(y)) => x == y
+        (Rep.Bool, Rep.Bool) => true
+        (Rep.F64, Rep.F64) => true
+        (Rep.Boxed, Rep.Boxed) => true
+        _ => false
+    }
+}
+
+fn is_boxed(r: Rep) -> bool {
+    match r {
+        Rep.Boxed => true
+        _ => false
+    }
+}
+
+fn is_int_rep(r: Rep) -> bool {
+    match r {
+        Rep.Int(_) => true
+        _ => false
+    }
+}
+
+struct Cx {
+    reps: [Rep]
+    // Temporaries a call takes as an argument and nothing else reads: the
+    // call takes the value itself, not a copy of it.
+    spent: [bool]
+}
+
+fn all_fields(proj: [mir.Proj]) -> bool {
+    for pr in proj {
+        match pr {
+            mir.Proj.Field(_) => {}
+            _ => return false
+        }
+    }
+    true
+}
+
+fn has_path(proj: [mir.Proj]) -> bool {
+    for pr in proj {
+        match pr {
+            mir.Proj.Path(_) => return true
+            _ => {}
+        }
+    }
+    false
+}
+
+// Every operand an rvalue reads.
+fn operands_of(rv: mir.Rvalue) -> [mir.Operand] {
+    match rv {
+        mir.Rvalue.Use(a) => [a]
+        mir.Rvalue.Unary(_, _, a) => [a]
+        mir.Rvalue.CastInt(a, _) => [a]
+        mir.Rvalue.CastFloat(a, _) => [a]
+        mir.Rvalue.Convert(a, _) => [a]
+        mir.Rvalue.Some(a) => [a]
+        mir.Rvalue.Ok(a) => [a]
+        mir.Rvalue.Err(a) => [a]
+        mir.Rvalue.Is(a, _) => [a]
+        mir.Rvalue.Len(a) => [a]
+        mir.Rvalue.Chars(a) => [a]
+        mir.Rvalue.RangeStart(a, _) => [a]
+        mir.Rvalue.Succ(a, _) => [a]
+        mir.Rvalue.Push(_, a) => [a]
+        mir.Rvalue.Binary(_, _, a, b) => [a, b]
+        mir.Rvalue.Repeat(a, b) => [a, b]
+        mir.Rvalue.Slice(a, b) => [a, b]
+        mir.Rvalue.RangeHas(a, b) => [a, b]
+        mir.Rvalue.RangeLast(a, b) => [a, b]
+        mir.Rvalue.Get(a, b) => [a, b]
+        mir.Rvalue.Tuple(ops) => ops
+        mir.Rvalue.Struct(_, ops) => ops
+        mir.Rvalue.Enum(_, _, ops) => ops
+        mir.Rvalue.Array(ops) => ops
+        mir.Rvalue.Closure(_, ops) => ops
+        mir.Rvalue.Format(parts) => {
+            var out: [mir.Operand] = []
+            for part in parts {
+                match part {
+                    mir.FmtPart.Val(o) => out.push(o)
+                    _ => {}
+                }
+            }
+            out
+        }
+        _ => []
+    }
+}
+
+struct Counts { uses: [int], defs: [int], def_block: [int], by_call: [int] }
+
+fn count_through(c: mut Counts, p: mir.Place) {
+    for pr in p.proj {
+        match pr {
+            mir.Proj.Index(op) => count_read(mut c, op)
+            mir.Proj.Path(l) => {
+                c.uses[l] += 1
+            }
+            mir.Proj.Field(_) => {}
+        }
+    }
+}
+
+fn count_read(c: mut Counts, op: mir.Operand) {
+    match op {
+        mir.Operand.At(p) => {
+            c.uses[p.local] += 1
+            count_through(mut c, p)
+        }
+        _ => {}
+    }
+}
+
+fn count_written(c: mut Counts, p: mir.Place, block: int) {
+    if p.proj.len == 0 {
+        c.defs[p.local] += 1
+        c.def_block[p.local] = block
+    } else {
+        c.uses[p.local] += 2
+        count_through(mut c, p)
+    }
+}
+
+// The temporaries that are given a value once and read once, by a call
+// at the end of the same block. A copy kept in such a temporary would
+// make what it holds shared until the function returns, and the next
+// write to the original would copy all of it.
+fn spent(f: mir.Func) -> [bool] {
+    var n = f.locals
+    if n < 1 { n = 1 }
+    var c = Counts([], [], [], [])
+    for l in 0..n {
+        c.uses.push(0)
+        c.defs.push(0)
+        c.def_block.push(-1)
+        c.by_call.push(-2)
+    }
+    for k in 0..(f.blocks.len as int) {
+        let b = f.blocks[k]
+        for st in b.stmts {
+            count_written(mut c, st.place, k)
+            for op in operands_of(st.rv) { count_read(mut c, op) }
+            match st.rv {
+                mir.Rvalue.Push(p, _) => {
+                    c.uses[p.local] += 2
+                    count_through(mut c, p)
+                }
+                mir.Rvalue.Pop(p) => {
+                    c.uses[p.local] += 2
+                    count_through(mut c, p)
+                }
+                _ => {}
+            }
+        }
+        match b.term {
+            mir.Term.Call(callee, args, writeback, dest, _) => {
+                match callee {
+                    mir.Callee.Indirect(op) => count_read(mut c, op)
+                    _ => {}
+                }
+                for a in args {
+                    count_read(mut c, a)
+                    match a {
+                        mir.Operand.At(p) => {
+                            if p.proj.len == 0 { c.by_call[p.local] = k }
+                        }
+                        _ => {}
+                    }
+                }
+                for w in writeback {
+                    c.uses[w.place.local] += 2
+                    count_through(mut c, w.place)
+                }
+                // The result is kept after the arguments are read, in the
+                // block that follows as far as a temporary can tell.
+                count_written(mut c, dest, -1)
+            }
+            mir.Term.Branch(op, _, _) => count_read(mut c, op)
+            mir.Term.Return(op) => count_read(mut c, op)
+            _ => {}
+        }
+    }
+    var out: [bool] = []
+    for l in 0..n {
+        var named = false
+        if l < (f.names.len as int) {
+            match f.names[l] {
+                Some(_) => {
+                    named = true
+                }
+                None => {}
+            }
+        }
+        var once = false
+        for o in f.once {
+            if o == l { once = true }
+        }
+        out.push(l >= f.params && !named && !once && c.uses[l] == 1 && c.defs[l] == 1 && c.def_block[l] != -1 && c.def_block[l] == c.by_call[l])
+    }
+    out
+}
+
+fn rep_type(r: Rep) -> str {
+    match r {
+        Rep.Int(k) => ctype(k)
+        Rep.F64 => "double"
+        Rep.Boxed => "kv"
+        _ => "bool"
+    }
+}
+
+// A value of the machine as a tagged one.
+fn tagged(r: Rep, value: str) -> str {
+    match r {
+        Rep.Int(_) => "kint((i128)({value}))"
+        Rep.F64 => "kf64({value})"
+        Rep.Boxed => value
+        _ => "kbool({value})"
+    }
+}
+
+struct Direct { params: [Rep], ret: Rep }
+
+// The signature a function has for the machine, when it leaves its
+// parameters alone (so that a tagged argument can be lent to it without
+// counting it) and captures nothing.
+fn direct_sig(f: mir.Func, fns: [mir.Func]) -> Direct? {
+    let ret = scalar_rep(f.ret)
+    if (f.scalars.len as int) != f.params { return None }
+    let reps = infer(f, fns)
+    var params: [Rep] = []
+    for l in 0..f.params { params.push(reps[l]) }
+    for b in f.blocks {
+        for st in b.stmts {
+            if st.place.local < f.params { return None }
+            match st.rv {
+                mir.Rvalue.Push(p, _) => {
+                    if p.local < f.params { return None }
+                }
+                mir.Rvalue.Pop(p) => {
+                    if p.local < f.params { return None }
+                }
+                mir.Rvalue.Capture(_) => return None
+                _ => {}
+            }
+        }
+        match b.term {
+            mir.Term.Call(_, _, writeback, dest, _) => {
+                if dest.local < f.params { return None }
+                for w in writeback {
+                    if w.place.local < f.params { return None }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(Direct(params, ret))
+}
+
+fn machine(k: str) -> bool { k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" || k == "u64" || k == "usize" }
+
+fn ctype(k: str) -> str {
+    if text.starts_with(k, "i") { return "int64_t" }
+    "uint64_t"
+}
+
+// A constant of 128 bits that fits in 64, as C.
+fn wide(v: i128) -> str {
+    if v == i64_min() { return "((i128)INT64_MIN)" }
+    if v < 0 || v <= i64_max() { return "((i128){v}LL)" }
+    "((i128){v}ULL)"
+}
+
+fn kind_bits(k: str) -> int {
+    if k == "i8" || k == "u8" { return 8 }
+    if k == "i16" || k == "u16" { return 16 }
+    if k == "i32" || k == "u32" { return 32 }
+    64
+}
+
+fn pow2(bits: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..bits { out = out * 2 }
+    out
+}
+
+// The check that a result left the range of a kind narrower than its C type.
+fn narrow(k: str, r: str) -> str {
+    let bits = kind_bits(k)
+    if bits == 64 { return "" }
+    if text.starts_with(k, "u") { return " || {r} > {pow2(bits) - 1}ULL" }
+    " || {r} < {0 - pow2(bits - 1)}LL || {r} > {pow2(bits - 1) - 1}LL"
+}
+
+fn scalar_rep(s: mir.Scalar?) -> Rep {
+    match s {
+        Some(x) => {
+            match x {
+                mir.Scalar.Int(k) => {
+                    if machine(k) { return Rep.Int(k) }
+                    Rep.Boxed
+                }
+                mir.Scalar.Bool => Rep.Bool
+                mir.Scalar.F64 => Rep.F64
+            }
+        }
+        None => Rep.Boxed
+    }
+}
+
+fn join(a: Rep, b: Rep) -> Rep {
+    match (a, b) {
+        (Rep.Top, _) => b
+        (_, Rep.Top) => a
+        (Rep.AnyInt, Rep.Int(k)) => Rep.Int(k)
+        (Rep.Int(k), Rep.AnyInt) => Rep.Int(k)
+        _ => {
+            if same_rep(a, b) { return a }
+            Rep.Boxed
+        }
+    }
+}
+
+fn is_cmp(op: str) -> bool { op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" }
+
+fn int_rep(n: mir.Num) -> Rep {
+    match n {
+        mir.Num.Int(k) => {
+            if machine(k) { return Rep.Int(k) }
+            Rep.Boxed
+        }
+        _ => Rep.Boxed
+    }
+}
+
+fn is_f64_num(n: mir.Num) -> bool {
+    match n {
+        mir.Num.F64 => true
+        _ => false
+    }
+}
+
+// What an rvalue gives, from what is known about the locals.
+fn rep_of(rv: mir.Rvalue, reps: [Rep]) -> Rep {
+    match rv {
+        mir.Rvalue.Use(op) => {
+            match op {
+                mir.Operand.Const(v) => {
+                    match v {
+                        mir.Value.Int(i) => {
+                            if i >= i64_min() && i <= i64_max() { return Rep.AnyInt }
+                            Rep.Boxed
+                        }
+                        mir.Value.Bool(_) => Rep.Bool
+                        mir.Value.Float(_) => Rep.F64
+                        _ => Rep.Boxed
+                    }
+                }
+                mir.Operand.At(p) => {
+                    if p.proj.len == 0 { return reps[p.local] }
+                    Rep.Boxed
+                }
+            }
+        }
+        mir.Rvalue.Binary(op, n, _, _) => {
+            if is_f64_num(n) && !is_cmp(op) { return Rep.F64 }
+            if is_cmp(op) { return Rep.Bool }
+            int_rep(n)
+        }
+        mir.Rvalue.Unary(op, n, _) => {
+            match op {
+                mir.UnOp.Not => Rep.Bool
+                mir.UnOp.Neg => {
+                    if is_f64_num(n) { return Rep.F64 }
+                    int_rep(n)
+                }
+                mir.UnOp.BitNot => int_rep(n)
+            }
+        }
+        mir.Rvalue.CastFloat(_, single) => {
+            if single { return Rep.Boxed }
+            Rep.F64
+        }
+        mir.Rvalue.Convert(_, c) => {
+            match c {
+                mir.Conv.ToFloat(single) => {
+                    if single { return Rep.Boxed }
+                    Rep.F64
+                }
+                mir.Conv.Fit(k) => {
+                    if machine(k) { return Rep.Int(k) }
+                    Rep.Boxed
+                }
+                _ => Rep.Boxed
+            }
+        }
+        mir.Rvalue.Is(_, _) => Rep.Bool
+        mir.Rvalue.RangeHas(_, _) => Rep.Bool
+        mir.Rvalue.RangeLast(_, _) => Rep.Bool
+        mir.Rvalue.CastInt(_, k) => {
+            if machine(k) { return Rep.Int(k) }
+            Rep.Boxed
+        }
+        mir.Rvalue.Len(_) => Rep.Int("usize")
+        mir.Rvalue.RangeStart(_, n) => int_rep(n)
+        mir.Rvalue.Succ(_, n) => int_rep(n)
+        mir.Rvalue.Uninit => Rep.Top
+        mir.Rvalue.Moved => Rep.Top
+        _ => Rep.Boxed
+    }
+}
+
+fn mark_projected(reps: mut [Rep], op: mir.Operand) {
+    match op {
+        mir.Operand.At(p) => mark_through(mut reps, p)
+        _ => {}
+    }
+}
+
+// A local with fields or items is a tagged value.
+fn mark_through(reps: mut [Rep], p: mir.Place) {
+    if p.proj.len > 0 { reps[p.local] = Rep.Boxed }
+    for pr in p.proj {
+        match pr {
+            mir.Proj.Index(i) => mark_projected(mut reps, i)
+            // The steps are an array, read where it is kept.
+            mir.Proj.Path(l) => {
+                reps[l] = Rep.Boxed
+            }
+            mir.Proj.Field(_) => {}
+        }
+    }
+}
+
+// Decides how every local of a function is kept.
+fn infer(f: mir.Func, fns: [mir.Func]) -> [Rep] {
+    var reps: [Rep] = []
+    var typed: [bool] = []
+    for l in 0..f.locals {
+        reps.push(Rep.Top)
+        typed.push(false)
+    }
+    for l in 0..f.params {
+        if l >= f.locals { break }
+        var s: mir.Scalar? = None
+        if l < (f.scalars.len as int) { s = f.scalars[l] }
+        reps[l] = scalar_rep(s)
+    }
+    // A variable whose type is a whole number or a boolean is kept as
+    // one, whatever its value is read from.
+    for l in f.params..f.locals {
+        var s: mir.Scalar? = None
+        if l < (f.hints.len as int) { s = f.hints[l] }
+        let r = scalar_rep(s)
+        if !is_boxed(r) {
+            reps[l] = r
+            typed[l] = true
+        }
+    }
+    for b in f.blocks {
+        for st in b.stmts {
+            mark_through(mut reps, st.place)
+            for op in operands_of(st.rv) { mark_projected(mut reps, op) }
+            match st.rv {
+                mir.Rvalue.Push(p, _) => {
+                    reps[p.local] = Rep.Boxed
+                }
+                mir.Rvalue.Pop(p) => {
+                    reps[p.local] = Rep.Boxed
+                }
+                _ => {}
+            }
+        }
+        match b.term {
+            mir.Term.Call(_, args, writeback, dest, _) => {
+                for a in args { mark_projected(mut reps, a) }
+                mark_through(mut reps, dest)
+                for w in writeback { reps[w.place.local] = Rep.Boxed }
+            }
+            mir.Term.Branch(op, _, _) => mark_projected(mut reps, op)
+            mir.Term.Return(op) => mark_projected(mut reps, op)
+            _ => {}
+        }
+    }
+    loop {
+        var changed = false
+        for b in f.blocks {
+            for st in b.stmts {
+                if st.place.proj.len == 0 && !typed[st.place.local] {
+                    let l = st.place.local
+                    let next = join(reps[l], rep_of(st.rv, reps))
+                    if !same_rep(next, reps[l]) {
+                        reps[l] = next
+                        changed = true
+                    }
+                }
+            }
+            match b.term {
+                mir.Term.Call(callee, _, _, dest, _) => {
+                    var produced = Rep.Boxed
+                    match callee {
+                        mir.Callee.Fn(g) => {
+                            produced = scalar_rep(fns[g].ret)
+                        }
+                        _ => {}
+                    }
+                    if !typed[dest.local] {
+                        let next = join(reps[dest.local], produced)
+                        if !same_rep(next, reps[dest.local]) {
+                            reps[dest.local] = next
+                            changed = true
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !changed { break }
+    }
+    var out: [Rep] = []
+    for r in reps {
+        match r {
+            Rep.Top => out.push(Rep.Boxed)
+            Rep.AnyInt => out.push(Rep.Int("i64"))
+            _ => out.push(r)
+        }
+    }
+    out
+}
+
+// ---- places, operands and rvalues as C ----
+
+struct ItemRef { base: str, index: str }
+
+struct FieldRef { base: str, index: str, field: int }
+
+fn binop(op: str) -> str {
+    if op == "+" { return "O_ADD" }
+    if op == "-" { return "O_SUB" }
+    if op == "*" { return "O_MUL" }
+    if op == "/" { return "O_DIV" }
+    if op == "%" { return "O_REM" }
+    if op == "+%" { return "O_ADDW" }
+    if op == "-%" { return "O_SUBW" }
+    if op == "*%" { return "O_MULW" }
+    if op == "+|" { return "O_ADDS" }
+    if op == "-|" { return "O_SUBS" }
+    if op == "*|" { return "O_MULS" }
+    if op == "<<" { return "O_SHL" }
+    if op == ">>" { return "O_SHR" }
+    if op == "&" { return "O_AND" }
+    if op == "|" { return "O_OR" }
+    if op == "^" { return "O_XOR" }
+    if op == "==" { return "O_EQ" }
+    if op == "!=" { return "O_NE" }
+    if op == "<" { return "O_LT" }
+    if op == "<=" { return "O_LE" }
+    if op == ">" { return "O_GT" }
+    "O_GE"
+}
+
+fn bit(b: bool) -> str { if b { "1" } else { "0" } }
+
+fn fits_64(i: i128) -> bool { i >= i64_min() && i <= i64_max() * 2 + 1 }
+
+impl Cx {
+    fn rep(self, p: mir.Place) -> Rep {
+        if p.proj.len == 0 { return self.reps[p.local] }
+        Rep.Boxed
+    }
+
+    // A C pointer to the tagged value a place holds.
+    fn ptr(self, local: int, proj: [mir.Proj], write: bool) -> str? {
+        if !is_boxed(self.reps[local]) { return None }
+        // A place that ends in steps only known when running may be a
+        // bare item of a packed array: it is read without taking where it is.
+        if !write && proj.len > 0 {
+            match proj[proj.len - 1] {
+                mir.Proj.Path(_) => return None
+                _ => {}
+            }
+        }
+        self.walk(local, proj, write)
+    }
+
+    // What takes the value out of a place and leaves the place empty,
+    // when the place is a local or a field of fields of one.
+    fn moved(self, p: mir.Place) -> str? {
+        if !all_fields(p.proj) { return None }
+        match self.walk(p.local, p.proj, true) {
+            Some(ptr) => Some("ktake({ptr})")
+            None => None
+        }
+    }
+
+    // A C pointer to a value that has parts: it is never a bare item.
+    fn walk(self, local: int, proj: [mir.Proj], write: bool) -> str? {
+        if !is_boxed(self.reps[local]) { return None }
+        var s = "&L[{local}]"
+        for pr in proj {
+            match pr {
+                mir.Proj.Path(l) => {
+                    s = "kpath({s}, &L[{l}], {write})"
+                }
+                mir.Proj.Field(k) => {
+                    s = "kfield({s}, {k}, {write})"
+                }
+                mir.Proj.Index(i) => {
+                    let x = self.int(i) catch e { return None }
+                    s = "kitemp({s}, (i128)({x}), {write})"
+                }
+            }
+        }
+        Some(s)
+    }
+
+    // The array, the position and the field of a place that ends in a
+    // field of an item: `xs[i].f`.
+    fn field_item(self, p: mir.Place, write: bool) -> FieldRef? ! Fail {
+        let n = p.proj.len as int
+        if n < 2 { return None }
+        match (p.proj[n - 2], p.proj[n - 1]) {
+            (mir.Proj.Index(i), mir.Proj.Field(f)) => {
+                var before: [mir.Proj] = []
+                for k in 0..(n - 2) { before.push(p.proj[k]) }
+                match self.walk(p.local, before, write) {
+                    Some(base) => {
+                        let x = self.int(i)?
+                        Some(FieldRef(base, "(i128)({x})", f))
+                    }
+                    None => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // The array and the position of a place that ends in an index.
+    fn item(self, p: mir.Place, write: bool) -> ItemRef? ! Fail {
+        let n = p.proj.len as int
+        if n < 1 { return None }
+        match p.proj[n - 1] {
+            mir.Proj.Index(i) => {
+                var before: [mir.Proj] = []
+                for k in 0..(n - 1) { before.push(p.proj[k]) }
+                match self.ptr(p.local, before, write) {
+                    Some(base) => {
+                        let x = self.int(i)?
+                        Some(ItemRef(base, "(i128)({x})"))
+                    }
+                    None => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // The operand as a C whole number, when it is known to be one
+    // without looking at a tag.
+    fn known_int(self, op: mir.Operand) -> str? {
+        match op {
+            mir.Operand.Const(v) => {
+                match v {
+                    mir.Value.Int(i) => {
+                        if fits_64(i) { return Some(wide(i)) }
+                        None
+                    }
+                    _ => None
+                }
+            }
+            mir.Operand.At(p) => {
+                if is_int_rep(self.rep(p)) { return Some("s{p.local}") }
+                None
+            }
+        }
+    }
+
+    fn known_bool(self, op: mir.Operand) -> str? {
+        match op {
+            mir.Operand.Const(v) => {
+                match v {
+                    mir.Value.Bool(b) => Some(bit(b))
+                    _ => None
+                }
+            }
+            mir.Operand.At(p) => {
+                match self.rep(p) {
+                    Rep.Bool => Some("s{p.local}")
+                    _ => None
+                }
+            }
+        }
+    }
+
+    fn known_f64(self, op: mir.Operand) -> str? {
+        match op {
+            mir.Operand.Const(v) => {
+                match v {
+                    mir.Value.Float(f) => Some("({f})")
+                    _ => None
+                }
+            }
+            mir.Operand.At(p) => {
+                match self.rep(p) {
+                    Rep.F64 => Some("s{p.local}")
+                    _ => None
+                }
+            }
+        }
+    }
+
+    // The operand read through `part`, which is `u.f` for a number with
+    // a fraction and `u.i` for a whole one.
+    fn untagged(self, op: mir.Operand, part: str, item: str, field_item: str) -> str ! Fail {
+        match op {
+            mir.Operand.At(p) => {
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{p.local}].{part}" }
+                if let Some(it) = self.item(p, false)? { return "{item}({it.base}, {it.index})" }
+                if let Some(fi) = self.field_item(p, false)? { return "{field_item}({fi.base}, {fi.index}, {fi.field})" }
+                match self.ptr(p.local, p.proj, false) {
+                    Some(ptr) => "{ptr}->{part}"
+                    None => {
+                        let v = self.operand(op)?
+                        "({v}).{part}"
+                    }
+                }
+            }
+            _ => {
+                let v = self.operand(op)?
+                "({v}).{part}"
+            }
+        }
+    }
+
+    // The operand as a C double, where the types say it is an `f64`.
+    fn float(self, op: mir.Operand) -> str ! Fail {
+        if let Some(known) = self.known_f64(op) { return known }
+        self.untagged(op, "u.f", "kitem_f64", "kitem_field_f64")?
+    }
+
+    // The operand as a C whole number, where the types say it is one.
+    fn int(self, op: mir.Operand) -> str ! Fail {
+        if let Some(known) = self.known_int(op) { return known }
+        self.untagged(op, "u.i", "kitem_int", "kitem_field_int")?
+    }
+
+    fn truth(self, op: mir.Operand) -> str ! Fail {
+        if let Some(known) = self.known_bool(op) { return known }
+        match op {
+            mir.Operand.At(p) => {
+                if p.proj.len > 0 {
+                    if let Some(it) = self.item(p, false)? { return "kitem_bool({it.base}, {it.index})" }
+                    if let Some(fi) = self.field_item(p, false)? { return "kitem_field_bool({fi.base}, {fi.index}, {fi.field})" }
+                    if let Some(ptr) = self.ptr(p.local, p.proj, false) { return "ktruth(*{ptr})" }
+                }
+            }
+            _ => {}
+        }
+        let v = self.operand(op)?
+        "ktruth({v})"
+    }
+
+    // The steps of a place as a C array, and how many there are.
+    fn steps(self, p: mir.Place) -> str ! Fail {
+        var parts: [str] = []
+        for pr in p.proj {
+            match pr {
+                mir.Proj.Field(k) => parts.push("{{0, {k}}}")
+                mir.Proj.Index(op) => {
+                    match op {
+                        mir.Operand.Const(v) => {
+                            match v {
+                                mir.Value.Int(i) => parts.push("{{1, kidxc({i})}}")
+                                _ => return Fail("the C backend needs an index to be a local or a constant")
+                            }
+                        }
+                        mir.Operand.At(i) => {
+                            if is_int_rep(self.rep(i)) {
+                                parts.push("{{1, kidxc((i128)s{i.local})}}")
+                            } else {
+                                if i.proj.len > 0 { return Fail("the C backend needs an index to be a local or a constant") }
+                                parts.push("{{1, kidx(&L[{i.local}])}}")
+                            }
+                        }
+                    }
+                }
+                mir.Proj.Path(_) => return Fail("the C backend cannot follow the result of a `ref mut` function here")
+            }
+        }
+        "{parts.len}, (kstep[]){{{text.join(parts, ", ")}}}"
+    }
+
+    // What tells the runtime where a place is.
+    fn target(self, p: mir.Place) -> str ! Fail {
+        if p.proj.len == 0 { return "&L[{p.local}], 0, NULL" }
+        let s = self.steps(p)?
+        "&L[{p.local}], {s}"
+    }
+
+    // An expression that gives a new reference to the value of the operand.
+    fn operand(self, op: mir.Operand) -> str ! Fail {
+        match op {
+            mir.Operand.Const(v) => constant(v)?
+            mir.Operand.At(p) => {
+                if p.proj.len == 0 {
+                    if !is_boxed(self.reps[p.local]) { return self.boxed(p.local) }
+                    return "kretain(L[{p.local}])"
+                }
+                if let Some(it) = self.item(p, false)? { return "kitem({it.base}, {it.index})" }
+                if let Some(fi) = self.field_item(p, false)? { return "kitem_field({fi.base}, {fi.index}, {fi.field})" }
+                if let Some(ptr) = self.ptr(p.local, p.proj, false) { return "kretain(*{ptr})" }
+                let n = p.proj.len as int
+                match p.proj[n - 1] {
+                    mir.Proj.Path(l) => {
+                        var before: [mir.Proj] = []
+                        for k in 0..(n - 1) { before.push(p.proj[k]) }
+                        if let Some(base) = self.walk(p.local, before, false) { return "kpath_get({base}, &L[{l}])" }
+                    }
+                    _ => {}
+                }
+                let s = self.steps(p)?
+                "kread(&L[{p.local}], {s})"
+            }
+        }
+    }
+
+    fn list(self, ops: [mir.Operand]) -> str ! Fail {
+        if ops.len == 0 { return "0, NULL" }
+        var parts: [str] = []
+        for o in ops { parts.push(self.operand(o)?) }
+        "{ops.len}, (kv[]){{{text.join(parts, ", ")}}}"
+    }
+
+    fn store(self, p: mir.Place, value: str) -> str ! Fail {
+        if p.proj.len == 0 { return "kset(&L[{p.local}], {value});" }
+        // The value is worked out first: it may read what the place is part of.
+        if let Some(it) = self.item(p, true)? { return "{{ kv v_ = {value}; kitem_set({it.base}, {it.index}, v_); }}" }
+        if let Some(fi) = self.field_item(p, true)? { return "{{ kv v_ = {value}; kitem_field_set({fi.base}, {fi.index}, {fi.field}, v_); }}" }
+        let n = p.proj.len as int
+        match p.proj[n - 1] {
+            mir.Proj.Path(l) => {
+                var before: [mir.Proj] = []
+                for k in 0..(n - 1) { before.push(p.proj[k]) }
+                if let Some(base) = self.walk(p.local, before, true) { return "{{ kv v_ = {value}; kpath_set({base}, &L[{l}], v_); }}" }
+            }
+            _ => {}
+        }
+        if let Some(ptr) = self.ptr(p.local, p.proj, true) { return "{{ kv v_ = {value}; kset({ptr}, v_); }}" }
+        let s = self.steps(p)?
+        "kwrite(&L[{p.local}], {s}, {value});"
+    }
+
+    fn rvalue(self, rv: mir.Rvalue) -> str ! Fail {
+        match rv {
+            mir.Rvalue.Use(a) => self.operand(a)?
+            mir.Rvalue.Unary(op, n, a) => {
+                let name = match op {
+                    mir.UnOp.Neg => "U_NEG"
+                    mir.UnOp.Not => "U_NOT"
+                    mir.UnOp.BitNot => "U_BITNOT"
+                }
+                "kun({name}, {num(n)}, {self.operand(a)?})"
+            }
+            mir.Rvalue.Binary(op, n, a, b) => {
+                let x = self.operand(a)?
+                let y = self.operand(b)?
+                "kbin({binop(op)}, {num(n)}, {x}, {y})"
+            }
+            mir.Rvalue.CastInt(a, k) => "kcast_int({self.operand(a)?}, {kind(k)})"
+            mir.Rvalue.CastFloat(a, single) => "kcast_float({self.operand(a)?}, {bit(single)})"
+            mir.Rvalue.Convert(a, c) => "kconv({self.operand(a)?}, {quote(conv_code(c))})"
+            mir.Rvalue.Tuple(ops) => "kagg(T_TUPLE, 0, 0, {self.list(ops)?})"
+            mir.Rvalue.Struct(i, ops) => "kagg(T_STRUCT, {i}, 0, {self.list(ops)?})"
+            mir.Rvalue.Enum(e, v, ops) => "kagg(T_ENUM, {e}, {v}, {self.list(ops)?})"
+            mir.Rvalue.Array(ops) => "kagg(T_ARRAY, 0, 0, {self.list(ops)?})"
+            mir.Rvalue.Repeat(v, n) => {
+                let x = self.operand(v)?
+                let y = self.operand(n)?
+                "krepeat({x}, {y})"
+            }
+            mir.Rvalue.Some(a) => "kbox(T_SOME, {self.operand(a)?})"
+            mir.Rvalue.Ok(a) => "kbox(T_OK, {self.operand(a)?})"
+            mir.Rvalue.Err(a) => "kbox(T_ERR, {self.operand(a)?})"
+            mir.Rvalue.Is(a, tag) => "kis({self.operand(a)?}, {tag})"
+            mir.Rvalue.Len(a) => "klength({self.operand(a)?})"
+            mir.Rvalue.Push(p, a) => {
+                if let Some(ptr) = self.ptr(p.local, p.proj, true) {
+                    if let Some(t) = self.known_bool(a) { return "kpush_bool({ptr}, {t})" }
+                    if let Some(x) = self.known_int(a) { return "kpush_int({ptr}, (i128)({x}))" }
+                    if let Some(x) = self.known_f64(a) { return "kpush_f64({ptr}, {x})" }
+                    if has_path(p.proj) { return "kpush({ptr}, 0, NULL, {self.operand(a)?})" }
+                }
+                let where_ = self.target(p)?
+                "kpush({where_}, {self.operand(a)?})"
+            }
+            mir.Rvalue.Pop(p) => {
+                if has_path(p.proj) {
+                    if let Some(ptr) = self.ptr(p.local, p.proj, true) { return "kpop({ptr}, 0, NULL)" }
+                }
+                "kpop({self.target(p)?})"
+            }
+            mir.Rvalue.Get(a, i) => {
+                let x = self.operand(a)?
+                let y = self.operand(i)?
+                "kget({x}, {y})"
+            }
+            mir.Rvalue.Slice(b, r) => {
+                let x = self.operand(b)?
+                let y = self.operand(r)?
+                "kslice({x}, {y})"
+            }
+            mir.Rvalue.Chars(a) => "kchars({self.operand(a)?})"
+            mir.Rvalue.Const(i) => "kretain(KC[{i}])"
+            mir.Rvalue.RangeStart(r, _) => "krange_start({self.operand(r)?})"
+            mir.Rvalue.RangeHas(r, i) => {
+                let x = self.operand(r)?
+                let y = self.operand(i)?
+                "krange_has({x}, {y})"
+            }
+            mir.Rvalue.RangeLast(r, i) => {
+                let x = self.operand(r)?
+                let y = self.operand(i)?
+                "krange_last({x}, {y})"
+            }
+            mir.Rvalue.Succ(v, n) => "ksucc({self.operand(v)?}, {num(n)})"
+            mir.Rvalue.Closure(f, ops) => "kclosure({f}, {self.list(ops)?})"
+            mir.Rvalue.Capture(k) => "kcapture(env, {k})"
+            mir.Rvalue.Uninit => "KUNIT"
+            mir.Rvalue.Moved => "KUNIT"
+            mir.Rvalue.Format(_) => return Fail("a formatted string is written as statements")
+        }
+    }
+
+    // An rvalue as a C double.
+    fn f64_rvalue(self, rv: mir.Rvalue) -> str ! Fail {
+        match rv {
+            mir.Rvalue.Use(a) => return self.float(a)?
+            mir.Rvalue.Uninit => return "0"
+            mir.Rvalue.Moved => return "0"
+            mir.Rvalue.Binary(op, n, a, b) => {
+                if is_f64_num(n) && (op == "+" || op == "-" || op == "*" || op == "/") {
+                    let x = self.float(a)?
+                    let y = self.float(b)?
+                    return "({x} {op} {y})"
+                }
+            }
+            mir.Rvalue.Unary(op, n, a) => {
+                match op {
+                    mir.UnOp.Neg => {
+                        if is_f64_num(n) { return "(-{self.float(a)?})" }
+                    }
+                    _ => {}
+                }
+            }
+            mir.Rvalue.CastFloat(a, single) => {
+                if !single {
+                    if let Some(x) = self.known_int(a) { return "(double)({x})" }
+                }
+            }
+            mir.Rvalue.Convert(a, c) => {
+                match c {
+                    mir.Conv.ToFloat(single) => {
+                        if !single {
+                            if let Some(x) = self.known_int(a) { return "(double)({x})" }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        "({self.rvalue(rv)?}).u.f"
+    }
+
+    // An rvalue as a C whole number of kind `k`.
+    fn int_rvalue(self, rv: mir.Rvalue, k: str) -> str ! Fail {
+        let t = ctype(k)
+        match rv {
+            mir.Rvalue.Use(a) => return "({t})({self.int(a)?})"
+            mir.Rvalue.Uninit => return "0"
+            mir.Rvalue.Moved => return "0"
+            mir.Rvalue.Len(op) => {
+                match op {
+                    mir.Operand.At(p) => {
+                        if let Some(ptr) = self.ptr(p.local, p.proj, false) { return "({t})klen_at({ptr})" }
+                    }
+                    _ => {}
+                }
+            }
+            mir.Rvalue.Binary(op, n, a, b) => {
+                let same = match n {
+                    mir.Num.Int(given) => given == k
+                    _ => false
+                }
+                if same {
+                    let x = self.int(a)?
+                    let y = self.int(b)?
+                    // The slow way does the operation again on tagged
+                    // values, and reports the overflow or the division by zero.
+                    let again = "({t})(kbin({binop(op)}, {kind(k)}, kint((i128)(x_)), kint((i128)(y_)))).u.i"
+                    let head = "{t} x_ = ({t})({x}), y_ = ({t})({y}), r_;"
+                    var builtin = ""
+                    if op == "+" { builtin = "add" }
+                    if op == "-" { builtin = "sub" }
+                    if op == "*" { builtin = "mul" }
+                    if builtin != "" { return "({{ {head} (__builtin_{builtin}_overflow(x_, y_, &r_){narrow(k, "r_")}) ? {again} : r_; }})" }
+                    if op == "/" || op == "%" {
+                        let risky = if t == "int64_t" { "y_ == 0 || y_ == -1" } else { "y_ == 0" }
+                        return "({{ {head} ({risky}) ? {again} : (r_ = x_ {op} y_, r_); }})"
+                    }
+                    return "({{ {head} (void)r_; {again}; }})"
+                }
+            }
+            mir.Rvalue.Succ(a, n) => {
+                let same = match n {
+                    mir.Num.Int(given) => given == k
+                    _ => false
+                }
+                if same {
+                    let x = self.int(a)?
+                    let again = "({t})(ksucc(kint((i128)(x_)), {kind(k)})).u.i"
+                    return "({{ {t} x_ = ({t})({x}), r_; (__builtin_add_overflow(x_, 1, &r_){narrow(k, "r_")}) ? {again} : r_; }})"
+                }
+            }
+            mir.Rvalue.CastInt(a, given) => {
+                if given == k {
+                    if let Some(x) = self.known_int(a) {
+                        let again = "({t})(kcast_int(kint(v_), {kind(k)})).u.i"
+                        return "({{ i128 v_ = (i128)({x}); (v_ < {wide(low_of(k))} || v_ > {wide(high_of(k))}) ? {again} : ({t})v_; }})"
+                    }
+                }
+            }
+            _ => {}
+        }
+        "({t})({self.rvalue(rv)?}).u.i"
+    }
+
+    // An rvalue as a C boolean.
+    fn bool_rvalue(self, rv: mir.Rvalue) -> str ! Fail {
+        match rv {
+            mir.Rvalue.Use(a) => return self.truth(a)?
+            mir.Rvalue.Uninit => return "0"
+            mir.Rvalue.Moved => return "0"
+            mir.Rvalue.Unary(op, _, a) => {
+                match op {
+                    mir.UnOp.Not => return "!{self.truth(a)?}"
+                    _ => {}
+                }
+            }
+            mir.Rvalue.Binary(op, _, a, b) => {
+                if is_cmp(op) {
+                    // A character against one that is written out: the
+                    // usual case when reading text, done without the
+                    // general comparison.
+                    match (a, b) {
+                        (mir.Operand.At(p), mir.Operand.Const(mir.Value.Char(ch))) => {
+                            if p.proj.len == 0 && is_boxed(self.reps[p.local]) {
+                                let l = p.local
+                                return "(L[{l}].tag == T_CHAR ? L[{l}].u.c {op} {ch as int}u : ktruth({self.rvalue(rv)?}))"
+                            }
+                        }
+                        _ => {}
+                    }
+                    match (self.known_int(a), self.known_int(b)) {
+                        (Some(x), Some(y)) => return "((i128)({x}) {op} (i128)({y}))"
+                        _ => {}
+                    }
+                    match (self.known_f64(a), self.known_f64(b)) {
+                        (Some(x), Some(y)) => return "({x} {op} {y})"
+                        _ => {}
+                    }
+                }
+            }
+            // The range stays where it is: only its upper bound is read.
+            mir.Rvalue.RangeHas(r, i) => {
+                if let Some(text_) = self.range_test("krange_has_int", r, i) { return text_ }
+            }
+            mir.Rvalue.RangeLast(r, i) => {
+                if let Some(text_) = self.range_test("krange_last_int", r, i) { return text_ }
+            }
+            _ => {}
+        }
+        "ktruth({self.rvalue(rv)?})"
+    }
+
+    fn range_test(self, helper: str, r: mir.Operand, i: mir.Operand) -> str? {
+        match r {
+            mir.Operand.At(p) => {
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) {
+                    if let Some(x) = self.known_int(i) { return Some("{helper}(&L[{p.local}], (i128)({x}))") }
+                }
+                None
+            }
+            _ => None
+        }
+    }
+
+    // The statement that gives a local its value.
+    fn assign(self, place: mir.Place, rv: mir.Rvalue) -> str ! Fail {
+        match self.rep(place) {
+            Rep.Int(k) => return "s{place.local} = {self.int_rvalue(rv, k)?};"
+            Rep.Bool => return "s{place.local} = {self.bool_rvalue(rv)?};"
+            Rep.F64 => return "s{place.local} = {self.f64_rvalue(rv)?};"
+            _ => {}
+        }
+        // A value of the machine goes into an array without being tagged.
+        match rv {
+            mir.Rvalue.Use(op) => {
+                if let Some(it) = self.item(place, true)? {
+                    if let Some(t) = self.known_bool(op) { return "kitem_set_bool({it.base}, {it.index}, {t});" }
+                    if let Some(x) = self.known_int(op) { return "kitem_set_int({it.base}, {it.index}, (i128)({x}));" }
+                    if let Some(x) = self.known_f64(op) { return "kitem_set_f64({it.base}, {it.index}, {x});" }
+                }
+                if let Some(fi) = self.field_item(place, true)? {
+                    if let Some(t) = self.known_bool(op) { return "kitem_field_set_bool({fi.base}, {fi.index}, {fi.field}, {t});" }
+                    if let Some(x) = self.known_int(op) { return "kitem_field_set_int({fi.base}, {fi.index}, {fi.field}, (i128)({x}));" }
+                    if let Some(x) = self.known_f64(op) { return "kitem_field_set_f64({fi.base}, {fi.index}, {fi.field}, {x});" }
+                }
+            }
+            _ => {}
+        }
+        let v = self.rvalue(rv)?
+        self.store(place, v)?
+    }
+
+    // Keeps a tagged value the runtime gave.
+    fn take(self, place: mir.Place, value: str) -> str ! Fail {
+        match self.rep(place) {
+            Rep.Int(k) => "s{place.local} = ({ctype(k)})({value}).u.i;"
+            Rep.Bool => "s{place.local} = ktruth({value});"
+            Rep.F64 => "s{place.local} = ({value}).u.f;"
+            _ => self.store(place, value)?
+        }
+    }
+
+    // A value of the machine, kept the given way, from an operand.
+    fn machine(self, r: Rep, op: mir.Operand) -> str ! Fail {
+        match r {
+            Rep.Int(k) => "({ctype(k)})({self.int(op)?})"
+            Rep.F64 => self.float(op)?
+            _ => self.truth(op)?
+        }
+    }
+
+    // Keeps a value of the machine a direct call gave.
+    fn take_machine(self, place: mir.Place, r: Rep, value: str) -> str ! Fail {
+        match (self.rep(place), r) {
+            (Rep.Int(k), Rep.Int(_)) => "s{place.local} = ({ctype(k)})({value});"
+            (Rep.Bool, Rep.Bool) => "s{place.local} = {value};"
+            (Rep.F64, Rep.F64) => "s{place.local} = {value};"
+            _ => self.take(place, tagged(r, value))?
+        }
+    }
+
+    // A local as a tagged value.
+    fn boxed(self, l: int) -> str {
+        match self.reps[l] {
+            Rep.Int(_) => "kint((i128)s{l})"
+            Rep.Bool => "kbool(s{l})"
+            Rep.F64 => "kf64(s{l})"
+            _ => "L[{l}]"
+        }
+    }
+}
+
+// The smallest and the largest value of a machine kind.
+fn low_of(k: str) -> i128 {
+    if text.starts_with(k, "u") { return 0 }
+    0 - pow2(kind_bits(k) - 1)
+}
+
+fn high_of(k: str) -> i128 {
+    if text.starts_with(k, "u") { return pow2(kind_bits(k)) - 1 }
+    pow2(kind_bits(k) - 1) - 1
+}
+
+// The C declaration of the version of a function for the machine.
+fn direct_head(i: int, params: [Rep], ret: Rep) -> str {
+    var ps: [str] = []
+    for l in 0..params.len { ps.push("{rep_type(params[l])} s{l}") }
+    let inside = if ps.len == 0 { "void" } else { text.join(ps, ", ") }
+    "static {rep_type(ret)} g{i}({inside})"
+}
+
+// ---- functions and the whole file ----
+
+fn line(out: mut [str], s: str) {
+    out.push(s)
+    out.push("\n")
+}
+
+fn find_back(writeback: [mir.Writeback], k: int) -> int {
+    for i in 0..(writeback.len as int) {
+        if writeback[i].arg == k { return i }
+    }
+    -1
+}
+
+fn safe_name(name: str) -> str {
+    let cs = text.chars(name)
+    var out: [char] = []
+    for k in 0..cs.len {
+        out.push(cs[k])
+        // The end of a comment cannot be inside one.
+        if cs[k] == '*' && k + 1 < cs.len && cs[k + 1] == '/' { out.push(' ') }
+    }
+    text.from_chars(out)
+}
+
+fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.Extern], direct: [Direct?]) -> bool ! Fail {
+    let cx = Cx(infer(f, fns), spent(f))
+    var n = f.locals
+    if n < 1 { n = 1 }
+    let mine = direct[i]
+    var is_direct = false
+    var my_ret = Rep.Boxed
+    var my_params: [Rep] = []
+    if let Some(d) = mine {
+        is_direct = true
+        my_ret = d.ret
+        my_params = d.params
+    }
+    // The name of the function in the program, for whoever reads the C.
+    line(mut out, "/* {safe_name(f.name)} */")
+    if is_direct {
+        line(mut out, "{direct_head(i, my_params, my_ret)} {{")
+    } else {
+        line(mut out, "static kv f{i}(kv *a, kv env) {{")
+    }
+    line(mut out, "    kv L[{n}];")
+    for l in 0..(cx.reps.len as int) {
+        if l < f.params && is_direct { continue }
+        match cx.reps[l] {
+            Rep.Int(k) => {
+                if l < f.params {
+                    line(mut out, "    {ctype(k)} s{l} = ({ctype(k)})a[{l}].u.i;")
+                } else {
+                    line(mut out, "    {ctype(k)} s{l} = 0;")
+                }
+            }
+            Rep.Bool => {
+                if l < f.params {
+                    line(mut out, "    bool s{l} = a[{l}].u.t;")
+                } else {
+                    line(mut out, "    bool s{l} = false;")
+                }
+            }
+            Rep.F64 => {
+                if l < f.params {
+                    line(mut out, "    double s{l} = a[{l}].u.f;")
+                } else {
+                    line(mut out, "    double s{l} = 0;")
+                }
+            }
+            _ => {}
+        }
+    }
+    line(mut out, "    kenter();")
+    if !is_direct { line(mut out, "    (void)env;") }
+    // The places of the locals of the machine stay empty, so that letting
+    // go of them costs nothing.
+    for l in 0..n {
+        if l < (cx.reps.len as int) {
+            if !is_boxed(cx.reps[l]) { continue }
+        }
+        var init = "KUNIT"
+        if l < f.params {
+            // Lent by the caller: it is not let go of here.
+            if is_direct { init = "s{l}" } else { init = "a[{l}]" }
+        }
+        line(mut out, "    L[{l}] = {init};")
+    }
+    line(mut out, "    goto b0;")
+    for b in 0..(f.blocks.len as int) {
+        let block = f.blocks[b]
+        line(mut out, "b{b}:;")
+        // Nothing inside a block moves the position but the block itself.
+        var at_line = -1
+        var at_col = -1
+        for st in block.stmts {
+            if st.at.line != at_line || st.at.col != at_col {
+                at_line = st.at.line
+                at_col = st.at.col
+                line(mut out, "    KL({at_line}, {mark_of(i, at_col)});")
+            }
+            match st.rv {
+                mir.Rvalue.Format(parts) => {
+                    line(mut out, "    {{")
+                    line(mut out, "        ksb sb = {{0}};")
+                    for part in parts {
+                        match part {
+                            mir.FmtPart.Lit(s) => line(mut out, "        ksb_lit(&sb, {quote(s)}, {byte_len(s)});")
+                            mir.FmtPart.Val(op) => line(mut out, "        ksb_val(&sb, {cx.operand(op)?});")
+                        }
+                    }
+                    line(mut out, "        {cx.take(st.place, "ksb_done(&sb)")?}")
+                    line(mut out, "    }}")
+                }
+                _ => line(mut out, "    {cx.assign(st.place, st.rv)?}")
+            }
+        }
+        if block.at.line != at_line || block.at.col != at_col { line(mut out, "    KL({block.at.line}, {mark_of(i, block.at.col)});") }
+        match block.term {
+            mir.Term.Goto(t) => line(mut out, "    goto b{t};")
+            mir.Term.Branch(c, yes, no) => line(mut out, "    if ({cx.truth(c)?}) goto b{yes}; else goto b{no};")
+            mir.Term.Call(callee, args, writeback, dest, next) => {
+                line(mut out, "    {{")
+                var fast = false
+                var target = -1
+                match callee {
+                    mir.Callee.Fn(g) => {
+                        if let Some(d) = direct[g] {
+                            if d.params.len == args.len {
+                                fast = true
+                                target = g
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if fast {
+                    var params: [Rep] = []
+                    var ret = Rep.Boxed
+                    if let Some(d) = direct[target] {
+                        params = d.params
+                        ret = d.ret
+                    }
+                    var values: [str] = []
+                    var temps: [int] = []
+                    // Temporaries only this call reads: let go of after it.
+                    var done: [int] = []
+                    for k in 0..(args.len as int) {
+                        let a = args[k]
+                        if is_boxed(params[k]) {
+                            var lent = false
+                            match a {
+                                mir.Operand.At(p) => {
+                                    // A tagged local is lent as it is.
+                                    if p.proj.len == 0 && is_boxed(cx.reps[p.local]) {
+                                        lent = true
+                                        values.push("L[{p.local}]")
+                                        if cx.spent[p.local] { done.push(p.local) }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            if !lent {
+                                line(mut out, "        kv t{k} = {cx.operand(a)?};")
+                                values.push("t{k}")
+                                temps.push(k)
+                            }
+                        } else {
+                            values.push(cx.machine(params[k], a)?)
+                        }
+                    }
+                    line(mut out, "        {rep_type(ret)} r = g{target}({text.join(values, ", ")});")
+                    for k in temps { line(mut out, "        krelease(t{k});") }
+                    for l in done { line(mut out, "        kset(&L[{l}], KUNIT);") }
+                    line(mut out, "        {cx.take_machine(dest, ret, "r")?}")
+                    line(mut out, "    }}")
+                    line(mut out, "    goto b{next};")
+                    continue
+                }
+                match callee {
+                    mir.Callee.Print => {
+                        var shown = "KUNIT"
+                        if args.len > 0 { shown = cx.operand(args[0])? }
+                        line(mut out, "        kv r = kprint({shown});")
+                    }
+                    mir.Callee.Panic => {
+                        var shown = "KUNIT"
+                        if args.len > 0 { shown = cx.operand(args[0])? }
+                        line(mut out, "        kv r = kpanic_with({shown});")
+                    }
+                    mir.Callee.Extern(x) => {
+                        let ext = externs[x]
+                        var parts: [str] = []
+                        for k in 0..(args.len as int) {
+                            if k >= (ext.params.len as int) { break }
+                            let v = cx.operand(args[k])?
+                            let t = ext.params[k]
+                            if t == "bool" {
+                                parts.push("({v}).u.t")
+                            } else {
+                                if t == "f64" {
+                                    parts.push("({v}).u.f")
+                                } else {
+                                    if t == "f32" {
+                                        parts.push("({v}).u.g")
+                                    } else {
+                                        parts.push("({c_int(t)})({v}).u.i")
+                                    }
+                                }
+                            }
+                        }
+                        let call = "{ext.name}({text.join(parts, ", ")})"
+                        var r = "kint((i128)({call}))"
+                        if ext.ret == "unit" { r = "({call}, KUNIT)" }
+                        if ext.ret == "bool" { r = "kbool({call})" }
+                        if ext.ret == "f64" { r = "kf64({call})" }
+                        if ext.ret == "f32" { r = "kf32({call})" }
+                        line(mut out, "        kv r = {r};")
+                    }
+                    mir.Callee.Native(name) => {
+                        var parts: [str] = []
+                        for a in args { parts.push(cx.operand(a)?) }
+                        line(mut out, "        kv r = k{dots_to_underscores(name)}({text.join(parts, ", ")});")
+                    }
+                    _ => {
+                        // A `mut` argument is moved out of its place for
+                        // the call and put back after it: were it only
+                        // copied, the first write of what is called would
+                        // find the value shared and copy all of it. The
+                        // other arguments are read first, since they may
+                        // read what is moved.
+                        let count = args.len as int
+                        var parts: [str] = []
+                        var lent: [bool] = []
+                        for k in 0..count {
+                            var taken: str? = None
+                            let w = find_back(writeback, k)
+                            if w >= 0 {
+                                match args[k] {
+                                    mir.Operand.At(p) => {
+                                        if p == writeback[w].place { taken = cx.moved(p) }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            match taken {
+                                Some(t) => {
+                                    parts.push(t)
+                                    lent.push(true)
+                                }
+                                None => {
+                                    parts.push("")
+                                    lent.push(false)
+                                }
+                            }
+                        }
+                        for k in 0..count {
+                            if lent[k] { continue }
+                            var part = ""
+                            var given = false
+                            match args[k] {
+                                mir.Operand.At(p) => {
+                                    if p.proj.len == 0 && is_boxed(cx.reps[p.local]) && cx.spent[p.local] {
+                                        part = "ktake(&L[{p.local}])"
+                                        given = true
+                                    }
+                                }
+                                _ => {}
+                            }
+                            if !given { part = cx.operand(args[k])? }
+                            parts[k] = part
+                        }
+                        var names: [str] = []
+                        for k in 0..count {
+                            line(mut out, "        kv t{k} = {parts[k]};")
+                            names.push("t{k}")
+                        }
+                        let init = if count == 0 { "KUNIT" } else { text.join(names, ", ") }
+                        let size = if count == 0 { 1 } else { count }
+                        line(mut out, "        kv A[{size}] = {{{init}}};")
+                        match callee {
+                            mir.Callee.Fn(g) => line(mut out, "        kv r = f{g}(A, KUNIT);")
+                            mir.Callee.Indirect(op) => line(mut out, "        kv r = kcall({cx.operand(op)?}, A);")
+                            _ => {}
+                        }
+                        // What was called left the last values of its parameters in `A`.
+                        for k in 0..count {
+                            let w = find_back(writeback, k)
+                            if w >= 0 {
+                                line(mut out, "        {cx.take(writeback[w].place, "A[{k}]")?}")
+                            } else {
+                                line(mut out, "        krelease(A[{k}]);")
+                            }
+                        }
+                    }
+                }
+                line(mut out, "        {cx.take(dest, "r")?}")
+                line(mut out, "    }}")
+                line(mut out, "    goto b{next};")
+            }
+            mir.Term.Return(op) => {
+                line(mut out, "    {{")
+                if is_direct && !is_boxed(my_ret) {
+                    line(mut out, "        {rep_type(my_ret)} r = {cx.machine(my_ret, op)?};")
+                } else {
+                    line(mut out, "        kv r = {cx.operand(op)?};")
+                }
+                for l in 0..n {
+                    if l < f.params && is_direct { continue }
+                    if l < f.params {
+                        line(mut out, "        a[{l}] = {cx.boxed(l)};")
+                    } else {
+                        if l < (cx.reps.len as int) {
+                            if is_boxed(cx.reps[l]) { line(mut out, "        krelease(L[{l}]);") }
+                        }
+                    }
+                }
+                line(mut out, "        return r;")
+                line(mut out, "    }}")
+            }
+            mir.Term.Panic(msg) => line(mut out, "    kpanic({quote(msg)});")
+            mir.Term.Unreachable => line(mut out, "    kinternal(\"reached a block that has no terminator\");")
+        }
+    }
+    if is_direct {
+        let last = if is_boxed(my_ret) { "KUNIT" } else { "0" }
+        line(mut out, "    return {last};")
+        line(mut out, "}}")
+        line(mut out, "")
+        // The tagged way in, for calls through a function value.
+        var unboxed: [str] = []
+        for l in 0..my_params.len {
+            match my_params[l] {
+                Rep.Int(k) => unboxed.push("({ctype(k)})a[{l}].u.i")
+                Rep.F64 => unboxed.push("a[{l}].u.f")
+                Rep.Boxed => unboxed.push("a[{l}]")
+                _ => unboxed.push("a[{l}].u.t")
+            }
+        }
+        line(mut out, "static kv f{i}(kv *a, kv env) {{")
+        line(mut out, "    (void)env;")
+        line(mut out, "    (void)a;")
+        let inner = "g{i}({text.join(unboxed, ", ")})"
+        line(mut out, "    return {tagged(my_ret, inner)};")
+        line(mut out, "}}")
+        line(mut out, "")
+    } else {
+        line(mut out, "    return KUNIT;")
+        line(mut out, "}}")
+        line(mut out, "")
+    }
+    true
+}
+
+// What tells the runtime where the program is: the function and the column.
+fn mark_of(i: int, col: int) -> int {
+    var c = col
+    if c > 4095 { c = 4095 }
+    ((i + 1) << 12) | c
+}
+
+fn dots_to_underscores(s: str) -> str {
+    var out: [char] = []
+    for ch in text.chars(s) {
+        if ch == '.' { out.push('_') } else { out.push(ch) }
+    }
+    text.from_chars(out)
+}
+
+// Each item followed by a comma, as the start of a C list that ends in a zero.
+fn listed(items: [str]) -> str {
+    var out: [str] = []
+    for s in items {
+        out.push(s)
+        out.push(", ")
+    }
+    text.concat(out)
+}
+
+// The C source of a program. `paths` are the files of its modules, which
+// panics report; the first is the one of the program itself. `runtime`
+// is the text of `runtime.c`.
+pub fn emit(p: mir.Program, paths: [str], runtime: str) -> str ! Fail {
+    let path = if paths.len > 0 { paths[0] } else { "program" }
+    var main = -1
+    if let Some(m) = p.main {
+        if p.fns[m].params == 0 { main = m }
+    }
+    if main < 0 { return Fail("the program has no `main` function without parameters") }
+    var out: [str] = []
+    line(mut out, "/* Generated by mou from {path}. */")
+    line(mut out, "static const char *const KFILE = {quote(path)};")
+    var files: [str] = []
+    for q in paths { files.push(quote(q)) }
+    line(mut out, "static const char *const KFILES[] = {{{text.join(files, ", ")}}};")
+    // Entry 0 is where the program is before its first statement.
+    var funcs: [str] = []
+    funcs.push(quote("main"))
+    for f in p.fns { funcs.push(quote(f.name)) }
+    line(mut out, "static const char *const KFUNCS[] = {{{text.join(funcs, ", ")}}};")
+    line(mut out, "enum {{ KFILE_COUNT = {paths.len}, KFILE_SHIFT = 20 }};")
+    // The structs an array keeps in line, and how it keeps each field.
+    var rec_k: [str] = []
+    var rec_n: [str] = []
+    for i in 0..p.records.len {
+        let kinds = p.records[i]
+        if kinds.len > 0 {
+            var ks: [str] = []
+            for k in kinds { ks.push("{k}") }
+            line(mut out, "static const signed char KR{i}[] = {{{text.join(ks, ", ")}}};")
+            rec_k.push("KR{i}")
+        } else {
+            rec_k.push("0")
+        }
+        rec_n.push("{kinds.len}")
+    }
+    line(mut out, "static const signed char *const KREC_K[] = {{{listed(rec_k)}0}};")
+    line(mut out, "static const int KREC_N[] = {{{listed(rec_n)}0}};")
+    line(mut out, "enum {{ KREC_COUNT = {p.records.len} }};")
+    var struct_names: [str] = []
+    var struct_fields: [str] = []
+    for i in 0..p.structs.len {
+        var fields: [str] = []
+        for f in p.structs[i].fields { fields.push(quote(f)) }
+        line(mut out, "static const char *const KSF{i}[] = {{{listed(fields)}0}};")
+        struct_names.push(quote(p.structs[i].name))
+        struct_fields.push("KSF{i}")
+    }
+    line(mut out, "static const char *const KSTRUCT_NAME[] = {{{listed(struct_names)}0}};")
+    line(mut out, "static const char *const *const KSTRUCT_FIELDS[] = {{{listed(struct_fields)}0}};")
+    var enum_variants: [str] = []
+    var enum_fields: [str] = []
+    for e in 0..p.enums.len {
+        let variants = p.enums[e].variants
+        var names: [str] = []
+        var tables: [str] = []
+        for v in 0..variants.len {
+            var fs: [str] = []
+            for f in variants[v].fields {
+                match f {
+                    Some(n) => fs.push(quote(n))
+                    None => fs.push("0")
+                }
+            }
+            line(mut out, "static const char *const KEF{e}_{v}[] = {{{listed(fs)}0}};")
+            names.push(quote(variants[v].name))
+            tables.push("KEF{e}_{v}")
+        }
+        line(mut out, "static const char *const KEV{e}[] = {{{listed(names)}0}};")
+        line(mut out, "static const char *const *const KEF{e}[] = {{{listed(tables)}0}};")
+        enum_variants.push("KEV{e}")
+        enum_fields.push("KEF{e}")
+    }
+    line(mut out, "static const char *const *const KENUM_VARIANTS[] = {{{listed(enum_variants)}0}};")
+    line(mut out, "static const char *const *const *const KENUM_FIELDS[] = {{{listed(enum_fields)}0}};")
+    var fn_names: [str] = []
+    var fn_table: [str] = []
+    for i in 0..p.fns.len {
+        fn_names.push(quote(p.fns[i].name))
+        fn_table.push("f{i}")
+    }
+    line(mut out, "static const char *const KFN_NAME[] = {{{listed(fn_names)}0}};")
+    line(mut out, "")
+    out.push(runtime)
+    var headers: [str] = []
+    for x in p.externs { headers.push(x.header) }
+    for i in 1..headers.len {
+        var k = i
+        while k > 0 && headers[k] < headers[k - 1] {
+            let moved = headers[k]
+            headers[k] = headers[k - 1]
+            headers[k - 1] = moved
+            k -= 1
+        }
+    }
+    var before = ""
+    var first = true
+    for h in headers {
+        if !first && h == before { continue }
+        first = false
+        before = h
+        line(mut out, "#include \"{h}\"")
+    }
+    line(mut out, "")
+    line(mut out, "/* ---- the program ---- */")
+    line(mut out, "")
+    let consts = if p.consts.len == 0 { 1 } else { p.consts.len as int }
+    line(mut out, "static kv KC[{consts}];")
+    for i in 0..p.fns.len { line(mut out, "static kv f{i}(kv *a, kv env);") }
+    line(mut out, "static kv (*const KFN[])(kv *, kv) = {{{listed(fn_table)}0}};")
+    line(mut out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}")
+    line(mut out, "")
+    var direct: [Direct?] = []
+    for f in p.fns { direct.push(direct_sig(f, p.fns)) }
+    for i in 0..(direct.len as int) {
+        if let Some(d) = direct[i] { line(mut out, "{direct_head(i, d.params, d.ret)};") }
+    }
+    for i in 0..(p.fns.len as int) {
+        let f = p.fns[i]
+        let _ = function(mut out, i, f, p.fns, p.externs, direct) catch e { return Fail("{f.name}: {e.msg}") }
+    }
+    line(mut out, "int main(int argc, char **argv) {{")
+    line(mut out, "    char base;")
+    line(mut out, "    kargc = argc;")
+    line(mut out, "    kargv = argv;")
+    line(mut out, "    kv A[1] = {{KUNIT}};")
+    line(mut out, "    kstack_base = &base;")
+    for k in 0..p.consts.len { line(mut out, "    KC[{k}] = f{p.consts[k]}(A, KUNIT);") }
+    line(mut out, "    int status = kfinish(f{main}(A, KUNIT));")
+    line(mut out, "    for (int i = 0; i < {p.consts.len}; i++) krelease(KC[i]);")
+    line(mut out, "    return status;")
+    line(mut out, "}}")
+    // The text ends without a line of its own after the last one.
+    let _ = out.pop()
+    text.concat(out)
+}
