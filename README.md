@@ -44,7 +44,16 @@ El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIG
 
 ## Compilar y probar
 
-Hace falta Rust y un compilador de C (`cc`).
+Hay dos caminos, y dan el mismo compilador.
+
+Solo con un compilador de C (`cc`), a partir del compilador escrito en Mou:
+
+```sh
+./bootstrap.sh
+./mouc c examples/tour.mou std src/runtime.c > tour.c && cc -O2 -o tour tour.c -lm && ./tour
+```
+
+Con Rust, que además trae el intérprete (`mou run`), la sesión interactiva, el formateador y los tests:
 
 ```sh
 cargo build --release

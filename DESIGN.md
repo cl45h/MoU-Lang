@@ -305,9 +305,9 @@ fuente -> lexer/parser -> AST
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Pendiente: parámetros `comptime`, tipos como valores e `info(T)` |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números y `bool`. Pendiente: leer el header (vía libclang), strings, punteros, structs con layout de C y callbacks |
 | M8 | Backend LLVM, SIMD, `soa` |
-| M9 | `import cpp`, `import py`, autoalojamiento del compilador. Empezado: el lexer, el parser y el cargador de módulos ya están escritos en Mou (`compiler/`) y dan lo mismo que los de Rust. Faltan el verificador, el MIR y el emisor de C |
+| M9 | Autoalojamiento del compilador: hecho. El compilador entero está escrito en Mou (`compiler/`), da el mismo C que el de Rust y se compila a sí mismo; `./bootstrap.sh` lo construye solo con un compilador de C, a partir de `seed/mouc.c.gz`. Pendiente: `import cpp`, `import py` |
 
-Implementación inicial del compilador: Rust (seguro, buen ecosistema para compiladores), hasta que Mou pueda compilarse a sí mismo.
+Hay dos implementaciones del compilador que dan lo mismo: la primera, en Rust (`src/`), y la escrita en Mou (`compiler/`), que se compila a sí misma. Los tests exigen que coincidan etapa por etapa, así que cada cambio del lenguaje se hace en las dos.
 
 ---
 
@@ -463,6 +463,8 @@ El generador cubre: enteros de siete tipos con todas las operaciones (las que co
 Lo que encontró hasta ahora: un literal más grande que su tipo dentro de una operación que satura o da la vuelta se calculaba distinto en el intérprete y en el binario. Ahora es un error de compilación.
 
 ### El compilador escrito en Mou
+
+Para construirlo sin Rust: `./bootstrap.sh`. Compila la semilla (`seed/mouc.c.gz`, el compilador ya pasado a C por sí mismo), con ella compila los fuentes de `compiler/`, compila el resultado y comprueba que ese segundo compilador vuelve a escribir el mismo C. Deja el binario en `./mouc`. `./reseed.sh` vuelve a escribir la semilla; hace falta cuando el compilador empieza a usar algo del lenguaje que la semilla anterior no entiende.
 
 La meta es que Mou se compile a sí mismo. Se hace por etapas, y cada etapa se da por buena cuando produce exactamente lo mismo que su par de Rust sobre todos los archivos `.mou` del proyecto.
 
