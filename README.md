@@ -31,6 +31,7 @@ fn main() ! io.Error {
 - Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
 - Constantes y expresiones `comptime` calculadas al compilar.
 - Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
+- Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
 - Herramientas: `mou test`, `mou fmt`, `mou repl`, `mou effects` y `mou fuzz`.
 - El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
@@ -41,12 +42,12 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 
 - Rendimiento parejo con C: hoy iguala en bucles y cálculo numérico, pero es varias veces más lento donde hay structs y enums, porque todavía no tienen layout propio.
 - Referencias guardadas en structs y regiones explícitas.
-- Concurrencia.
+- Canales y exclusión mutua entre tareas (lanzar tareas y esperar su resultado ya se puede).
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.
 - Parámetros `comptime`, tipos como valores y reflexión.
 - Structs con layout de C, buffers y callbacks en las llamadas a C (números, `bool`, strings y punteros opacos ya se pueden), y leer los headers en vez de declarar las funciones a mano.
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
-- Los bloques `scope` y `with`, que son parte de las regiones y del contexto: se leen, pero el compilador avisa que no los soporta.
+- Los bloques `with`, que son parte del contexto: se leen, pero el compilador avisa que no los soporta.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).
 

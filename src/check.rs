@@ -47,6 +47,8 @@ pub enum Ty {
     Param(String),
     /// `dyn Trait`: a value of any type that implements the trait.
     Dyn(usize, Vec<Ty>),
+    /// What `spawn` gives: a task whose result has this type.
+    Task(Box<Ty>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -734,6 +736,7 @@ fn plain_text(t: &Ty) -> String {
         Slice(t) => format!("[{}]", text(t)),
         Array(t) => format!("[{}; _]", text(t)),
         Range(t) => format!("range {}", text(t)),
+        Task(t) => format!("task {}", text(t)),
         Optional(t) => format!("{}?", text(t)),
         Result(t, e) => format!("{} ! {}", text(t), text(e)),
         Param(n) => format!("'{n}"),
@@ -852,7 +855,7 @@ fn same(a: &Ty, b: &Ty) -> bool {
         (Never | Unknown, _) | (_, Never | Unknown) => true,
         (Struct(i, x), Struct(j, y)) | (Enum(i, x), Enum(j, y)) => i == j && same_args(x, y),
         (Tuple(x), Tuple(y)) => same_args(x, y),
-        (Slice(x), Slice(y)) | (Array(x), Array(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) => same(x, y),
+        (Slice(x), Slice(y)) | (Array(x), Array(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) | (Task(x), Task(y)) => same(x, y),
         (Result(x, e), Result(y, f)) => same(x, y) && same(e, f),
         _ => a == b,
     }
@@ -890,7 +893,7 @@ fn open(t: &Ty) -> bool {
     match t {
         Never | Unknown => true,
         Struct(_, ts) | Enum(_, ts) | Tuple(ts) => ts.iter().any(open),
-        Slice(t) | Array(t) | Range(t) | Optional(t) => open(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) => open(t),
         Result(t, e) => open(t) || open(e),
         _ => false,
     }
@@ -914,6 +917,7 @@ fn concretize(t: &Ty) -> Ty {
         Slice(t) => Slice(Box::new(concretize(t))),
         Array(t) => Array(Box::new(concretize(t))),
         Range(t) => Range(Box::new(concretize(t))),
+        Task(t) => Task(Box::new(concretize(t))),
         Optional(t) => Optional(Box::new(concretize(t))),
         Struct(i, ts) => Struct(*i, ts.iter().map(concretize).collect()),
         Enum(i, ts) => Enum(*i, ts.iter().map(concretize).collect()),
@@ -931,6 +935,7 @@ pub fn subst(t: &Ty, env: &HashMap<String, Ty>) -> Ty {
         Slice(t) => Slice(b(t)),
         Array(t) => Array(b(t)),
         Range(t) => Range(b(t)),
+        Task(t) => Task(b(t)),
         Optional(t) => Optional(b(t)),
         Result(t, e) => Result(b(t), b(e)),
         Fn(sig) => Fn(Box::new(subst_sig(sig, env))),
@@ -967,7 +972,7 @@ fn bind(pat: &Ty, actual: &Ty, env: &mut HashMap<String, Ty>) {
         (Struct(i, ps), Struct(j, ts)) | (Enum(i, ps), Enum(j, ts)) | (Dyn(i, ps), Dyn(j, ts)) if i == j => {
             ps.iter().zip(ts).for_each(|(p, t)| bind(p, t, env))
         }
-        (Slice(p) | Array(p), Slice(t) | Array(t)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) => bind(p, t, env),
+        (Slice(p) | Array(p), Slice(t) | Array(t)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) | (Task(p), Task(t)) => bind(p, t, env),
         (Optional(p), t) => bind(p, t, env),
         (Result(p, pe), Result(t, te)) => {
             bind(p, t, env);
@@ -1014,7 +1019,7 @@ fn undecided(t: &Ty) -> bool {
     match t {
         Struct(_, ts) | Enum(_, ts) => ts.iter().any(open),
         Tuple(ts) => ts.iter().any(undecided),
-        Slice(t) | Array(t) | Range(t) | Optional(t) => undecided(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) => undecided(t),
         Result(t, e) => undecided(t) || undecided(e),
         _ => false,
     }
@@ -1026,7 +1031,7 @@ fn concrete(t: &Ty) -> bool {
     match t {
         Param(_) | Unknown => false,
         Tuple(ts) | Struct(_, ts) | Enum(_, ts) | Dyn(_, ts) => ts.iter().all(concrete),
-        Slice(t) | Array(t) | Range(t) | Optional(t) => concrete(t),
+        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) => concrete(t),
         Result(t, e) => concrete(t) && concrete(e),
         Fn(sig) => sig.params.iter().all(|p| concrete(&p.ty)) && concrete(&sig.ret),
         _ => true,
@@ -1534,6 +1539,7 @@ impl<'a> Checker<'a> {
             Slice(t) => format!("[{}]", self.show(t)),
             Array(t) => format!("[{}; _]", self.show(t)),
             Range(t) => format!("range of {}", self.show(t)),
+            Task(t) => format!("Task[{}]", self.show(t)),
             Optional(t) if matches!(**t, Never) => "None".into(),
             Optional(t) => format!("{}?", self.show(t)),
             Result(t, e) => format!("{} ! {}", self.show(t), self.show(e)),
@@ -2657,6 +2663,28 @@ impl<'a> Checker<'a> {
         self.construct(e, Res::StructCtor(i), owner, &tparams, fields, explicit, hint, args, span)
     }
 
+    /// `s.spawn(e)`: `e` is what the task runs. It is checked as the body of
+    /// a closure, so it reads the variables around it and cannot change them.
+    fn spawn(&mut self, e: &Expr, args: &[Arg], span: Span) -> Ty {
+        let [arg] = args else {
+            self.args_unchecked(args);
+            self.err(span, "`spawn` takes one expression: what the task runs");
+            return Ty::Unknown;
+        };
+        self.closures.push(self.scopes.len());
+        self.scopes.push(HashMap::new());
+        self.ctx.push(FnCtx { ret: Ty::Unknown, err: None, loops: Vec::new(), by_ref: false });
+        let t = self.expr(&arg.value);
+        self.ctx.pop();
+        self.scopes.pop();
+        self.closures.pop();
+        self.res.insert((self.inst, id(e)), Res::Builtin("task.spawn"));
+        Ty::Task(Box::new(match concretize(&t) {
+            Ty::Never => Ty::Unit,
+            t => t,
+        }))
+    }
+
     /// The methods the language itself gives to `[T]`.
     fn array_method(&mut self, e: &Expr, base: &Expr, bt: &Ty, name: &str, args: &[Arg], span: Span) -> Ty {
         let elem = match bt {
@@ -2779,6 +2807,8 @@ impl<'a> Checker<'a> {
                 self.err(span, format!("`{name}` is a trait, not a type (use `dyn {name}`)"));
                 return Ty::Unknown;
             }
+            // `Task[T]` is what `spawn` gives, unless the program declares its own.
+            _ if name == "Task" && args.len() == 1 => return Ty::Task(Box::new(args[0].clone())),
             _ => {
                 self.err(span, format!("unknown type `{name}`"));
                 return Ty::Unknown;
@@ -3905,8 +3935,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Scope { name, body } => {
                 self.scopes.push(HashMap::new());
-                let t = self.skip();
-                self.declare(name, t, false);
+                self.declare(name, Ty::Builtin("scope"), false);
                 let t = self.block(body);
                 self.scopes.pop();
                 t
@@ -4670,6 +4699,16 @@ impl<'a> Checker<'a> {
                     }
                     Ty::Slice(_) | Ty::Array(_) if matches!(name.as_str(), "push" | "pop" | "get") => {
                         self.array_method(e, base, &bt, name, args, span)
+                    }
+                    Ty::Builtin("scope") if name == "spawn" => self.spawn(e, args, span),
+                    Ty::Task(t) if name == "wait" => {
+                        self.res.insert((self.inst, id(e)), Res::Builtin("task.wait"));
+                        self.apply(&Sig { params: Vec::new(), ret: (**t).clone() }, args, span)
+                    }
+                    Ty::Builtin("scope") | Ty::Task(_) => {
+                        self.args_unchecked(args);
+                        self.err(span, format!("type `{}` has no method `{name}`", self.show(&bt)));
+                        Ty::Unknown
                     }
                     // Other methods of built-in types are not defined yet.
                     _ => {

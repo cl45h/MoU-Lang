@@ -879,6 +879,26 @@ impl Walk<'_> {
                                 notes.push((PANIC, "this number is not proved to be a character".into()));
                             }
                         }
+                        if *name == "task.spawn" {
+                            notes.push((ALLOC, "`spawn` creates the task on the heap".into()));
+                            // What the task does counts as done here: its
+                            // closure is made in this block, right before.
+                            let run = args.first().and_then(|a| match a {
+                                Operand::Place(p) => block.stmts.iter().rev().find_map(|s| match &s.rv {
+                                    Rvalue::Closure(f, _) if s.place == *p => Some(*f),
+                                    _ => None,
+                                }),
+                                Operand::Const(_) => None,
+                            });
+                            match run {
+                                Some(f) => {
+                                    if let Some(found) = &mut found {
+                                        found.calls.push((block.span, f));
+                                    }
+                                }
+                                None => notes.push((ALLOC | PANIC | IO, "a task is started here, and what it does is not known".into())),
+                            }
+                        }
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
                         }

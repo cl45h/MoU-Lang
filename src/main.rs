@@ -383,7 +383,7 @@ fn build_file(path: &str, src: &str, print: bool, output: Option<String>, libs: 
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     // `CFLAGS` replaces the default `-O2`: `-O1` builds a large program much faster.
     let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O2".to_string());
-    match std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-o", &output, &c_path, "-lm"]).args(libs).status() {
+    match std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-pthread", "-o", &output, &c_path, "-lm"]).args(libs).status() {
         Ok(status) if status.success() => {
             println!("built {output} (C source in {c_path})");
             ExitCode::SUCCESS

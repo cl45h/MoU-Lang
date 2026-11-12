@@ -562,6 +562,7 @@ impl Checker {
             types.Ty.Slice(x) => "[{self.show(x)}]"
             types.Ty.Array(x) => "[{self.show(x)}; _]"
             types.Ty.Range(x) => "range of {self.show(x)}"
+            types.Ty.Task(x) => "Task[{self.show(x)}]"
             types.Ty.Optional(x) => {
                 if is_never(x) { return "None" }
                 "{self.show(x)}?"
@@ -883,6 +884,8 @@ impl Checker {
                 return types.Ty.Unknown
             }
             _ => {
+                // `Task[T]` is what `spawn` gives, unless the program declares its own.
+                if name == "Task" && args.len == 1 { return types.Ty.Task(args[0]) }
                 self.err(at, "unknown type `{name}`")
                 return types.Ty.Unknown
             }
@@ -2375,6 +2378,27 @@ impl Checker {
         var own_args: [types.Ty] = []
         for n in tparams { own_args.push(types.Ty.Param(n)) }
         self.construct(e, Res.StructCtor(i), types.Ty.Struct(i, own_args), tparams, fields, explicit, hint, args, at)
+    }
+
+    // `s.spawn(e)`: `e` is what the task runs. It is checked as the body of
+    // a closure, so it reads the variables around it and cannot change them.
+    fn spawn(mut self, e: parser.Expr, args: [parser.Arg], at: Span) -> types.Ty {
+        if args.len != 1 {
+            self.args_unchecked(args)
+            self.err(at, "`spawn` takes one expression: what the task runs")
+            return types.Ty.Unknown
+        }
+        self.closures.push(self.scopes.len as int)
+        self.scopes.push([])
+        self.ctx.push(FnCtx(types.Ty.Unknown, None, [], false))
+        let t = self.expr(args[0].value)
+        let _ = self.ctx.pop()
+        let _ = self.scopes.pop()
+        let _ = self.closures.pop()
+        self.set_res(e, Res.Builtin("task.spawn"))
+        let c = types.concretize(t)
+        if is_never(c) { return types.Ty.Task(types.Ty.Unit) }
+        types.Ty.Task(c)
     }
 
     // The methods the language itself gives to `[T]`.
@@ -3956,8 +3980,7 @@ impl Checker {
             }
             parser.Kind.Scope(name, body) => {
                 self.scopes.push([])
-                let unknown = self.skip()
-                self.declare(name, unknown, false)
+                self.declare(name, types.Ty.Builtin("scope"), false)
                 let t = self.block(body)
                 let _ = self.scopes.pop()
                 t
@@ -5044,6 +5067,25 @@ impl Checker {
                 if name == "push" || name == "pop" || name == "get" { return self.array_method(e, base, bt, name, args, at) }
                 self.args_unchecked(args)
                 self.skip()
+            }
+            types.Ty.Builtin(k) => {
+                if k == "scope" {
+                    if name == "spawn" { return self.spawn(e, args, at) }
+                    self.args_unchecked(args)
+                    self.err(at, "type `{self.show(bt)}` has no method `{name}`")
+                    return types.Ty.Unknown
+                }
+                self.args_unchecked(args)
+                self.skip()
+            }
+            types.Ty.Task(t) => {
+                if name == "wait" {
+                    self.set_res(e, Res.Builtin("task.wait"))
+                    return self.apply(types.Sig([], t), args, at)
+                }
+                self.args_unchecked(args)
+                self.err(at, "type `{self.show(bt)}` has no method `{name}`")
+                types.Ty.Unknown
             }
             // Other methods of the types of the language are not defined yet.
             _ => {

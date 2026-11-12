@@ -641,6 +641,8 @@ fn num_of(t: &Ty) -> Num {
 struct Scope<'a> {
     vars: HashMap<String, Local>,
     defers: Vec<&'a Expr>,
+    /// The scope of a `scope` block: where its tasks are waited for on the way out.
+    tasks: Option<Local>,
 }
 
 struct LoopCtx {
@@ -1208,6 +1210,11 @@ impl<'a> Lower<'a> {
         if params.iter().any(|p| p.ty.is_none()) {
             return self.unsupported(span, "closures whose parameters have no type");
         }
+        self.closure_of(span, &sig.ret, params, Ok(body))
+    }
+
+    /// A closure of a block, or of the expression a task runs.
+    fn closure_of(&mut self, span: Span, ret: &Ty, params: &'a [Param], body: Result<&'a Block_, &'a Expr>) -> Operand {
         let saved = Saved {
             blocks: std::mem::take(&mut self.blocks),
             cur: self.cur,
@@ -1232,16 +1239,18 @@ impl<'a> Lower<'a> {
             self.declare(&p.name, l);
         }
         let nparams = self.locals;
-        (self.ret, self.err) = match &sig.ret {
-            Ty::Result(t, e) => ((**t).clone(), Some((**e).clone())),
-            other => (other.clone(), None),
+        (self.ret, self.err) = match (ret, body) {
+            (Ty::Result(t, e), Ok(_)) => ((**t).clone(), Some((**e).clone())),
+            (other, _) => (other.clone(), None),
         };
-        let t = self.block_ty(body);
-        let v = self.block(body);
+        let (t, v) = match body {
+            Ok(b) => (self.block_ty(b), self.block(b)),
+            Err(e) => (self.ty(e), self.expr(e)),
+        };
         let r = self.ret_value(v, &t);
         self.terminate(Term::Return(r));
         let captures = std::mem::take(&mut self.captures);
-        let func = self.finish("closure", nparams);
+        let func = self.finish(if body.is_ok() { "closure" } else { "task" }, nparams);
         (self.copies, self.decl_span) = outer;
         if let Some(saved) = self.stack.pop() {
             self.blocks = saved.blocks;
@@ -1268,6 +1277,10 @@ impl<'a> Lower<'a> {
     /// Emits the deferred expressions of every scope from `depth` outwards-in.
     fn run_defers(&mut self, depth: usize) {
         for k in (depth..self.scopes.len()).rev() {
+            if let Some(l) = self.scopes[k].tasks {
+                let span = self.span;
+                self.finish_call(Callee::Native("task.close"), vec![Operand::Place(Place::local(l))], Vec::new(), span);
+            }
             let defers = self.scopes[k].defers.clone();
             if defers.is_empty() {
                 continue;
@@ -2132,7 +2145,22 @@ impl<'a> Lower<'a> {
                 self.diverge(Term::Return(r))
             }
             ExprKind::Closure { params, body, .. } => self.closure(e, params, body),
-            ExprKind::Scope { .. } => self.unsupported(span, "`scope` blocks"),
+            ExprKind::Scope { name, body } => {
+                // Its tasks are waited for wherever the block is left.
+                self.scopes.push(Scope::default());
+                let opened = self.finish_call(Callee::Native("task.open"), Vec::new(), Vec::new(), span);
+                let l = self.temp();
+                self.set(l, opened);
+                self.declare(name, l);
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.tasks = Some(l);
+                }
+                let v = self.block(body);
+                self.span = span;
+                self.run_defers(self.scopes.len() - 1);
+                self.scopes.pop();
+                v
+            }
             ExprKind::With { .. } => self.unsupported(span, "`with` blocks"),
             ExprKind::Unary { op, expr } => {
                 let t = self.ty(expr);
@@ -2436,6 +2464,17 @@ impl<'a> Lower<'a> {
             Some(Res::Extern(x)) => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();
                 self.finish_call(Callee::Extern(*x), ops, Vec::new(), span)
+            }
+            Some(Res::Builtin("task.spawn")) => {
+                let Some(a) = args.first() else { return Operand::Const(Value::Unit) };
+                let Ty::Task(t) = self.ty(e) else { return self.unsupported(span, "this `spawn`") };
+                let run = self.closure_of(span, &t, &[], Err(&a.value));
+                self.finish_call(Callee::Native("task.spawn"), vec![run], Vec::new(), span)
+            }
+            Some(Res::Builtin("task.wait")) => {
+                let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
+                let task = self.expr(base);
+                self.finish_call(Callee::Native("task.wait"), vec![task], Vec::new(), span)
             }
             Some(Res::Builtin(name)) if name.contains('.') && *name != "io.print" => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();

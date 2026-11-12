@@ -1,0 +1,47 @@
+// What a task does counts for the function that starts it.
+import std.io
+
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n -% 1) +% fib(n -% 2) }
+}
+
+@noio
+@nopanic
+fn quiet() -> int {
+    scope s {
+        let a = s.spawn(fib(10))
+        let b = s.spawn(fib(11))
+        a.wait() +% b.wait()
+    }
+}
+
+@noio
+fn loud() -> int {
+    scope s {
+        let a = s.spawn(io.print("in a task") catch e {})
+        a.wait()
+        1
+    }
+}
+
+@noalloc
+fn frugal() -> int {
+    scope s {
+        let a = s.spawn(1)
+        a.wait()
+    }
+}
+
+@nopanic
+fn careless(xs: [int]) -> int {
+    scope s {
+        let a = s.spawn(xs[3])
+        a.wait()
+    }
+}
+
+let TOTAL: int = quiet()
+
+fn main() ! io.Error {
+    io.print("{TOTAL} {quiet()} {loud()} {frugal()} {careless([1, 2, 3, 4])}")?
+}

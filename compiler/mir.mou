@@ -411,7 +411,9 @@ fn num_of(t: types.Ty) -> Num {
 
 struct VarSlot { name: str, local: int }
 
-struct Scope { vars: [VarSlot], defers: [parser.Expr] }
+// `tasks`: for the scope of a `scope` block, the local of the scope, whose
+// tasks are waited for on the way out; -1 otherwise.
+struct Scope { vars: [VarSlot], defers: [parser.Expr], tasks: int }
 
 struct LoopCtx {
     brk: int
@@ -1214,6 +1216,11 @@ impl Lower {
                 None => return self.unsupported(at, "closures whose parameters have no type")
             }
         }
+        self.closure_of(at, sig.ret, params, Some(body), None)
+    }
+
+    // A closure of a block, or of the expression a task runs.
+    fn closure_of(mut self, at: check.Span, ret: types.Ty, params: [parser.Param], body: parser.Block?, single: parser.Expr?) -> Operand {
         self.suspend()
         let outer_copies = self.copies
         let outer_decl = self.decl_at
@@ -1224,22 +1231,36 @@ impl Lower {
             self.declare(p.name, l)
         }
         let nparams = self.locals
-        self.ret = sig.ret
+        self.ret = ret
         self.fails = None
-        match sig.ret {
-            types.Ty.Result(t, x) => {
-                self.ret = t
-                self.fails = Some(x)
+        var t = types.Ty.Unit
+        var v = unit()
+        match body {
+            Some(b) => {
+                match ret {
+                    types.Ty.Result(inner, x) => {
+                        self.ret = inner
+                        self.fails = Some(x)
+                    }
+                    _ => {}
+                }
+                t = self.block_ty(b)
+                v = self.block(b)
             }
-            _ => {}
+            None => {
+                if let Some(x) = single {
+                    t = self.ty(x)
+                    v = self.expr(x)
+                }
+            }
         }
-        let t = self.block_ty(body)
-        let v = self.block(body)
         let r = self.ret_value(v, t)
         self.terminate(Term.Return(r))
         let captures = self.captures
         self.captures = []
-        let func = self.finish("closure", nparams)
+        var kind = "task"
+        if let Some(_) = body { kind = "closure" }
+        let func = self.finish(kind, nparams)
         self.copies = outer_copies
         self.decl_at = outer_decl
         self.resume()
@@ -1255,6 +1276,11 @@ impl Lower {
     fn run_defers(mut self, depth: int) {
         var k = self.scopes.len as int - 1
         while k >= depth {
+            let tasks = self.scopes[k].tasks
+            if tasks >= 0 {
+                let here = self.at
+                let _ = self.finish_call(Callee.Native("task.close"), [local_op(tasks)], [], here)
+            }
             let defers = self.scopes[k].defers
             if defers.len > 0 {
                 // What is deferred only sees the names of its own scope.
@@ -1283,7 +1309,7 @@ impl Lower {
         self.blocks = []
         self.locals = 0
         self.scopes = []
-        self.scopes.push(Scope([], []))
+        self.scopes.push(Scope([], [], -1))
         self.loops = []
         self.at = at
         self.decl_at = at
@@ -1416,7 +1442,7 @@ impl Lower {
     // ---- statements ----
 
     fn block(mut self, b: parser.Block) -> Operand {
-        self.scopes.push(Scope([], []))
+        self.scopes.push(Scope([], [], -1))
         for s in b.stmts { self.stmt(s) }
         var v = unit()
         if let Some(e) = b.tail { v = self.expr(e) }
@@ -1628,7 +1654,7 @@ impl Lower {
                     let else_bb = self.new_block()
                     let end = self.new_block()
                     let res = self.temp()
-                    self.scopes.push(Scope([], []))
+                    self.scopes.push(Scope([], [], -1))
                     self.cond(cond, else_bb)
                     let tv = self.path_block(then)
                     let _ = self.scopes.pop()
@@ -1703,7 +1729,7 @@ impl Lower {
     }
 
     fn path_block(mut self, b: parser.Block) -> Operand {
-        self.scopes.push(Scope([], []))
+        self.scopes.push(Scope([], [], -1))
         for s in b.stmts { self.stmt(s) }
         var v = unit()
         match b.tail {
@@ -2115,7 +2141,7 @@ impl Lower {
                 let else_bb = self.new_block()
                 let end = self.new_block()
                 let res = self.temp()
-                self.scopes.push(Scope([], []))
+                self.scopes.push(Scope([], [], -1))
                 self.cond(cond, else_bb)
                 let tv = self.block(then)
                 let _ = self.scopes.pop()
@@ -2151,7 +2177,7 @@ impl Lower {
                 let end = self.new_block()
                 for arm in arms {
                     let next = self.new_block()
-                    self.scopes.push(Scope([], []))
+                    self.scopes.push(Scope([], [], -1))
                     self.pattern(arm.pat, place, st, next)
                     if let Some(g) = arm.guard {
                         let c = self.expr(g)
@@ -2178,7 +2204,7 @@ impl Lower {
                 let exit = self.new_block()
                 self.terminate(Term.Goto(head))
                 self.switch_to(head)
-                self.scopes.push(Scope([], []))
+                self.scopes.push(Scope([], [], -1))
                 self.cond(cond, exit)
                 self.loops.push(plain_loop(exit, head, self.scopes.len as int))
                 let _ = self.block(body)
@@ -2234,7 +2260,21 @@ impl Lower {
                 self.diverge(Term.Return(r))
             }
             parser.Kind.Closure(params, _, _, body) => self.closure(e, params, body)
-            parser.Kind.Scope(_, _) => self.unsupported(at, "`scope` blocks")
+            parser.Kind.Scope(name, body) => {
+                // Its tasks are waited for wherever the block is left.
+                self.scopes.push(Scope([], [], -1))
+                let opened = self.finish_call(Callee.Native("task.open"), [], [], at)
+                let l = self.temp()
+                self.set(l, opened)
+                self.declare(name, l)
+                let top = self.scopes.len - 1
+                self.scopes[top].tasks = l
+                let v = self.block(body)
+                self.at = at
+                self.run_defers(self.scopes.len as int - 1)
+                let _ = self.scopes.pop()
+                v
+            }
             parser.Kind.With(_, _) => self.unsupported(at, "`with` blocks")
             parser.Kind.Unary(op, inner) => {
                 let t = self.ty(inner)
@@ -2308,7 +2348,7 @@ impl Lower {
                     let more = self.tmp(Rvalue.Binary(op, Num.Dyn, cursor, stop))
                     self.terminate(Term.Branch(more, body_bb, exit))
                     self.switch_to(body_bb)
-                    self.scopes.push(Scope([], []))
+                    self.scopes.push(Scope([], [], -1))
                     self.pattern(pat, at_local(i), t, -1)
                     self.loops.push(plain_loop(exit, step, self.scopes.len as int))
                     let _ = self.block(body)
@@ -2396,7 +2436,7 @@ impl Lower {
         }
         self.terminate(Term.Branch(more, body_bb, exit))
         self.switch_to(body_bb)
-        self.scopes.push(Scope([], []))
+        self.scopes.push(Scope([], [], -1))
         self.pattern(pat, item, elem, -1)
         self.loops.push(plain_loop(exit, step, self.scopes.len as int))
         let _ = self.block(body)
@@ -2689,7 +2729,7 @@ impl Lower {
         let failed = self.tmp(Rvalue.Is(Operand.At(place), 1))
         self.terminate(Term.Branch(failed, bad, good))
         self.switch_to(bad)
-        self.scopes.push(Scope([], []))
+        self.scopes.push(Scope([], [], -1))
         if let Some(b) = binding {
             let l = self.temp()
             self.set(l, Operand.At(with_field(place, 0)))
@@ -2914,6 +2954,25 @@ impl Lower {
                     let ops = self.arg_ops(args)
                     return self.finish_call(Callee.Print, ops, [], at)
                 }
+                if name == "task.spawn" {
+                    if args.len == 0 { return unit() }
+                    match self.ty(e) {
+                        types.Ty.Task(t) => {
+                            let run = self.closure_of(at, t, [], None, Some(args[0].value))
+                            return self.finish_call(Callee.Native("task.spawn"), [run], [], at)
+                        }
+                        _ => return self.unsupported(at, "this `spawn`")
+                    }
+                }
+                if name == "task.wait" {
+                    match callee.kind {
+                        parser.Kind.Field(base, _) => {
+                            let task = self.expr(base)
+                            return self.finish_call(Callee.Native("task.wait"), [task], [], at)
+                        }
+                        _ => return self.unsupported(at, "this call")
+                    }
+                }
                 if has_dot(name) {
                     let ops = self.arg_ops(args)
                     return self.finish_call(Callee.Native(name), ops, [], at)
@@ -2968,7 +3027,7 @@ impl Lower {
                 let caller = self.inst
                 self.inst = inst
                 self.scopes = []
-                self.scopes.push(Scope([], []))
+                self.scopes.push(Scope([], [], -1))
                 let v = self.expr(d)
                 self.scopes = saved
                 self.inst = caller

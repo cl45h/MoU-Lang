@@ -35,6 +35,8 @@ pub enum Ty {
     Param(str)
     // `dyn Trait`: the number of the trait and its type arguments.
     Dyn(int, [Ty])
+    // What `spawn` gives: a task whose result has this type.
+    Task(Ty)
 }
 
 pub struct ParamSig { name: str, mode: parser.Mode, ty: Ty, optional: bool }
@@ -246,6 +248,7 @@ pub fn same(a: Ty, b: Ty) -> bool {
         (Ty.Slice(x), Ty.Slice(y)) => same(x, y)
         (Ty.Array(x), Ty.Array(y)) => same(x, y)
         (Ty.Range(x), Ty.Range(y)) => same(x, y)
+        (Ty.Task(x), Ty.Task(y)) => same(x, y)
         (Ty.Optional(x), Ty.Optional(y)) => same(x, y)
         (Ty.Result(x, e), Ty.Result(y, f)) => same(x, y) && same(e, f)
         _ => a == b
@@ -305,6 +308,7 @@ pub fn open(t: Ty) -> bool {
         Ty.Slice(x) => open(x)
         Ty.Array(x) => open(x)
         Ty.Range(x) => open(x)
+        Ty.Task(x) => open(x)
         Ty.Optional(x) => open(x)
         Ty.Result(x, e) => open(x) || open(e)
         _ => false
@@ -337,6 +341,7 @@ pub fn concretize(t: Ty) -> Ty {
         Ty.Slice(x) => Ty.Slice(concretize(x))
         Ty.Array(x) => Ty.Array(concretize(x))
         Ty.Range(x) => Ty.Range(concretize(x))
+        Ty.Task(x) => Ty.Task(concretize(x))
         Ty.Optional(x) => Ty.Optional(concretize(x))
         Ty.Struct(i, ts) => Ty.Struct(i, concretize_all(ts))
         Ty.Enum(i, ts) => Ty.Enum(i, concretize_all(ts))
@@ -381,6 +386,7 @@ pub fn subst(t: Ty, env: [Binding]) -> Ty {
         Ty.Slice(x) => Ty.Slice(subst(x, env))
         Ty.Array(x) => Ty.Array(subst(x, env))
         Ty.Range(x) => Ty.Range(subst(x, env))
+        Ty.Task(x) => Ty.Task(subst(x, env))
         Ty.Optional(x) => Ty.Optional(subst(x, env))
         Ty.Result(x, e) => Ty.Result(subst(x, env), subst(e, env))
         Ty.Fn(sig) => Ty.Fn(subst_sig(sig, env))
@@ -439,6 +445,7 @@ pub fn bind(pat: Ty, actual: Ty, env: mut [Binding]) {
         (Ty.Array(p), Ty.Slice(t)) => bind(p, t, mut env)
         (Ty.Array(p), Ty.Array(t)) => bind(p, t, mut env)
         (Ty.Range(p), Ty.Range(t)) => bind(p, t, mut env)
+        (Ty.Task(p), Ty.Task(t)) => bind(p, t, mut env)
         (Ty.Optional(p), Ty.Optional(t)) => bind(p, t, mut env)
         (Ty.Optional(p), _) => bind(p, actual, mut env)
         (Ty.Result(p, pe), Ty.Result(t, te)) => {
@@ -516,6 +523,7 @@ pub fn undecided(t: Ty) -> bool {
         Ty.Slice(x) => undecided(x)
         Ty.Array(x) => undecided(x)
         Ty.Range(x) => undecided(x)
+        Ty.Task(x) => undecided(x)
         Ty.Optional(x) => undecided(x)
         Ty.Result(x, e) => undecided(x) || undecided(e)
         _ => false
@@ -541,6 +549,7 @@ pub fn concrete(t: Ty) -> bool {
         Ty.Slice(x) => concrete(x)
         Ty.Array(x) => concrete(x)
         Ty.Range(x) => concrete(x)
+        Ty.Task(x) => concrete(x)
         Ty.Optional(x) => concrete(x)
         Ty.Result(x, e) => concrete(x) && concrete(e)
         Ty.Fn(sig) => {
@@ -582,6 +591,7 @@ pub fn plain(t: Ty) -> str {
         Ty.Slice(x) => "[{plain(x)}]"
         Ty.Array(x) => "[{plain(x)}; _]"
         Ty.Range(x) => "range {plain(x)}"
+        Ty.Task(x) => "task {plain(x)}"
         Ty.Optional(x) => "{plain(x)}?"
         Ty.Result(x, e) => "{plain(x)} ! {plain(e)}"
         Ty.Param(n) => "'{n}"

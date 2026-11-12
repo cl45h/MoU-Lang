@@ -336,7 +336,7 @@ Ejecuta: todo lo que el verificador de tipos cubre. Aritmética entera con detec
 
 Los parámetros `mut` se pasan por copia de entrada y de salida. La ley de exclusividad, que ya se verifica, hace que eso sea indistinguible de pasar una referencia.
 
-No ejecuta todavía (lo rechaza antes de correr, con el lugar exacto): closures sin tipos en los parámetros, bloques `scope` y `with`, declaraciones anidadas, las llamadas a funciones de C (solo en el binario), los demás métodos de tipos primitivos y `mut` sobre un rango (`f(mut xs[1..])`).
+No ejecuta todavía (lo rechaza antes de correr, con el lugar exacto): closures sin tipos en los parámetros, bloques `with`, declaraciones anidadas, las llamadas a funciones de C (solo en el binario), los demás métodos de tipos primitivos y `mut` sobre un rango (`f(mut xs[1..])`).
 
 Límites conocidos: los enteros se guardan en 128 bits con signo, así que un `u128` de 2^127 o más produce un panic que lo dice en vez de un resultado; un slice es una copia, no una vista; las closures capturan por valor y no pueden modificar lo capturado.
 
@@ -445,6 +445,32 @@ pub fn root(x: f64) -> f64 { unsafe { m.sqrt(x) } }
 - El intérprete no puede llamar a C: `mou run`, `mou test`, el `repl` y `comptime` se detienen con un panic que lo dice cuando llegan a una. Un programa que usa C se prueba compilado.
 
 Faltan: leer el header en vez de declarar a mano, leer y escribir a través de un puntero (buffers), structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
+
+### Tareas: qué hay
+
+```mou
+fn both(xs: [int]) -> int {
+    let half = xs.len / 2
+    scope s {
+        let a = s.spawn(total(xs[0..half]))
+        let b = s.spawn(total(xs[half..xs.len]))
+        a.wait() + b.wait()
+    }
+}
+```
+
+- `scope s { }` abre un bloque que no termina hasta que terminan todas las tareas que se lanzaron en él, se salga como se salga: por el final, con `return`, con `?` o con `break`.
+- `s.spawn(e)` lanza una tarea que calcula `e` y da un `Task[T]`, donde `T` es el tipo de `e`. `t.wait()` espera y da el resultado, las veces que se lo pida. Si `e` puede fallar, el resultado es el `T ! E` de siempre: `t.wait()?` o `t.wait() catch`.
+- La expresión de una tarea se verifica como el cuerpo de una closure: lee las variables de afuera (se comparten sin copiar) y no puede modificarlas ni pasarlas como `mut`. Como nada compartido se escribe, no hay carreras de datos y no hace falta anotar nada.
+- Un `Task[T]` es un valor común: se guarda en un array o un struct y puede salir del `scope`. Afuera ya está terminado, así que `wait` no espera.
+- En el binario cada tarea es un hilo del sistema. Un programa que usa `spawn` se compila con la cuenta de referencias atómica; uno que no lo usa no paga nada. Hacen falta hilos POSIX (`mou build` ya pasa `-pthread`). Si el sistema no da un hilo, la tarea corre en el lugar, antes de seguir.
+- Con `mou run` y `mou test` no hay paralelismo: en el intérprete una tarea corre entera donde se lanza. El resultado es el mismo salvo el orden de lo que las tareas impriman.
+- Efectos: lo que hace una tarea cuenta para la función que la lanza, y `spawn` aloca. Una función `@noio` puede lanzar tareas que no hagan entrada ni salida.
+- Un panic en una tarea detiene el programa entero.
+
+Medido en `tests/native/tasks.mou` y con cuatro tareas de cálculo en una máquina de 32 hilos: 0,63 s en serie, 0,17 s con tareas. Verificado con los sanitizers de hilos y de memoria.
+
+Faltan: canales, exclusión mutua para estado compartido que cambia, cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
 
 ### Facilidad de uso: lo que el compilador deduce
 

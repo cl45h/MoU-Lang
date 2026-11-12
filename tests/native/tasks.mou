@@ -1,0 +1,81 @@
+import std.io
+
+struct Oops { why: str }
+
+fn fib(n: int) -> int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn total(xs: [int]) -> int {
+    var sum = 0
+    for x in xs { sum += x }
+    sum
+}
+
+fn checked(n: int) -> int ! Oops {
+    if n < 0 { return Oops("negative: {n}") }
+    n * 2
+}
+
+// One task for each half of the work.
+fn both(xs: [int]) -> int {
+    let half = xs.len / 2
+    scope s {
+        let a = s.spawn(total(xs[0..half]))
+        let b = s.spawn(total(xs[half..xs.len]))
+        a.wait() + b.wait()
+    }
+}
+
+// The tasks outlive the function that started them only as results.
+fn started(s_count: int) -> [Task[int]] {
+    var tasks: [Task[int]] = []
+    scope s {
+        for i in 0..s_count { tasks.push(s.spawn(fib(15 + i))) }
+    }
+    tasks
+}
+
+fn leaves_early(n: int) -> int ! Oops {
+    scope s {
+        let slow = s.spawn(fib(20))
+        let v = checked(n)?
+        v + slow.wait()
+    }
+}
+
+fn main() ! io.Error {
+    var xs: [int] = []
+    for i in 0..1000 { xs.push(i) }
+    io.print("{both(xs)}")?
+    scope s {
+        let words = ["uno", "dos", "tres"]
+        let a = s.spawn(fib(24))
+        let b = s.spawn("{words[1]} y {words[2]}")
+        let c = s.spawn(checked(-3))
+        let d = s.spawn(checked(21))
+        let e = s.spawn(both(xs) + a.wait())
+        io.print("{a.wait()} {b.wait()} {a.wait()}")?
+        io.print("{c.wait() catch o { 0 - o.why.len as int }}")?
+        io.print("{d.wait() catch o { 0 - o.why.len as int }}")?
+        io.print("{e.wait()}")?
+        // A scope inside a task.
+        let f = s.spawn(both([1, 2, 3, 4, 5]))
+        io.print("{f.wait()}")?
+    }
+    var sum = 0
+    for t in started(8) { sum += t.wait() }
+    io.print("{sum}")?
+    let gone = leaves_early(-1) catch o { 0 - 1 }
+    io.print("{gone}")?
+    let stayed = leaves_early(4) catch o { 0 - 1 }
+    io.print("{stayed}")?
+    // Many tasks sharing one array.
+    var many: [Task[int]] = []
+    scope s {
+        for i in 0..200 { many.push(s.spawn(total(xs) + i)) }
+    }
+    var all = 0
+    for t in many { all += t.wait() }
+    io.print("{all}")?
+}

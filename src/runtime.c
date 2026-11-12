@@ -12,6 +12,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A program that starts tasks is compiled with KTHREADS: the counts of
+   references are then atomic, since a value can be shared between
+   threads, and what says where the program is belongs to each thread. */
+#ifdef KTHREADS
+#include <pthread.h>
+#define KLOCAL _Thread_local
+#define KRC(o) __atomic_load_n(&(o)->rc, __ATOMIC_RELAXED)
+#define KINC(o) __atomic_add_fetch(&(o)->rc, 1, __ATOMIC_RELAXED)
+#define KDEC(o) __atomic_sub_fetch(&(o)->rc, 1, __ATOMIC_ACQ_REL)
+#else
+#define KLOCAL
+#define KRC(o) ((o)->rc)
+#define KINC(o) (++(o)->rc)
+#define KDEC(o) (--(o)->rc)
+#endif
+
 typedef __int128 i128;
 typedef unsigned __int128 u128;
 #define I128_MAX ((i128)(((u128)1 << 127) - 1))
@@ -63,7 +79,7 @@ static kv kdispatch(uint32_t id, kv *args, kv env);
 
 /* Where the program is: the line in the high half; in the low one, the
    function (20 bits, an index in KFUNCS) and the column (12 bits). */
-static uint64_t kpos;
+static KLOCAL uint64_t kpos;
 #define KL(l, c) (kpos = ((uint64_t)(l) << 32) | (uint32_t)(c))
 
 static _Noreturn void kpanic(const char *msg) {
@@ -263,12 +279,12 @@ static kv kfn(uint32_t id) {
 static bool kheap(kv v) { return v.tag >= T_STR && v.tag != T_NONE && v.tag != T_FN && v.u.o != NULL; }
 
 static kv kretain(kv v) {
-    if (kheap(v)) v.u.o->rc++;
+    if (kheap(v)) KINC(v.u.o);
     return v;
 }
 
 static void krelease(kv v) {
-    if (!kheap(v) || --v.u.o->rc > 0) return;
+    if (!kheap(v) || KDEC(v.u.o) > 0) return;
     if (v.tag != T_STR && v.u.o->pack == P_NONE)
         for (int64_t i = 0; i < v.u.o->len; i++) krelease(ITEMS(v.u.o)[i]);
     free(v.u.o);
@@ -396,7 +412,7 @@ static void kunpack(kv *v) {
     if (o->pack == P_NONE) return;
     kobj *n = kalloc((size_t)o->len * sizeof(kv), o->len);
     for (int64_t i = 0; i < o->len; i++) ITEMS(n)[i] = o->pack >= P_REC ? krec_box(o, i) : kelem(o, i);
-    if (--o->rc == 0) free(o);
+    if (KDEC(o) == 0) free(o);
     v->u.o = n;
 }
 
@@ -450,14 +466,16 @@ static int64_t klen(kv v) { return v.u.o ? v.u.o->len : 0; }
 /* Makes the block of `v` its own, so that it can be written to. */
 static void kunique(kv *v) {
     kobj *o = v->u.o;
-    if (!o || o->rc == 1) return;
+    if (!o || KRC(o) == 1) return;
     kobj *n = kalloc((size_t)o->len * kpack_size(o->pack), o->len);
     n->pack = o->pack;
     if (o->pack != P_NONE) memcpy(n + 1, o + 1, (size_t)o->len * kpack_size(o->pack));
     else
         for (int64_t i = 0; i < o->len; i++) ITEMS(n)[i] = kretain(ITEMS(o)[i]);
-    o->rc--;
+    /* Another thread may have let go of the block meanwhile. */
+    kv old = *v;
     v->u.o = n;
+    krelease(old);
 }
 
 /* ---- display ---- */
@@ -716,7 +734,7 @@ static __attribute__((noinline, cold)) void kfield_fail(void) { kinternal("a fie
 /* Field `k` of a struct, tuple, variant, optional or result. */
 static inline kv *kfield(kv *v, int64_t k, bool write) {
     if (KRARE(v->tag < T_TUPLE || v->tag == T_ARRAY || v->tag == T_NONE || v->tag >= T_FN || k >= klen(*v))) kfield_fail();
-    if (write && KRARE(v->u.o->rc != 1)) kunique(v);
+    if (write && KRARE(KRC(v->u.o) != 1)) kunique(v);
     return &ITEMS(v->u.o)[k];
 }
 
@@ -730,7 +748,7 @@ static inline kv ktake(kv *v) {
 /* Item `i` of an array of tagged values. */
 static inline kv *kitemp(kv *v, i128 i, bool write) {
     int64_t k = kat(v, i);
-    if (write && KRARE(v->u.o->rc != 1)) kunique(v);
+    if (write && KRARE(KRC(v->u.o) != 1)) kunique(v);
     if (KRARE(v->u.o->pack != P_NONE)) kunpack(v);
     return &ITEMS(v->u.o)[k];
 }
@@ -769,7 +787,7 @@ static inline kv kitem_field(kv *v, i128 i, int64_t f) {
 
 static inline void kitem_field_set(kv *v, i128 i, int64_t f, kv value) {
     int64_t k = kat(v, i);
-    if (KRARE(v->u.o->rc != 1)) kunique(v);
+    if (KRARE(KRC(v->u.o) != 1)) kunique(v);
     if (v->u.o->pack >= P_REC) krec_store(v->u.o, k, f, value);
     else kset(kitem_field_slow(v, k, f, true), value);
 }
@@ -798,21 +816,21 @@ static inline bool kitem_field_bool(kv *v, i128 i, int64_t f) {
 static inline void kitem_field_set_f64(kv *v, i128 i, int64_t f, double x) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kf64(x));
+    if (KRARE(KRC(o) != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kf64(x));
     else ((double *)(o + 1))[k * KREC_N[o->pack - P_REC] + f] = x;
 }
 
 static inline void kitem_field_set_int(kv *v, i128 i, int64_t f, i128 x) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kint(x));
+    if (KRARE(KRC(o) != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kint(x));
     else ((int64_t *)(o + 1))[k * KREC_N[o->pack - P_REC] + f] = (int64_t)x;
 }
 
 static inline void kitem_field_set_bool(kv *v, i128 i, int64_t f, bool t) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kbool(t));
+    if (KRARE(KRC(o) != 1 || o->pack < P_REC)) kitem_field_set(v, i, f, kbool(t));
     else ((int64_t *)(o + 1))[k * KREC_N[o->pack - P_REC] + f] = t;
 }
 
@@ -821,27 +839,27 @@ static inline void kitem_set(kv *v, i128 i, kv value) { kitem_put(v, kat(v, i), 
 static inline void kitem_set_int(kv *v, i128 i, i128 x) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack != P_I64 || x != (int64_t)x)) kitem_put(v, k, kint(x));
+    if (KRARE(KRC(o) != 1 || o->pack != P_I64 || x != (int64_t)x)) kitem_put(v, k, kint(x));
     else ((int64_t *)(o + 1))[k] = (int64_t)x;
 }
 
 static inline void kitem_set_bool(kv *v, i128 i, bool t) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack != P_BOOL)) kitem_put(v, k, kbool(t));
+    if (KRARE(KRC(o) != 1 || o->pack != P_BOOL)) kitem_put(v, k, kbool(t));
     else ((uint8_t *)(o + 1))[k] = t;
 }
 
 static inline kv kpush_bool(kv *v, bool t) {
     kobj *o = v->u.o;
-    if (KRARE(v->tag != T_ARRAY || o->rc != 1 || o->pack != P_BOOL || o->len == o->cap)) return kpush(v, 0, NULL, kbool(t));
+    if (KRARE(v->tag != T_ARRAY || KRC(o) != 1 || o->pack != P_BOOL || o->len == o->cap)) return kpush(v, 0, NULL, kbool(t));
     ((uint8_t *)(o + 1))[o->len++] = t;
     return kmk(T_UNIT);
 }
 
 static inline kv kpush_int(kv *v, i128 x) {
     kobj *o = v->u.o;
-    if (KRARE(v->tag != T_ARRAY || o->rc != 1 || o->pack != P_I64 || o->len == o->cap || x != (int64_t)x)) return kpush(v, 0, NULL, kint(x));
+    if (KRARE(v->tag != T_ARRAY || KRC(o) != 1 || o->pack != P_I64 || o->len == o->cap || x != (int64_t)x)) return kpush(v, 0, NULL, kint(x));
     ((int64_t *)(o + 1))[o->len++] = (int64_t)x;
     return kmk(T_UNIT);
 }
@@ -862,13 +880,13 @@ static inline double kitem_f64(const kv *v, i128 i) {
 static inline void kitem_set_f64(kv *v, i128 i, double f) {
     int64_t k = kat(v, i);
     kobj *o = v->u.o;
-    if (KRARE(o->rc != 1 || o->pack != P_F64)) kitem_put(v, k, kf64(f));
+    if (KRARE(KRC(o) != 1 || o->pack != P_F64)) kitem_put(v, k, kf64(f));
     else ((double *)(o + 1))[k] = f;
 }
 
 static inline kv kpush_f64(kv *v, double f) {
     kobj *o = v->u.o;
-    if (KRARE(v->tag != T_ARRAY || o->rc != 1 || o->pack != P_F64 || o->len == o->cap)) return kpush(v, 0, NULL, kf64(f));
+    if (KRARE(v->tag != T_ARRAY || KRC(o) != 1 || o->pack != P_F64 || o->len == o->cap)) return kpush(v, 0, NULL, kf64(f));
     ((double *)(o + 1))[o->len++] = f;
     return kmk(T_UNIT);
 }
@@ -1652,7 +1670,7 @@ static kv kraw_parse_float(kv text) {
 
 /* ---- calls ---- */
 
-static char *kstack_base;
+static KLOCAL char *kstack_base;
 #ifdef _WIN32
 #define KSTACK_LIMIT (700 * 1024)
 #else
@@ -1666,6 +1684,96 @@ static void kenter(void) {
     if (used < 0) used = -used;
     if (used > KSTACK_LIMIT) kpanic("stack overflow: the calls are nested too deep");
 }
+
+static kv kcall(kv f, kv *args);
+
+/* ---- tasks ----
+ *
+ * A task is a block of two items: its result, and whether it is done. A
+ * scope is a mark in the list of the tasks its thread started: closing it
+ * waits for the ones after the mark. One lock covers every task. */
+#ifdef KTHREADS
+static pthread_mutex_t ktask_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t ktask_done = PTHREAD_COND_INITIALIZER;
+static KLOCAL kv *ktasks;
+static KLOCAL int64_t ktask_len, ktask_cap;
+
+static kv ktask_open(void) { return kint(ktask_len); }
+
+static void ktask_finish(kv task, kv result) {
+    pthread_mutex_lock(&ktask_lock);
+    ITEMS(task.u.o)[0] = result;
+    ITEMS(task.u.o)[1] = kint(1);
+    pthread_cond_broadcast(&ktask_done);
+    pthread_mutex_unlock(&ktask_lock);
+}
+
+static kv ktask_close(kv mark) {
+    while (ktask_len > (int64_t)mark.u.i) {
+        kv task = ktasks[--ktask_len];
+        pthread_mutex_lock(&ktask_lock);
+        while (ITEMS(task.u.o)[1].u.i == 0) pthread_cond_wait(&ktask_done, &ktask_lock);
+        pthread_mutex_unlock(&ktask_lock);
+        krelease(task);
+    }
+    return KUNIT;
+}
+
+/* What a thread runs: the task, with what it runs in the place of its result. */
+static void *ktask_main(void *arg) {
+    kv task = *(kv *)arg;
+    char base;
+    free(arg);
+    kstack_base = &base;
+    kv A[1] = {KUNIT};
+    kv result = kcall(ITEMS(task.u.o)[0], A);
+    /* The tasks it started on a scope of another thread end before it does. */
+    ktask_close(kint(0));
+    free(ktasks);
+    ktask_finish(task, result);
+    krelease(task);
+    return NULL;
+}
+
+static kv ktask_spawn(kv run) {
+    kv items[2] = {run, kint(0)};
+    kv task = kagg(T_TUPLE, 0, 0, 2, items);
+    if (ktask_len == ktask_cap) {
+        ktask_cap = ktask_cap ? ktask_cap * 2 : 8;
+        ktasks = (kv *)realloc(ktasks, (size_t)ktask_cap * sizeof(kv));
+        if (!ktasks) kpanic("out of memory");
+    }
+    ktasks[ktask_len++] = kretain(task);
+    kv *arg = (kv *)malloc(sizeof(kv));
+    pthread_attr_t attr;
+    pthread_t thread;
+    bool started = false;
+    if (arg && pthread_attr_init(&attr) == 0) {
+        *arg = kretain(task);
+        pthread_attr_setstacksize(&attr, (size_t)KSTACK_LIMIT + 2 * 1024 * 1024);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        started = pthread_create(&thread, &attr, ktask_main, arg) == 0;
+        pthread_attr_destroy(&attr);
+        if (!started) krelease(task);
+    }
+    if (!started) {
+        /* No thread to be had: the task runs here, before going on. */
+        free(arg);
+        kv A[1] = {KUNIT};
+        ktask_finish(task, kcall(run, A));
+    }
+    return task;
+}
+
+static kv ktask_wait(kv task) {
+    pthread_mutex_lock(&ktask_lock);
+    while (ITEMS(task.u.o)[1].u.i == 0) pthread_cond_wait(&ktask_done, &ktask_lock);
+    kv r = kretain(ITEMS(task.u.o)[0]);
+    pthread_mutex_unlock(&ktask_lock);
+    krelease(task);
+    return r;
+}
+#endif
 
 /* Calls a function value. Takes ownership of `f`; the callee leaves the
  * final values of its parameters in `args`. */

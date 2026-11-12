@@ -93,6 +93,12 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         Err(e) => Value::Err(Box::new(Value::Str(e.to_string().into()))),
     };
     Ok(match name {
+        "task.open" => Value::Int(0),
+        "task.close" => Value::Unit,
+        "task.wait" => match args.first() {
+            Some(v) => v.clone(),
+            None => return Err(internal("`wait` without a task")),
+        },
         "io.eprint" => {
             let _ = out.flush();
             done(writeln!(std::io::stderr(), "{}", text(0)?).map(|()| Value::Unit))
@@ -292,6 +298,11 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
                         Value::Fn(f) => Some((f, Rc::default())),
                         Value::Closure(f, env) => Some((f, env)),
                         _ => tri!(Err(internal("a call to a value that is not a function"))),
+                    },
+                    // Here a task runs where it is started, and is its own result.
+                    Callee::Native("task.spawn") => match vals.pop() {
+                        Some(Value::Closure(f, env)) => Some((f, env)),
+                        _ => tri!(Err(internal("a task that is not a closure"))),
                     },
                     Callee::Print => None,
                     Callee::Native(name) => {
