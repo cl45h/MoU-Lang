@@ -199,7 +199,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, depth: usize) {
-        match self.rng.below(15) {
+        match self.rng.below(21) {
             0..=2 => {
                 let kind = KINDS[self.rng.below(KINDS.len())];
                 let name = self.fresh("v");
@@ -312,6 +312,91 @@ impl Gen {
                     self.line(&format!("for {item} in {xs} {{ {t} = {t} +% {item} }}"));
                 }
             }
+            15 => {
+                // An optional integer: from a function, set again, and read.
+                let name = self.fresh("o");
+                let value = self.int("int", 2);
+                self.line(&format!("var {name}: int? = half({value})"));
+                let (c, value) = (self.boolean(2), self.int("int", 2));
+                let other = if self.rng.chance(50) { format!("Some({value})") } else { "None".to_string() };
+                self.line(&format!("if {c} {{ {name} = {other} }}"));
+                let (v, or) = (self.fresh("v"), self.int("int", 2));
+                self.line(&format!("let {v}: int = match {name} {{"));
+                self.line("    Some(q) => q");
+                self.line(&format!("    None => {or}"));
+                self.line("}");
+                self.vars.push((v, "int", false));
+            }
+            16 => {
+                // Optionals of the other kinds, and the ones an array gives.
+                let v = self.fresh("v");
+                match self.rng.below(3) {
+                    0 => {
+                        let (c, x) = (self.boolean(2), self.float(2));
+                        let o = self.fresh("o");
+                        self.line(&format!("let {o}: f64? = if {c} {{ Some({x}) }} else {{ None }}"));
+                        self.line(&format!("let {v}: int = if let Some(q) = {o} {{ if q > 1.5 {{ 1 }} else {{ 2 }} }} else {{ 3 }}"));
+                    }
+                    1 => {
+                        let (c, d) = (self.boolean(2), self.boolean(2));
+                        let o = self.fresh("o");
+                        self.line(&format!("let {o}: bool? = if {c} {{ Some({d}) }} else {{ None }}"));
+                        self.line(&format!("let {v}: int = match {o} {{"));
+                        self.line("    Some(q) => if q { 1 } else { 2 }");
+                        self.line("    None => 3");
+                        self.line("}");
+                    }
+                    _ => {
+                        let (xs, mutable) = self.arrays[self.rng.below(self.arrays.len())].clone();
+                        let i = self.int("u8", 2);
+                        let how = if mutable && self.rng.chance(40) { "pop()".to_string() } else { format!("get({i} as usize)") };
+                        self.line(&format!("let {v}: int = match {xs}.{how} {{"));
+                        self.line("    Some(q) => q");
+                        self.line("    None => 0 - 7");
+                        self.line("}");
+                    }
+                }
+                self.vars.push((v, "int", false));
+            }
+            17 => {
+                // An enum with data: made, passed and taken apart.
+                let (e, value) = (self.fresh("e"), self.int("int", 2));
+                self.line(&format!("let {e} = mk({value})"));
+                let v = self.fresh("v");
+                if self.rng.chance(50) {
+                    self.line(&format!("let {v}: int = weigh({e})"));
+                } else {
+                    let or = self.int("int", 2);
+                    self.line(&format!("let {v}: int = match {e} {{"));
+                    self.line(&format!("    E.A => {or}"));
+                    self.line("    E.B(n) => n +% 1");
+                    self.line("    E.C(n, f) => if f { n } else { 0 - n }");
+                    self.line("}");
+                }
+                self.vars.push((v, "int", false));
+            }
+            18 => {
+                // A struct of floats: through a function and by field.
+                let p = self.fresh("p");
+                let (x, y, d) = (self.float(2), self.float(2), self.float(2));
+                self.line(&format!("var {p} = P({x}, {y})"));
+                self.line(&format!("{p} = moved({p}, {d})"));
+                self.line(&format!("{p}.x = {p}.x + {p}.y"));
+                let name = self.fresh("x");
+                self.line(&format!("var {name}: f64 = {p}.x * {p}.y"));
+                self.vars.push((name, "f64", true));
+            }
+            19 => {
+                // A struct given to a function, to read and to change.
+                let name = self.fresh("p");
+                let (a, b, c) = (self.int("int", 2), self.int("u8", 2), self.boolean(2));
+                self.line(&format!("var {name} = S({a}, {b}, {c})"));
+                let n = self.int("int", 2);
+                self.line(&format!("grow(mut {name}, {n})"));
+                let v = self.fresh("v");
+                self.line(&format!("let {v}: int = total({name}) +% {name}.a"));
+                self.vars.push((v, "int", false));
+            }
             _ => {
                 let name = self.fresh("p");
                 let (a, b, c) = (self.int("int", 2), self.int("u8", 2), self.boolean(2));
@@ -352,6 +437,24 @@ impl Gen {
         g.line("import std.io");
         g.line("");
         g.line("struct S { a: int, b: u8, c: bool }");
+        g.line("struct P { x: f64, y: f64 }");
+        g.line("enum E { A, B(int), C(int, bool) }");
+        g.line("");
+        g.line("fn half(n: int) -> int? { if n % 2 == 0 { Some(n / 2) } else { None } }");
+        g.line("fn mk(n: int) -> E { if n % 3 == 0 { E.A } else { if n % 3 == 1 { E.B(n) } else { E.C(n, n > 10) } } }");
+        g.line("fn weigh(e: E) -> int {");
+        g.line("    match e {");
+        g.line("        E.A => 1");
+        g.line("        E.B(n) => n");
+        g.line("        E.C(n, f) => if f { n } else { 0 - 1 }");
+        g.line("    }");
+        g.line("}");
+        g.line("fn moved(p: P, d: f64) -> P { P(p.x + d, p.y * d) }");
+        g.line("fn total(s: S) -> int { s.a +% (s.b as int) }");
+        g.line("fn grow(s: mut S, n: int) {");
+        g.line("    s.a = s.a +% n");
+        g.line("    if s.c { s.b = s.b +% 1 }");
+        g.line("}");
         g.line("");
         let fns = 2 + g.rng.below(5);
         for _ in 0..fns {
