@@ -744,6 +744,8 @@ struct Scope<'a> {
     defers: Vec<&'a Expr>,
     /// The scope of a `scope` block: where its tasks are waited for on the way out.
     tasks: Option<Local>,
+    /// The scope of a `with alloc = arena` block: the arena, closed on the way out.
+    arena: Option<Local>,
 }
 
 struct LoopCtx {
@@ -1433,6 +1435,10 @@ impl<'a> Lower<'a> {
             if let Some(l) = self.scopes[k].tasks {
                 let span = self.span;
                 self.finish_call(Callee::Native("task.close"), vec![Operand::Place(Place::local(l))], Vec::new(), span);
+            }
+            if let Some(l) = self.scopes[k].arena {
+                let span = self.span;
+                self.finish_call(Callee::Native("arena.close"), vec![Operand::Place(Place::local(l))], Vec::new(), span);
             }
             let defers = self.scopes[k].defers.clone();
             if defers.is_empty() {
@@ -2320,7 +2326,23 @@ impl<'a> Lower<'a> {
                 self.scopes.pop();
                 v
             }
-            ExprKind::With { .. } => self.unsupported(span, "`with` blocks"),
+            ExprKind::With { body, .. } => {
+                // Memory is asked from an arena until the block is left.
+                self.scopes.push(Scope::default());
+                let opened = self.finish_call(Callee::Native("arena.open"), Vec::new(), Vec::new(), span);
+                let l = self.temp();
+                self.set(l, opened);
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.arena = Some(l);
+                }
+                let v = self.block(body);
+                // What the block gives is kept before the arena is closed.
+                let kept = self.stash(v);
+                self.span = span;
+                self.run_defers(self.scopes.len() - 1);
+                self.scopes.pop();
+                Operand::Place(kept)
+            }
             ExprKind::Unary { op, expr } => {
                 let t = self.ty(expr);
                 let v = self.expr(expr);

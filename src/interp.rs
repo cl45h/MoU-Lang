@@ -181,7 +181,9 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         _ if name.starts_with("chan.") => channel(name, args)?,
         _ if name.starts_with("mutex.") => shared(name, args)?,
         "task.open" => Value::Int(0),
-        "task.close" | "task.cancel" => Value::Unit,
+        "task.close" | "task.cancel" | "arena.close" => Value::Unit,
+        // Here memory is asked for the same way inside an arena and outside.
+        "arena.open" => Value::Int(0),
         // Here a task is done before anything can ask it to stop.
         "task.cancelled" => Value::Bool(false),
         "task.wait" => match args.first() {

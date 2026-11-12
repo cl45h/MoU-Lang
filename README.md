@@ -43,7 +43,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Rendimiento parejo con C: hoy iguala en bucles, cálculo numérico, y structs, tuplas, opcionales y enums de números y `bool`, que ya van sin bloque de memoria. Sigue siendo varias veces más lento con strings y con structs y enums que guardan otros valores, porque esos todavía van en bloques de memoria con etiqueta.
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida sin bloquear (tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
-- El contexto (`with alloc = arena`) y los efectos en los tipos de función.
+- El resto del contexto (`io` inyectable; `with alloc = arena` ya está) y los efectos en los tipos de función.
 - Parámetros `comptime` y tipos como valores (la reflexión con `meta.info(T)` ya está).
 - Leer los headers de C en vez de declarar las funciones a mano (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.

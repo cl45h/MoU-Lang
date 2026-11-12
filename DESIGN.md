@@ -410,7 +410,8 @@ Límites conocidos:
 - Toda recursión cuenta como `panic`, aunque termine.
 - Quedarse sin memoria aborta el programa y no es el efecto `panic`.
 - `block` es poder quedarse esperando: `wait` de una tarea, el final de un `scope` y `io.read_line`. `@noblock` lo prohíbe, y `@nounsafe` prohíbe llegar a una función de C. Como una llamada a un valor función no se sabe a qué llama, cuenta también como `block` y `unsafe`.
-- Falta el contexto (`with alloc = arena`) y las demás reglas de los perfiles: tipos obligatorios en firmas, copias explícitas en `app`, y regiones solo en `system` (`unsafe` solo en `system` ya se verifica).
+- El contexto tiene una sola forma por ahora, `with alloc = arena { }`. Dentro del bloque la memoria se toma del final de un tramo grande en vez de pedirla de a un bloque, y se devuelve toda junta. No cambia lo que hace el programa: un valor creado adentro puede salir del bloque, porque la arena cuenta sus bloques en uso y recién devuelve la memoria cuando el `with` terminó y se soltó el último. Sirve para una fase que crea muchos valores y los descarta juntos: armar y recorrer 300 árboles de 29.524 nodos pasó de 1,39 s a 1,08 s. No sirve para envolver un programa largo entero, porque adentro la memoria liberada no se reutiliza: el compilador compilándose con una arena global tardó 4,6 s en vez de 4,2 s y usó 1,4 GB en vez de 315 MB. Un programa que lanza tareas no usa arenas (el `with` se acepta y no hace nada), tampoco uno compilado con el sanitizer de memoria, ni `mou run`. `with` con cualquier otro nombre es un error.
+- Faltan las demás capacidades del contexto (`io`) y las demás reglas de los perfiles: tipos obligatorios en firmas, copias explícitas en `app`, y regiones solo en `system` (`unsafe` solo en `system` ya se verifica).
 
 ### Ejecución en compilación: qué hay
 

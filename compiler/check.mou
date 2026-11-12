@@ -4139,12 +4139,23 @@ impl Checker {
                 t
             }
             parser.Kind.With(bindings, body) => {
-                for b in bindings {
-                    let _ = self.expr(b.value)
-                    // Which names of the context exist is not checked yet.
-                    self.skipped_exprs += 1
+                // The one context there is: where memory is asked from.
+                var arena = false
+                if bindings.len == 1 {
+                    if bindings[0].name == "alloc" {
+                        match bindings[0].value.kind {
+                            parser.Kind.Name(n) => {
+                                arena = n == "arena" && !self.has_local(n)
+                            }
+                            _ => {}
+                        }
+                    }
                 }
-                self.block(body)
+                if !arena { self.err(at, "the only context there is for now is `with alloc = arena {{ }}`") }
+                self.scopes.push([])
+                let t = self.block(body)
+                let _ = self.scopes.pop()
+                t
             }
             parser.Kind.Unary(op, inner) => {
                 let t = self.expr(inner)

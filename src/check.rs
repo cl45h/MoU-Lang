@@ -4065,12 +4065,18 @@ impl<'a> Checker<'a> {
                 t
             }
             ExprKind::With { bindings, body } => {
-                for (_, value) in bindings {
-                    self.expr(value);
-                    // Which context names exist is not validated yet.
-                    self.report.skipped_exprs += 1;
+                // The one context there is: where memory is asked from.
+                let arena = match bindings.as_slice() {
+                    [(name, value)] => name == "alloc" && matches!(&value.kind, ExprKind::Path(n) if n == "arena" && self.lookup(n).is_none()),
+                    _ => false,
+                };
+                if !arena {
+                    self.err(e.span, "the only context there is for now is `with alloc = arena { }`");
                 }
-                self.block(body)
+                self.scopes.push(HashMap::new());
+                let t = self.block(body);
+                self.scopes.pop();
+                t
             }
             ExprKind::Unary { op, expr } => {
                 let t = self.expr(expr);

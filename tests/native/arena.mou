@@ -1,0 +1,45 @@
+import std.io
+
+struct Node { name: str, kids: [Node] }
+
+fn tree(depth: int, tag: int) -> Node {
+    var kids: [Node] = []
+    if depth > 0 {
+        for i in 0..3 { kids.push(tree(depth - 1, tag * 3 + i)) }
+    }
+    Node("n{tag}", kids)
+}
+
+fn count(n: Node) -> int {
+    var total = 1
+    for k in n.kids { total += count(k) }
+    total
+}
+
+fn early(n: int) -> int ! str {
+    with alloc = arena {
+        let t = tree(3, n)
+        if n > 2 { return "too big: {t.name}" }
+        count(t)
+    }
+}
+
+fn main() ! io.Error {
+    var total = 0
+    for round in 0..3 {
+        total += with alloc = arena { count(tree(6, round)) }
+    }
+    // A value made inside outlives the block.
+    let kept = with alloc = arena {
+        let t = tree(4, 7)
+        t.kids[1]
+    }
+    var names: [str] = []
+    with alloc = arena {
+        with alloc = arena { names.push("inner {kept.name}") }
+        names.push("outer {count(kept)}")
+    }
+    for i in 0..5 { names.push("after {i}") }
+    io.print("{total} {kept.name} {count(kept)} {names.len} {names[0]} {names[1]}")?
+    io.print("{early(1) catch e { 0 - 1 }} {early(5) catch e { e.len as int }}")?
+}

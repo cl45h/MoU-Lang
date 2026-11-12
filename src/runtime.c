@@ -40,7 +40,8 @@ typedef struct kobj {
     int64_t rc;
     int64_t len;
     int64_t cap; /* items there is room for; only arrays grow */
-    int64_t pack; /* how an array stores its items; also keeps the items aligned to 16 bytes */
+    int32_t pack; /* how an array stores its items */
+    uint32_t arena; /* the arena the block was taken from, or 0 */
 } kobj;
 
 /* An array whose items are all booleans, integers of 64 bits, floats or
@@ -299,6 +300,108 @@ static void kpool_drop(void) {
     }
 }
 
+/* ---- arenas ----
+ *
+ * Inside `with alloc = arena { }` a block is taken from the end of a big
+ * chunk instead of asked from `malloc`, and all of them go back at once.
+ * A block made there can outlive the `with`: the arena counts its blocks
+ * still in use and gives its chunks back when the `with` is over and the
+ * last of them is let go. So an arena changes how memory is asked for,
+ * never what a program does.
+ *
+ * A program that starts tasks does not use arenas (a block could be let
+ * go by another thread), and neither does one built with the address
+ * sanitizer, which then sees every block. */
+#if defined(__SANITIZE_ADDRESS__) || defined(KTHREADS) || defined(KNOARENA)
+#define KARENAS 0
+#else
+#define KARENAS 1
+#endif
+typedef struct kchunk {
+    struct kchunk *next;
+    size_t used, cap, pad;
+} kchunk;
+typedef struct karena {
+    kchunk *chunks;
+    int64_t live; /* blocks taken and not let go yet */
+    bool open; /* still inside its `with` */
+    uint32_t outer; /* the arena in use when it was opened */
+} karena;
+enum { KARENA_MAX = 1024, KCHUNK = 1 << 16, KCHUNK_KEPT = 256 };
+static karena *karenas[KARENA_MAX];
+static uint32_t karena_cur;
+/* Chunks of the usual size that an arena gave back, for the next one. */
+static kchunk *kchunk_spare;
+static int kchunk_spares;
+
+static void *karena_take(karena *a, size_t bytes) {
+    bytes = (bytes + 15) & ~(size_t)15;
+    kchunk *c = a->chunks;
+    if (!c || c->used + bytes > c->cap) {
+        size_t cap = bytes > KCHUNK ? bytes : KCHUNK;
+        if (cap == KCHUNK && kchunk_spare) {
+            c = kchunk_spare;
+            kchunk_spare = c->next;
+            kchunk_spares--;
+        } else {
+            c = (kchunk *)malloc(sizeof(kchunk) + cap);
+            if (!c) kpanic("out of memory");
+        }
+        c->next = a->chunks;
+        c->used = 0;
+        c->cap = cap;
+        a->chunks = c;
+    }
+    void *p = (char *)(c + 1) + c->used;
+    c->used += bytes;
+    return p;
+}
+
+static void karena_drop(uint32_t id) {
+    karena *a = karenas[id];
+    while (a->chunks) {
+        kchunk *c = a->chunks;
+        a->chunks = c->next;
+        if (c->cap == KCHUNK && kchunk_spares < KCHUNK_KEPT) {
+            c->next = kchunk_spare;
+            kchunk_spare = c;
+            kchunk_spares++;
+        } else {
+            free(c);
+        }
+    }
+    free(a);
+    karenas[id] = NULL;
+}
+
+/* Gives back the memory of a block nothing uses. */
+static void kfree_obj(kobj *o) {
+    if (o->arena) {
+        karena *a = karenas[o->arena];
+        if (--a->live == 0 && !a->open) karena_drop(o->arena);
+    } else {
+        free(o);
+    }
+}
+
+static kv kint(i128 i);
+
+static kv karena_open(void) {
+    if (!KARENAS) return kint(0);
+    for (uint32_t id = 1; id < KARENA_MAX; id++) {
+        if (karenas[id]) continue;
+        karena *a = (karena *)calloc(1, sizeof(karena));
+        if (!a) kpanic("out of memory");
+        a->open = true;
+        a->outer = karena_cur;
+        karenas[id] = a;
+        karena_cur = id;
+        return kint(id);
+    }
+    /* Too many at once: this one asks `malloc` as usual. */
+    return kint(0);
+}
+
 static bool kheap(kv v) { return v.tag >= T_STR && v.tag != T_NONE && v.tag != T_FN && v.u.o != NULL; }
 
 static kv kretain(kv v) {
@@ -311,13 +414,13 @@ static void krelease(kv v) {
     if (v.tag != T_STR && v.u.o->pack == P_NONE)
         for (int64_t i = 0; i < v.u.o->len; i++) krelease(ITEMS(v.u.o)[i]);
     kobj *o = v.u.o;
-    if (v.tag != T_STR && v.tag != T_ARRAY && o->len > 0 && o->len <= KPOOL_MAX) {
+    if (!o->arena && v.tag != T_STR && v.tag != T_ARRAY && o->len > 0 && o->len <= KPOOL_MAX) {
         int64_t n = o->len;
         KPOOL_NEXT(o) = kpool[n];
         kpool[n] = o;
         return;
     }
-    free(o);
+    kfree_obj(o);
 }
 
 static void kset(kv *slot, kv v) {
@@ -327,8 +430,17 @@ static void kset(kv *slot, kv v) {
 }
 
 static kobj *kalloc(size_t bytes, int64_t len) {
-    kobj *o = (kobj *)malloc(sizeof(kobj) + bytes);
-    if (!o) kpanic("out of memory");
+    kobj *o;
+    if (karena_cur) {
+        karena *a = karenas[karena_cur];
+        o = (kobj *)karena_take(a, sizeof(kobj) + bytes);
+        a->live++;
+        o->arena = karena_cur;
+    } else {
+        o = (kobj *)malloc(sizeof(kobj) + bytes);
+        if (!o) kpanic("out of memory");
+        o->arena = 0;
+    }
     o->rc = 1;
     o->len = len;
     o->cap = len;
@@ -447,7 +559,7 @@ static void kunpack(kv *v) {
     if (o->pack == P_NONE) return;
     kobj *n = kalloc((size_t)o->len * sizeof(kv), o->len);
     for (int64_t i = 0; i < o->len; i++) ITEMS(n)[i] = o->pack >= P_REC ? krec_box(o, i) : kelem(o, i);
-    if (KDEC(o) == 0) free(o);
+    if (KDEC(o) == 0) kfree_obj(o);
     v->u.o = n;
 }
 
@@ -463,7 +575,7 @@ static void krepack(kv *v) {
     kobj *n = kalloc((size_t)o->len * kpack_size(pack), o->len);
     n->pack = pack;
     for (int64_t i = 0; i < o->len; i++) kraw(n, i, ITEMS(o)[i]);
-    free(o);
+    kfree_obj(o);
     v->u.o = n;
 }
 
@@ -472,7 +584,7 @@ static kv kagg(int tag, uint32_t a, uint32_t b, int64_t n, const kv *items) {
     kv v = kmk(tag);
     v.a = a;
     v.b = b;
-    if (tag != T_ARRAY && n > 0 && n <= KPOOL_MAX && kpool[n]) {
+    if (!karena_cur && tag != T_ARRAY && n > 0 && n <= KPOOL_MAX && kpool[n]) {
         kobj *o = kpool[n];
         kpool[n] = KPOOL_NEXT(o);
         o->rc = 1;
@@ -693,8 +805,19 @@ static kv kpush(kv *root, int n, const kstep *steps, kv item) {
     }
     if (o->len == o->cap) {
         int64_t cap = o->cap < 4 ? 4 : o->cap * 2;
-        o = (kobj *)realloc(o, sizeof(kobj) + (size_t)cap * kpack_size(o->pack));
-        if (!o) kpanic("out of memory");
+        if (o->arena || karena_cur) {
+            /* A block of an arena does not grow where it is, and one that
+               grows inside an arena moves into it. */
+            size_t size = kpack_size(o->pack);
+            kobj *n = kalloc((size_t)cap * size, o->len);
+            n->pack = o->pack;
+            memcpy(n + 1, o + 1, (size_t)o->len * size);
+            kfree_obj(o);
+            o = n;
+        } else {
+            o = (kobj *)realloc(o, sizeof(kobj) + (size_t)cap * kpack_size(o->pack));
+            if (!o) kpanic("out of memory");
+        }
         o->cap = cap;
         v->u.o = o;
     }
@@ -2097,6 +2220,16 @@ static kv kchan_close(kv chan) {
     KCHAN_WAKE();
     KCHAN_UNLOCK();
     krelease(chan);
+    return KUNIT;
+}
+
+static kv karena_close(kv mark) {
+    uint32_t id = (uint32_t)mark.u.i;
+    if (id == 0) return KUNIT;
+    karena *a = karenas[id];
+    karena_cur = a->outer;
+    a->open = false;
+    if (a->live == 0) karena_drop(id);
     return KUNIT;
 }
 
