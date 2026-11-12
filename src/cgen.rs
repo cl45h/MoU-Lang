@@ -287,6 +287,88 @@ enum Rep {
 
 struct Cx {
     reps: Vec<Rep>,
+    /// Temporaries a call takes as an argument and nothing else reads:
+    /// the call takes the value itself, not a copy of it.
+    spent: Vec<bool>,
+}
+
+/// The temporaries that are given a value once and read once, by a call
+/// at the end of the same block. A copy kept in such a temporary would
+/// make whatever it holds shared until the function returns, and the
+/// next write to the original would copy all of it.
+pub fn spent(f: &Func) -> Vec<bool> {
+    fn through(p: &Place, uses: &mut [u32]) {
+        for pr in &p.proj {
+            match pr {
+                Proj::Index(op) => read(op, uses),
+                Proj::Path(l) => uses[*l] += 1,
+                Proj::Field(_) => {}
+            }
+        }
+    }
+    fn read(op: &Operand, uses: &mut [u32]) {
+        if let Operand::Place(p) = op {
+            uses[p.local] += 1;
+            through(p, uses);
+        }
+    }
+    fn written(p: &Place, block: usize, uses: &mut [u32], defs: &mut [(u32, usize)]) {
+        if p.proj.is_empty() {
+            defs[p.local] = (defs[p.local].0 + 1, block);
+        } else {
+            uses[p.local] += 2;
+            through(p, uses);
+        }
+    }
+    let n = f.locals.max(1);
+    let mut uses = vec![0u32; n];
+    let mut defs = vec![(0u32, usize::MAX); n];
+    let mut by_call = vec![usize::MAX; n];
+    for (k, b) in f.blocks.iter().enumerate() {
+        for st in &b.stmts {
+            written(&st.place, k, &mut uses, &mut defs);
+            each_operand(&st.rv, &mut |op| read(op, &mut uses));
+            if let Rvalue::Push(p, _) | Rvalue::Pop(p) = &st.rv {
+                uses[p.local] += 2;
+                through(p, &mut uses);
+            }
+        }
+        match &b.term {
+            Term::Call { callee, args, writeback, dest, .. } => {
+                if let Callee::Indirect(op) = callee {
+                    read(op, &mut uses);
+                }
+                for a in args {
+                    read(a, &mut uses);
+                    if let Operand::Place(p) = a {
+                        if p.proj.is_empty() {
+                            by_call[p.local] = k;
+                        }
+                    }
+                }
+                for (_, place) in writeback {
+                    uses[place.local] += 2;
+                    through(place, &mut uses);
+                }
+                // The result is stored after the arguments are read, in
+                // the block that follows as far as a temporary can tell.
+                written(dest, usize::MAX, &mut uses, &mut defs);
+            }
+            Term::Branch(op, _, _) | Term::Return(op) => read(op, &mut uses),
+            _ => {}
+        }
+    }
+    (0..n)
+        .map(|l| {
+            l >= f.params
+                && f.names.get(l).is_none_or(|name| name.is_none())
+                && !f.once.contains(&l)
+                && uses[l] == 1
+                && defs[l].0 == 1
+                && defs[l].1 != usize::MAX
+                && defs[l].1 == by_call[l]
+        })
+        .collect()
 }
 
 fn rep_type(r: Rep) -> &'static str {
@@ -546,6 +628,15 @@ impl Cx {
             return None;
         }
         self.walk(local, proj, write)
+    }
+
+    /// An expression that takes the value out of a place and leaves the
+    /// place empty, when the place is a local or a field of fields of one.
+    fn moved(&self, p: &Place) -> Option<String> {
+        if !p.proj.iter().all(|pr| matches!(pr, Proj::Field(_))) {
+            return None;
+        }
+        self.walk(p.local, &p.proj, true).map(|ptr| format!("ktake({ptr})"))
     }
 
     /// A C pointer to a value that has parts: it is never a bare item.
@@ -901,9 +992,11 @@ fn direct_head(i: usize, params: &[Rep], ret: Rep) -> String {
 }
 
 fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>]) -> Result<(), String> {
-    let cx = &Cx { reps: infer(f, fns) };
+    let cx = &Cx { reps: infer(f, fns), spent: spent(f) };
     let n = f.locals.max(1);
     let mine = direct[i].as_ref();
+    // The name of the function in the program, for whoever reads the C.
+    writeln!(out, "/* {} */", f.name.replace("*/", "* /")).unwrap();
     match mine {
         Some((params, ret)) => writeln!(out, "{} {{", direct_head(i, params, *ret)).unwrap(),
         None => writeln!(out, "static kv f{i}(kv *a, kv env) {{").unwrap(),
@@ -979,10 +1072,17 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                 if let (Some((params, ret)), Callee::Fn(g)) = (fast, callee) {
                     let mut values = Vec::new();
                     let mut temps = Vec::new();
+                    // Temporaries only this call reads: let go of after it.
+                    let mut done = Vec::new();
                     for (k, (r, a)) in params.iter().zip(args).enumerate() {
                         match (r, a) {
                             // A tagged local is lent as it is.
-                            (Rep::Boxed, Operand::Place(p)) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed => values.push(format!("L[{}]", p.local)),
+                            (Rep::Boxed, Operand::Place(p)) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed => {
+                                values.push(format!("L[{}]", p.local));
+                                if cx.spent[p.local] {
+                                    done.push(p.local);
+                                }
+                            }
                             (Rep::Boxed, _) => {
                                 writeln!(out, "        kv t{k} = {};", operand(cx, a)?).unwrap();
                                 values.push(format!("t{k}"));
@@ -994,6 +1094,9 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     writeln!(out, "        {} r = g{g}({});", rep_type(*ret), values.join(", ")).unwrap();
                     for k in temps {
                         writeln!(out, "        krelease(t{k});").unwrap();
+                    }
+                    for l in done {
+                        writeln!(out, "        kset(&L[{l}], KUNIT);").unwrap();
                     }
                     writeln!(out, "        {}", cx.take_machine(dest, *ret, "r")?).unwrap();
                     writeln!(out, "    }}").unwrap();
@@ -1029,9 +1132,33 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
                     writeln!(out, "        kv r = k{}({});", name.replace('.', "_"), parts?.join(", ")).unwrap();
                 } else {
-                    let parts: Result<Vec<String>, String> = args.iter().map(|a| operand(cx, a)).collect();
-                    let parts = parts?;
-                    let init = if parts.is_empty() { "KUNIT".to_string() } else { parts.join(", ") };
+                    // A `mut` argument is moved out of its place for the
+                    // call and put back after it: were it only copied,
+                    // the first write of the callee would find the value
+                    // shared and copy all of it. The other arguments are
+                    // read first, since they may read what is moved.
+                    let lent = |k: usize| writeback.iter().find(|(i, _)| *i == k).and_then(|(_, place)| match &args[k] {
+                        Operand::Place(p) if p == place => cx.moved(p),
+                        _ => None,
+                    });
+                    let mut parts = vec![String::new(); args.len()];
+                    for (k, a) in args.iter().enumerate() {
+                        if lent(k).is_none() {
+                            parts[k] = match a {
+                                Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed && cx.spent[p.local] => format!("ktake(&L[{}])", p.local),
+                                _ => operand(cx, a)?,
+                            };
+                        }
+                    }
+                    for (k, part) in parts.iter_mut().enumerate() {
+                        if let Some(taken) = lent(k) {
+                            *part = taken;
+                        }
+                    }
+                    for (k, part) in parts.iter().enumerate() {
+                        writeln!(out, "        kv t{k} = {part};").unwrap();
+                    }
+                    let init = if parts.is_empty() { "KUNIT".to_string() } else { (0..parts.len()).map(|k| format!("t{k}")).collect::<Vec<_>>().join(", ") };
                     writeln!(out, "        kv A[{}] = {{{init}}};", parts.len().max(1)).unwrap();
                     match callee {
                         Callee::Fn(f) => writeln!(out, "        kv r = f{f}(A, KUNIT);").unwrap(),

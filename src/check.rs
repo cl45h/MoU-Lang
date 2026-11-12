@@ -483,6 +483,235 @@ pub fn decls_dump(file: &File) -> String {
     out
 }
 
+/// Every expression of a program, each one before those inside it.
+fn all_exprs(file: &File) -> Vec<&Expr> {
+    fn pat<'a>(p: &'a Pattern, out: &mut Vec<&'a Expr>) {
+        match p {
+            Pattern::Literal(e) => expr(e, out),
+            Pattern::Range { lo, hi, .. } => {
+                expr(lo, out);
+                if let Some(h) = hi {
+                    expr(h, out);
+                }
+            }
+            Pattern::Ctor { args, .. } | Pattern::Tuple(args) | Pattern::Slice(args) | Pattern::Or(args) => args.iter().for_each(|p| pat(p, out)),
+            Pattern::Struct { fields, .. } => fields.iter().filter_map(|f| f.1.as_ref()).for_each(|p| pat(p, out)),
+            Pattern::Wildcard | Pattern::Bind { .. } | Pattern::Rest => {}
+        }
+    }
+    fn cond<'a>(c: &'a Cond, out: &mut Vec<&'a Expr>) {
+        match c {
+            Cond::Expr(e) => expr(e, out),
+            Cond::Let(p, e) => {
+                pat(p, out);
+                expr(e, out);
+            }
+        }
+    }
+    fn block<'a>(b: &'a Block, out: &mut Vec<&'a Expr>) {
+        for s in &b.stmts {
+            match s {
+                Stmt::Let { pat: p, value, .. } => {
+                    pat(p, out);
+                    if let Some(v) = value {
+                        expr(v, out);
+                    }
+                }
+                Stmt::Assign { target, value, .. } => {
+                    expr(target, out);
+                    expr(value, out);
+                }
+                Stmt::Defer(e) | Stmt::Expr(e) => expr(e, out),
+                Stmt::Decl(_) => {}
+            }
+        }
+        if let Some(t) = &b.tail {
+            expr(t, out);
+        }
+    }
+    fn expr<'a>(e: &'a Expr, out: &mut Vec<&'a Expr>) {
+        out.push(e);
+        match &e.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Char(_) | ExprKind::Bool(_) | ExprKind::Path(_) | ExprKind::Continue => {}
+            ExprKind::Str(parts) => {
+                for p in parts {
+                    if let StrPart::Expr(inner) = p {
+                        expr(inner, out);
+                    }
+                }
+            }
+            ExprKind::Tuple(items) | ExprKind::Array(items) => items.iter().for_each(|i| expr(i, out)),
+            ExprKind::ArrayRepeat(a, b) => {
+                expr(a, out);
+                expr(b, out);
+            }
+            ExprKind::Block(b) | ExprKind::Loop(b) | ExprKind::Unsafe(b) => block(b, out),
+            ExprKind::If { cond: c, then, els } => {
+                cond(c, out);
+                block(then, out);
+                if let Some(x) = els {
+                    expr(x, out);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                expr(scrutinee, out);
+                for arm in arms {
+                    pat(&arm.pat, out);
+                    if let Some(g) = &arm.guard {
+                        expr(g, out);
+                    }
+                    expr(&arm.body, out);
+                }
+            }
+            ExprKind::For { pat: p, iter, body } => {
+                pat(p, out);
+                expr(iter, out);
+                block(body, out);
+            }
+            ExprKind::While { cond: c, body } => {
+                cond(c, out);
+                block(body, out);
+            }
+            ExprKind::Closure { body, .. } | ExprKind::Scope { body, .. } => block(body, out),
+            ExprKind::With { bindings, body } => {
+                bindings.iter().for_each(|b| expr(&b.1, out));
+                block(body, out);
+            }
+            ExprKind::Comptime(x) | ExprKind::Try(x) => expr(x, out),
+            ExprKind::Return(x) | ExprKind::Break(x) => {
+                if let Some(x) = x {
+                    expr(x, out);
+                }
+            }
+            ExprKind::Unary { expr: x, .. } | ExprKind::Cast { expr: x, .. } | ExprKind::Field { base: x, .. } => expr(x, out),
+            ExprKind::Binary { lhs, rhs, .. } => {
+                expr(lhs, out);
+                expr(rhs, out);
+            }
+            ExprKind::Range { lo, hi, .. } => {
+                for x in [lo, hi].into_iter().flatten() {
+                    expr(x, out);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                expr(callee, out);
+                args.iter().for_each(|a| expr(&a.value, out));
+            }
+            ExprKind::Index { base, args } => {
+                expr(base, out);
+                args.iter().for_each(|a| expr(a, out));
+            }
+            ExprKind::Catch { expr: x, handler, .. } => {
+                expr(x, out);
+                block(handler, out);
+            }
+        }
+    }
+    fn decl<'a>(d: &'a Decl, out: &mut Vec<&'a Expr>) {
+        match &d.kind {
+            DeclKind::Fn(f) => {
+                f.params.iter().filter_map(|p| p.default.as_ref()).for_each(|e| expr(e, out));
+                f.where_.iter().for_each(|e| expr(e, out));
+                if let Some(b) = &f.body {
+                    expr(b, out);
+                }
+            }
+            DeclKind::Struct(s) => s.fields.iter().filter_map(|f| f.default.as_ref()).for_each(|e| expr(e, out)),
+            DeclKind::Enum(e) => e.variants.iter().filter_map(|v| v.value.as_ref()).for_each(|e| expr(e, out)),
+            DeclKind::Trait(t) => t.methods.iter().for_each(|m| decl(m, out)),
+            DeclKind::Impl(i) => i.decls.iter().for_each(|m| decl(m, out)),
+            DeclKind::Const { value, .. } => expr(value, out),
+            DeclKind::TypeAlias { .. } => {}
+        }
+    }
+    let mut out = Vec::new();
+    file.decls.iter().for_each(|d| decl(d, &mut out));
+    out
+}
+
+/// What the checker finds out about every expression of a program: its
+/// type, the type it is used as and what it refers to, for ordinary code
+/// and for each instance of a generic function. The checker written in
+/// Mou (`compiler/check.mou`) prints the same.
+pub fn info_dump(file: &File) -> String {
+    use std::fmt::Write;
+    let mut c = checker(file);
+    c.run();
+    c.errors.sort_by_key(|e| (e.span.line, e.span.col));
+    c.errors.dedup_by(|a, b| a.span.line == b.span.line && a.span.col == b.span.col && a.msg == b.msg);
+    let text = plain_text;
+    let list = |ts: &[Ty]| ts.iter().map(plain_text).collect::<Vec<_>>().join(", ");
+    let mode = |m: Mode| match m {
+        Mode::Let => "let",
+        Mode::Mut => "mut",
+        Mode::Own => "own",
+    };
+    let sig = |s: &Sig| {
+        let ps: Vec<String> = s.params.iter().map(|p| format!("{} {}: {} {}", mode(p.mode), p.name, text(&p.ty), p.optional)).collect();
+        format!("({}) -> {}", ps.join(", "), text(&s.ret))
+    };
+    let res = |r: &Res| match r {
+        Res::Extern(i) => format!("extern {i}"),
+        Res::Local => "local".to_string(),
+        Res::NoneValue => "none".to_string(),
+        Res::Fn(i) => format!("fn {i}"),
+        Res::Const(i) => format!("const {i}"),
+        Res::Variant(i, v) => format!("variant {i}.{v}"),
+        Res::Field(k) => format!("field {k}"),
+        Res::Len => "len".to_string(),
+        Res::SomeCtor => "some".to_string(),
+        Res::StructCtor(i) => format!("struct {i}"),
+        Res::Assoc(t, n) => format!("assoc {t}.{n}"),
+        Res::Method(t, n) => format!("method {t}.{n}"),
+        Res::Builtin(s) => format!("builtin {s}"),
+        Res::Generic(k) => format!("generic {k}"),
+        Res::Dyn(k, m) => format!("dyn {k} {m}"),
+    };
+    let mut out = String::new();
+    for e in &c.errors {
+        let _ = writeln!(out, "error {}:{} {}", e.span.line, e.span.col, e.msg);
+    }
+    let _ = writeln!(out, "checked {} skipped_exprs {}", c.report.checked_fns, c.report.skipped_exprs);
+    for s in &c.report.skipped_decls {
+        let _ = writeln!(out, "skipped {s}");
+    }
+    for (i, t) in c.consts.iter().enumerate() {
+        let _ = writeln!(out, "const {i} {}", t.as_ref().map_or("_".to_string(), text));
+    }
+    for (k, i) in c.instances.iter().enumerate() {
+        let target = match &i.f {
+            Target::Fn(f) => format!("fn {f}"),
+            Target::Method(t, n) => format!("method {t}.{n}"),
+        };
+        let _ = writeln!(out, "instance {k} {target} [{}] <{}> {}", list(&i.targs), i.shown, sig(&i.sig));
+    }
+    let exprs = all_exprs(file);
+    let seq: HashMap<usize, usize> = exprs.iter().enumerate().map(|(k, e)| (id(e), k)).collect();
+    let slot = |inst: usize| if inst == DEFINITION { 0 } else { inst + 1 };
+    let mut keys = std::collections::BTreeSet::new();
+    let mut unseen = 0;
+    let all = c.types.keys().chain(c.wants.keys()).chain(c.res.keys()).chain(c.dyns.keys()).chain(c.ref_writes.iter());
+    for (inst, e) in all {
+        match seq.get(e) {
+            Some(s) => {
+                keys.insert((slot(*inst), *s));
+            }
+            None => unseen += 1,
+        }
+    }
+    for (sl, s) in keys {
+        let e = exprs[s];
+        let key = (if sl == 0 { DEFINITION } else { sl - 1 }, id(e));
+        let t = c.types.get(&key).map_or("-".to_string(), text);
+        let w = c.wants.get(&key).map_or("-".to_string(), text);
+        let r = c.res.get(&key).map_or("-".to_string(), res);
+        let d = c.dyns.get(&key).map_or("-".to_string(), |t| t.iter().map(res).collect::<Vec<_>>().join("; "));
+        let _ = writeln!(out, "e {sl} {s} {}:{} t={t} w={w} r={r} d={d} rw={}", e.span.line, e.span.col, c.ref_writes.contains(&key));
+    }
+    let _ = writeln!(out, "unseen {unseen}");
+    out
+}
+
 /// A type as text, without the names of the program.
 fn plain_text(t: &Ty) -> String {
     use Ty::*;

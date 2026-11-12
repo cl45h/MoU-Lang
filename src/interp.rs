@@ -166,6 +166,8 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
         span,
         stack: stack.iter().rev().map(|f| p.fns[f.func].name.clone()).collect(),
     };
+    // For each function reached, the temporaries a call gives away.
+    let mut spent: Vec<Option<Vec<bool>>> = vec![None; p.fns.len()];
     loop {
         let top = stack.len() - 1;
         let bb = &p.fns[stack[top].func].blocks[stack[top].block];
@@ -213,8 +215,27 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
                 Value::Bool(c) => stack[top].block = if c { *yes } else { *no },
                 _ => tri!(Err(internal("a branch on a value that is not a bool"))),
             },
-            Term::Call { callee, args, dest, next, .. } => {
-                let vals: Vec<Value> = tri!(args.iter().map(|a| operand(&stack[top], a)).collect());
+            Term::Call { callee, args, writeback, dest, next } => {
+                // A `mut` argument is moved out of its place for the call,
+                // which puts it back, and a temporary only the call reads
+                // is given away: a copy would leave the value shared, and
+                // the first write to it would copy all of it.
+                let func = stack[top].func;
+                let spent = &*spent[func].get_or_insert_with(|| crate::cgen::spent(&p.fns[func]));
+                let lent = |k: usize| writeback.iter().any(|(i, place)| *i == k && matches!(&args[k], Operand::Place(p) if p == place));
+                let mut vals: Vec<Value> = Vec::with_capacity(args.len());
+                for (k, a) in args.iter().enumerate() {
+                    vals.push(match a {
+                        _ if lent(k) => Value::Unit,
+                        Operand::Place(p) if p.proj.is_empty() && spent[p.local] => std::mem::replace(&mut stack[top].locals[p.local], Value::Unit),
+                        _ => tri!(operand(&stack[top], a)),
+                    });
+                }
+                for (k, a) in args.iter().enumerate() {
+                    if let (true, Operand::Place(p)) = (lent(k), a) {
+                        vals[k] = std::mem::replace(tri!(slot(&mut stack[top], p)), Value::Unit);
+                    }
+                }
                 let target = match callee {
                     Callee::Fn(f) => Some((*f, Rc::default())),
                     Callee::Indirect(op) => match tri!(operand(&stack[top], op)) {

@@ -79,7 +79,7 @@ impl DeclKind {
             DeclKind::Struct(s) => ("struct", s.name.clone()),
             DeclKind::Enum(e) => ("enum", e.name.clone()),
             DeclKind::Trait(t) => ("trait", t.name.clone()),
-            DeclKind::Impl(i) => ("impl", format!("{:?}", i.ty)),
+            DeclKind::Impl(i) => ("impl", ty_text(&i.ty)),
             DeclKind::Const { name, .. } => ("let", name.clone()),
             DeclKind::TypeAlias { name, .. } => ("type", name.clone()),
         }

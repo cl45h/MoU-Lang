@@ -1,8 +1,10 @@
-// The checker of Mou, written in Mou. So far: what the declarations of a
-// program say, without looking into any expression. It follows the
-// passes over declarations of `src/check.rs`, and `mou decls` prints
-// what that one gives in the form `dump` prints here.
+// The checker of Mou, written in Mou. It follows `src/check.rs` pass by
+// pass: the declarations first, then every body. `mou decls` and `mou
+// types` print what that one gives in the form `dump` and `dump_types`
+// print here.
 
+import std.cmp
+import std.hash
 import std.text
 import lexer
 import load
@@ -113,6 +115,86 @@ struct Required { tr: int, sup: Bound, ty: types.Ty, at: Span }
 
 struct Signed { sig: types.Sig, self_mode: parser.Mode? }
 
+// The number of the instance that stands for the body of a generic
+// function checked against its bounds, not for given types.
+let DEFINITION: int = -1
+
+// What a name, a field or a call refers to.
+pub enum Res {
+    // A function of a C header, by number.
+    Extern(int)
+    Local
+    NoneValue
+    Fn(int)
+    Const(int)
+    // A variant without fields used as a value, or one being built.
+    Variant(int, int)
+    // A field of a struct or an item of a tuple, by position.
+    Field(int)
+    Len
+    SomeCtor
+    StructCtor(int)
+    // `Type.name(...)`: the name of the type and of the function.
+    Assoc(str, str)
+    // `value.name(...)`: the name of the type and of the method.
+    Method(str, str)
+    Builtin(str)
+    // A call of a generic function: the number of the instance.
+    Generic(int)
+    // A method called on a `dyn Trait` value: its place among the methods
+    // the value carries, and whether it takes `mut self`.
+    Dyn(int, bool)
+}
+
+pub enum Target { Fn(int), Method(str, str) }
+
+pub struct Instance { target: Target, targs: [types.Ty], shown: str, sig: types.Sig }
+
+struct Var { name: str, ty: types.Ty, mutable: bool, id: int, movable: bool, deferred: bool }
+
+enum Seg { Field(str), Index(str?) }
+
+// A variable, or a field or an item inside one, that an expression stands for.
+struct Access { root: int, name: str, segs: [Seg] }
+
+struct Loop { ty: types.Ty?, valued: bool }
+
+struct FnCtx { ret: types.Ty, fails: types.Ty?, loops: [Loop], by_ref: bool }
+
+struct Active { ty: types.Ty, bound: Bound }
+
+struct LogRange { start: int, end: int }
+
+struct PreArgs { tys: [types.Ty], logs: [LogRange] }
+
+struct Recv { access: Access, exclusive: bool }
+
+struct Logged { access: Access, at: Span }
+
+struct Borrow { access: Access, exclusive: bool, at: Span }
+
+struct RefCall { mutable: bool, receiver: bool }
+
+struct RefSrc { src: parser.Expr, mutable: bool }
+
+struct DynEntry { key: int, table: [Res] }
+
+enum Picked { Nothing, Name(str), Unclear }
+
+struct Impl { bound: Bound, env: [types.Binding], info: ImplInfo }
+
+struct GRef { module: int, name: str }
+
+struct Head { ty: types.Ty, explicit: bool }
+
+struct CtorField { name: str, ty: types.Ty, optional: bool }
+
+struct Native { name: str, sig: types.Sig }
+
+struct Source { id: int, name: str }
+
+struct First { name: str, mutable: bool }
+
 pub struct Checker {
     decls: [parser.Decl]
     modules: [load.Module]
@@ -146,6 +228,41 @@ pub struct Checker {
     skipped_decls: [str]
     skipped_exprs: int
     self_ty: types.Ty?
+    // Stop after the declarations, without looking into any expression.
+    decls_only: bool
+    // How many expressions the program has: each has a number below it.
+    total: int
+    // The instance being checked: 0 for ordinary code.
+    inst: int
+    // What was found about each expression, by instance and number.
+    types: hash.Table[int, types.Ty]
+    wants: hash.Table[int, types.Ty]
+    res: hash.Table[int, Res]
+    var_of: hash.Table[int, int]
+    ref_calls: hash.Table[int, RefCall]
+    ref_writes: hash.Table[int, bool]
+    dyns: [DynEntry]
+    active: [Active]
+    pre_args: PreArgs?
+    // The type the expression about to be checked is expected to have,
+    // and the same for the one being checked right now.
+    hint: types.Ty?
+    pending: types.Ty?
+    instances: [Instance]
+    unsafe_depth: int
+    // For each closure being checked, how many scopes are outside it.
+    closures: [int]
+    next_var: int
+    // Every `mut` access and assignment checked so far.
+    mut_log: [Logged]
+    // What the `for` loops around go over.
+    frozen: [Access]
+    receiver: Recv?
+    arg_logs: [LogRange]?
+    scopes: [[Var]]
+    ctx: [FnCtx]
+    cur: Span
+    checked_fns: int
 }
 
 fn has_expr(o: parser.Expr?) -> bool {
@@ -669,6 +786,8 @@ impl Checker {
     }
 
     fn enter_definition(mut self, tparams: [TParam]) {
+        if tparams.len == 0 { return }
+        self.inst = DEFINITION
         for p in tparams {
             types.define(mut self.tenv, p.name, types.Ty.Param(p.name))
             self.set_bounds(p.name, p.bounds)
@@ -677,6 +796,8 @@ impl Checker {
 
     // Starts checking the fields of a generic struct or enum.
     fn enter_type(mut self, generics: [parser.GenParam], at: Span) {
+        if generics.len == 0 { return }
+        self.inst = DEFINITION
         for g in generics {
             match g {
                 parser.GenParam.OfType(name, bounds) => {
@@ -689,8 +810,10 @@ impl Checker {
     }
 
     fn leave_generic(mut self) {
+        self.inst = 0
         self.tenv = []
         self.bounds = []
+        self.active = []
     }
 
     // ---- types ----
@@ -849,7 +972,7 @@ impl Checker {
 
     // The type arguments written in a type, or nothing when one of them
     // is a value, which is not checked yet.
-    fn type_args(mut self, args: [parser.GenArg], at: Span) -> [types.Ty]? {
+    fn written_args(mut self, args: [parser.GenArg], at: Span) -> [types.Ty]? {
         var targs: [types.Ty] = []
         for a in args {
             match a {
@@ -867,7 +990,7 @@ impl Checker {
                 if path.len == 2 {
                     match self.global(name) {
                         Some(Global.Module(m)) => {
-                            match self.type_args(args, at) {
+                            match self.written_args(args, at) {
                                 Some(targs) => return self.named_in(m, path[1], targs, at)
                                 None => return self.skip()
                             }
@@ -886,7 +1009,7 @@ impl Checker {
                     self.err(at, "unknown type `{text.join(path, ".")}`")
                     return types.Ty.Unknown
                 }
-                match self.type_args(args, at) {
+                match self.written_args(args, at) {
                     Some(targs) => self.named(name, targs, at)
                     None => self.skip()
                 }
@@ -966,6 +1089,9 @@ impl Checker {
                     ty = self.resolve(t, at)
                 }
                 None => self.err(at, "parameter `{p.name}` of `{f.name}` needs a type")
+            }
+            if !self.decls_only {
+                if let Some(d) = p.default { self.expect(d, ty, "parameter default") }
             }
             params.push(types.ParamSig(p.name, p.mode, ty, has_expr(p.default)))
         }
@@ -1128,6 +1254,7 @@ impl Checker {
             let d = self.decls[di]
             self.module = self.module_of[di]
             let at = Span(d.line, d.col)
+            self.cur = at
             match d.kind {
                 parser.DeclKind.Struct(s) => {
                     var i = -1
@@ -1150,6 +1277,9 @@ impl Checker {
                         }
                         if twice { self.err(at, "field `{f.name}` is defined twice in `{s.name}`") }
                         let ty = self.resolve(f.ty, at)
+                        if !self.decls_only {
+                            if let Some(d) = f.default { self.expect(d, ty, "field default") }
+                        }
                         fields.push(FieldInfo(f.name, ty, has_expr(f.default)))
                     }
                     self.structs[i].fields = fields
@@ -1177,6 +1307,12 @@ impl Checker {
                         if twice { self.err(at, "variant `{v.name}` is defined twice in `{e.name}`") }
                         var fields: [VariantField] = []
                         for f in v.fields { fields.push(VariantField(f.label, self.resolve(f.ty, at))) }
+                        if !self.decls_only {
+                            if let Some(value) = v.value {
+                                let t = self.expr(value)
+                                if !types.is_int(t) { self.err(at_expr(value), "an enum value must be an integer") }
+                            }
+                        }
                         variants.push(VariantInfo(v.name, fields))
                     }
                     self.enums[i].variants = variants
@@ -1303,6 +1439,7 @@ impl Checker {
             let d = self.decls[di]
             self.module = self.module_of[di]
             let at = Span(d.line, d.col)
+            self.cur = at
             match d.kind {
                 parser.DeclKind.Fn(f) => {
                     let idx = self.fn_of_decl[di]
@@ -1584,15 +1721,21 @@ fn has_args(all: [Bound], args: [types.Ty]) -> bool {
     false
 }
 
-// Checks the declarations of a loaded program.
-pub fn declarations(p: load.Program) -> Checker {
+// A checker that has not looked at anything yet.
+fn start(p: load.Program, decls_only: bool) -> Checker {
     var module_of: [int] = []
     var fn_of_decl: [int] = []
     for d in p.file.decls {
         module_of.push(0)
         fn_of_decl.push(-1)
     }
-    var c = Checker(
+    let tys: hash.Table[int, types.Ty] = hash.Table.new()
+    let wants: hash.Table[int, types.Ty] = hash.Table.new()
+    let res: hash.Table[int, Res] = hash.Table.new()
+    let var_of: hash.Table[int, int] = hash.Table.new()
+    let ref_calls: hash.Table[int, RefCall] = hash.Table.new()
+    let ref_writes: hash.Table[int, bool] = hash.Table.new()
+    Checker(
         decls: p.file.decls,
         modules: p.modules,
         tenv: [],
@@ -1622,14 +1765,3944 @@ pub fn declarations(p: load.Program) -> Checker {
         errors: [],
         skipped_decls: [],
         skipped_exprs: 0,
-        self_ty: None
+        self_ty: None,
+        decls_only: decls_only,
+        total: if p.file.exprs > 0 { p.file.exprs } else { 1 },
+        inst: 0,
+        types: tys,
+        wants: wants,
+        res: res,
+        var_of: var_of,
+        ref_calls: ref_calls,
+        ref_writes: ref_writes,
+        dyns: [],
+        active: [],
+        pre_args: None,
+        hint: None,
+        pending: None,
+        instances: [],
+        unsafe_depth: 0,
+        closures: [],
+        next_var: 0,
+        mut_log: [],
+        frozen: [],
+        receiver: None,
+        arg_logs: None,
+        scopes: [],
+        ctx: [],
+        cur: Span(0, 0),
+        checked_fns: 0
     )
+}
+
+// Checks the declarations of a loaded program, and nothing inside them.
+pub fn declarations(p: load.Program) -> Checker {
+    var c = start(p, true)
     c.pass_modules()
     c.pass_names()
     c.pass_fields()
     c.pass_traits()
     c.pass_signatures()
     c
+}
+
+// ---- calls of what has type parameters ----
+
+impl Checker {
+    fn slot(self, e: parser.Expr) -> int { (self.inst + 1) * self.total + e.id }
+
+    fn set_res(mut self, e: parser.Expr, r: Res) { self.res.set(self.slot(e), r) }
+
+    fn overloads_of(self, key: str, name: str) -> [Overload] {
+        for o in self.overloads {
+            if o.key == key && o.name == name { return o.all }
+        }
+        []
+    }
+
+    // Chooses, among the methods of one name that impls of generic traits
+    // give a type, the one a call means. Reports it when the call does
+    // not say which.
+    fn pick(mut self, key: str, name: str, hint: types.Ty?, args: [parser.Arg], at: Span) -> Picked {
+        let all = self.overloads_of(key, name)
+        if all.len == 0 { return Picked.Nothing }
+        if all.len == 1 { return Picked.Name(all[0].mangled) }
+        // The type the call must produce decides first.
+        var left = all
+        if let Some(h) = hint {
+            if types.concrete(h) {
+                var fits: [Overload] = []
+                for o in left {
+                    let mi = self.method_index(key, o.mangled)
+                    if mi >= 0 {
+                        if types.assignable(h, self.methods[mi].m.sig.ret) { fits.push(o) }
+                    }
+                }
+                if fits.len > 0 { left = fits }
+            }
+        }
+        // Inside a generic function: what its bounds ask of the type.
+        if left.len > 1 {
+            var wanted: [Bound] = []
+            for a in self.active {
+                if self.key(a.ty) == key {
+                    for b in self.with_supers(a.bound) { wanted.push(b) }
+                }
+            }
+            var fits: [Overload] = []
+            for o in left {
+                if has_bound(wanted, o.bound) { fits.push(o) }
+            }
+            if fits.len > 0 { left = fits }
+        }
+        // Then the types of the arguments.
+        if left.len > 1 {
+            let pre = self.arg_types(args)
+            var fits: [Overload] = []
+            for o in left {
+                let mi = self.method_index(key, o.mangled)
+                if mi < 0 { continue }
+                let s = self.methods[mi].m.sig
+                var good = s.params.len >= pre.tys.len
+                if good {
+                    for k in 0..pre.tys.len {
+                        if !types.assignable(s.params[k].ty, pre.tys[k]) { good = false }
+                    }
+                }
+                if good { fits.push(o) }
+            }
+            self.pre_args = Some(pre)
+            if fits.len > 0 { left = fits }
+        }
+        if left.len == 1 { return Picked.Name(left[0].mangled) }
+        self.pre_args = None
+        var names: [str] = []
+        for o in left { names.push("`{self.show_bound(o.bound)}`") }
+        self.err(at, "`{name}` could be the one of {text.join(names, " or ")}: give the result a type, as in `let x: Type = ...`")
+        Picked.Unclear
+    }
+
+    // The instance of a generic function or method for the given type
+    // arguments, noted so that its body is checked and compiled.
+    fn instance(mut self, target: Target, targs: [types.Ty]) -> int {
+        let shown = self.show_all(targs)
+        for k in 0..self.instances.len {
+            if self.instances[k].shown == shown && same_target(self.instances[k].target, target) { return k as int }
+        }
+        self.instances.push(Instance(target, targs, shown, types.Sig([], types.Ty.Unit)))
+        self.instances.len as int - 1
+    }
+
+    // The methods a `dyn Trait` value carries, in order: those of the
+    // trait and of what it requires that take `self` and name `Self`
+    // nowhere else.
+    fn dyn_slots(self, bound: Bound) -> [TraitMethod] {
+        var unit: [types.Binding] = []
+        types.define(mut unit, "Self", types.Ty.Unit)
+        var slots: [TraitMethod] = []
+        for b in self.with_supers(bound) {
+            let env = self.trait_env(b)
+            for m in self.traits[b.tr].methods {
+                let sig = types.subst_sig(m.sig, env)
+                var generic = false
+                for o in self.traits[b.tr].own_params {
+                    if o.name == m.name { generic = true }
+                }
+                var takes_self = false
+                if let Some(_) = m.self_mode { takes_self = true }
+                var there = false
+                for s in slots {
+                    if s.name == m.name { there = true }
+                }
+                if takes_self && !generic && !there && same_sig(types.subst_sig(sig, unit), sig) { slots.push(TraitMethod(m.name, sig, m.self_mode)) }
+            }
+        }
+        slots
+    }
+
+    // The methods a value of a type carries as a `dyn` of a trait.
+    fn dyn_table(mut self, ty: types.Ty, bound: Bound) -> [Res] {
+        let key = self.key(ty)
+        var table: [Res] = []
+        let supers = self.with_supers(bound)
+        for slot in self.dyn_slots(bound) {
+            // The method is the one of the `impl` of the trait that declares it.
+            var name = slot.name
+            for b in supers {
+                var declares = false
+                for m in self.traits[b.tr].methods {
+                    if m.name == slot.name { declares = true }
+                }
+                if declares {
+                    name = "{slot.name}{self.suffix_of(self.show_bound(b), b)}"
+                    break
+                }
+            }
+            let mi = self.method_index(key, name)
+            if mi < 0 { continue }
+            let m = self.methods[mi].m
+            var plain = m.tparams.len == 0
+            if let Some(_) = m.default { plain = false }
+            if plain {
+                table.push(Res.Method(key, name))
+                continue
+            }
+            var env: [types.Binding] = []
+            types.bind(m.self_ty, ty, mut env)
+            var targs: [types.Ty] = []
+            for p in m.tparams {
+                match types.lookup(env, p.name) {
+                    Some(t) => targs.push(t)
+                    None => targs.push(types.Ty.Unknown)
+                }
+            }
+            let k = self.instance(Target.Method(key, name), targs)
+            table.push(Res.Generic(k))
+        }
+        table
+    }
+
+    // What a type implements of a trait, with what each `impl` binds.
+    fn impls_of(self, t: types.Ty, tr: int) -> [Impl] {
+        var out: [Impl] = []
+        let at = self.impls_index(tr, self.key(t))
+        if at < 0 { return out }
+        for info in self.trait_impls[at].infos {
+            var env: [types.Binding] = []
+            types.bind(info.self_ty, t, mut env)
+            out.push(Impl(Bound(tr, subst_all(info.targs, env)), env, info))
+        }
+        out
+    }
+
+    fn satisfies(self, t: types.Ty, want: Bound) -> bool {
+        match t {
+            types.Ty.Unknown => true
+            types.Ty.Param(n) => {
+                for p in self.bounds {
+                    if p.name != n { continue }
+                    for b in p.bounds {
+                        for s in self.with_supers(b) {
+                            if s.tr == want.tr && agree(s.args, want.args) { return true }
+                        }
+                    }
+                }
+                false
+            }
+            _ => {
+                for i in self.impls_of(t, want.tr) {
+                    if !agree(i.bound.args, want.args) { continue }
+                    var good = true
+                    for p in i.info.tparams {
+                        var arg = types.Ty.Unknown
+                        if let Some(x) = types.lookup(i.env, p.name) { arg = x }
+                        for b in p.bounds {
+                            if !self.satisfies(arg, Bound(b.tr, subst_all(b.args, i.env))) { good = false }
+                        }
+                    }
+                    if good { return true }
+                }
+                false
+            }
+        }
+    }
+
+    // The top-level name an expression refers to, with its module:
+    // `name`, or `module.name` for a name of an imported module.
+    fn gref(mut self, e: parser.Expr) -> GRef? {
+        match e.kind {
+            parser.Kind.Name(n) => {
+                if self.has_local(n) { return None }
+                Some(GRef(self.module, n))
+            }
+            parser.Kind.Field(base, name) => {
+                match base.kind {
+                    parser.Kind.Name(b) => {
+                        if self.has_local(b) { return None }
+                        match self.global(b) {
+                            Some(Global.Module(m)) => {
+                                if self.visible(m, name, at_expr(e)) { return Some(GRef(m, name)) }
+                                None
+                            }
+                            _ => None
+                        }
+                    }
+                    _ => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // Whether an expression is `module.name` for a module of the program.
+    fn in_module(self, e: parser.Expr) -> bool {
+        match e.kind {
+            parser.Kind.Field(base, _) => {
+                match base.kind {
+                    parser.Kind.Name(b) => {
+                        if self.has_local(b) { return false }
+                        match self.global(b) {
+                            Some(Global.Module(_)) => true
+                            _ => false
+                        }
+                    }
+                    _ => false
+                }
+            }
+            _ => false
+        }
+    }
+
+    fn types_of_exprs(mut self, items: [parser.Expr]) -> [types.Ty] {
+        var out: [types.Ty] = []
+        for i in items { out.push(self.type_of_expr(i)) }
+        out
+    }
+
+    // The type an expression written where type arguments go stands for: `f[int]`.
+    fn type_of_expr(mut self, e: parser.Expr) -> types.Ty {
+        let at = at_expr(e)
+        match e.kind {
+            parser.Kind.Name(name) => return self.resolve(parser.Type.Path([name], []), at)
+            parser.Kind.Index(base, args) => {
+                match base.kind {
+                    parser.Kind.Name(name) => {
+                        let targs = self.types_of_exprs(args)
+                        return self.named(name, targs, at)
+                    }
+                    _ => {}
+                }
+                if self.in_module(base) {
+                    match self.gref(base) {
+                        Some(g) => {
+                            let targs = self.types_of_exprs(args)
+                            return self.named_in(g.module, g.name, targs, at)
+                        }
+                        None => return types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Kind.Field(_, _) => {
+                if self.in_module(e) {
+                    match self.gref(e) {
+                        Some(g) => return self.named_in(g.module, g.name, [], at)
+                        None => return types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Kind.Array(items) => {
+                if items.len == 1 { return types.Ty.Slice(self.type_of_expr(items[0])) }
+            }
+            parser.Kind.Try(inner) => return types.Ty.Optional(self.type_of_expr(inner))
+            parser.Kind.Tuple(items) => {
+                if items.len > 0 { return types.Ty.Tuple(self.types_of_exprs(items)) }
+            }
+            _ => {}
+        }
+        self.err(at, "expected a type")
+        types.Ty.Unknown
+    }
+
+    // The types of the arguments of a call, with the part of the log of
+    // changes each one filled.
+    fn arg_types(mut self, args: [parser.Arg]) -> PreArgs {
+        var logs: [LogRange] = []
+        var tys: [types.Ty] = []
+        for a in args {
+            let start = self.mut_log.len as int
+            tys.push(self.expr(a.value))
+            logs.push(LogRange(start, self.mut_log.len as int))
+        }
+        PreArgs(tys, logs)
+    }
+
+    // A call of a generic function or method: finds the type arguments,
+    // checks the bounds and notes the instance to check and run. `known`
+    // holds what the receiver or a written type already decided.
+    fn generic_call(mut self, e: parser.Expr, target: Target, known: [types.Binding], explicit: [parser.Expr]?, hint: types.Ty?, receiver: Recv?, args: [parser.Arg], at: Span) -> types.Ty {
+        var env = known
+        var tparams: [TParam] = []
+        var sig = types.Sig([], types.Ty.Unit)
+        match target {
+            Target.Fn(i) => {
+                tparams = self.fns[i].tparams
+                sig = self.fns[i].sig
+            }
+            Target.Method(t, n) => {
+                let mi = self.method_index(t, n)
+                if mi < 0 { return types.Ty.Unknown }
+                tparams = self.methods[mi].m.tparams
+                sig = self.methods[mi].m.sig
+            }
+        }
+        var pre = PreArgs([], [])
+        match self.pre_args {
+            Some(p) => {
+                pre = p
+                self.pre_args = None
+            }
+            None => {
+                pre = self.arg_types(args)
+            }
+        }
+        let tys = pre.tys
+        match explicit {
+            Some(targs) => {
+                if targs.len != tparams.len { self.err(at, "expected {tparams.len} type arguments, found {targs.len}") }
+                for k in 0..tparams.len {
+                    if k < targs.len {
+                        let t = self.type_of_expr(targs[k])
+                        types.define(mut env, tparams[k].name, t)
+                    }
+                }
+            }
+            None => {
+                for k in 0..sig.params.len {
+                    if k < tys.len { types.bind(sig.params[k].ty, tys[k], mut env) }
+                }
+                if let Some(h) = hint { types.hinted(sig.ret, h, mut env) }
+            }
+        }
+        // A parameter nothing mentions can follow from a bound: with
+        // `[T: Into[U], U]` and `T = int`, `U` is what `int` converts into.
+        for p in tparams {
+            var t = types.Ty.Unknown
+            match types.lookup(env, p.name) {
+                Some(x) => {
+                    t = types.concretize(x)
+                }
+                None => continue
+            }
+            for b in p.bounds {
+                // Of several impls, the one that agrees with what is known.
+                let seen = subst_all(b.args, env)
+                var fits: [Impl] = []
+                for i in self.impls_of(t, b.tr) {
+                    var good = true
+                    for k in 0..i.bound.args.len {
+                        if k < seen.len {
+                            if !(types.open(seen[k]) || !types.concrete(seen[k]) || i.bound.args[k] == seen[k]) { good = false }
+                        }
+                    }
+                    if good { fits.push(i) }
+                }
+                if fits.len == 1 {
+                    let got = fits[0].bound
+                    for k in 0..b.args.len {
+                        if k < got.args.len {
+                            let now = types.subst(b.args[k], env)
+                            if types.open(now) || !types.concrete(now) { types.bind(b.args[k], got.args[k], mut env) }
+                        }
+                    }
+                }
+            }
+        }
+        for p in tparams {
+            var t = types.Ty.Unknown
+            match types.lookup(env, p.name) {
+                Some(x) => {
+                    t = types.concretize(x)
+                }
+                None => self.err(at, "cannot infer the type parameter `{p.name}`: write the type arguments, as in `name[Type](...)`, or give the result a type")
+            }
+            types.define(mut env, p.name, t)
+        }
+        for p in tparams {
+            var t = types.Ty.Unknown
+            if let Some(x) = types.lookup(env, p.name) { t = x }
+            for b in p.bounds {
+                let want = Bound(b.tr, subst_all(b.args, env))
+                if !self.satisfies(t, want) {
+                    let shown = self.show(t)
+                    let tname = self.show_bound(want)
+                    self.err(at, "type `{shown}` does not implement `{tname}`, which `{p.name}` requires")
+                }
+            }
+        }
+        self.arg_logs = Some(pre.logs)
+        self.receiver = receiver
+        let ret = self.apply_with(types.subst_sig(sig, env), args, Some(tys), at)
+        var targs: [types.Ty] = []
+        var settled = true
+        var unknown = false
+        for p in tparams {
+            var t = types.Ty.Unknown
+            if let Some(x) = types.lookup(env, p.name) { t = x }
+            if !types.concrete(t) || types.open(t) { settled = false }
+            if is_unknown(t) { unknown = true }
+            targs.push(t)
+        }
+        if self.inst != DEFINITION && settled {
+            let k = self.instance(target, targs)
+            self.set_res(e, Res.Generic(k))
+        } else {
+            if self.inst != DEFINITION && !unknown { self.err(at, "the type arguments of this call are not fully known: write them, as in `name[Type](...)`, or give the values a type") }
+        }
+        ret
+    }
+
+    // The struct or enum an expression names, when it names one: `Tree`
+    // or `Tree[int]`. Without type arguments the type comes back in terms
+    // of its own parameters, and the flag is false.
+    fn type_head(mut self, e: parser.Expr) -> Head? {
+        var g = GRef(0, "")
+        var targs: [parser.Expr]? = None
+        match e.kind {
+            parser.Kind.Index(base, args) => {
+                match self.gref(base) {
+                    Some(x) => {
+                        g = x
+                    }
+                    None => return None
+                }
+                targs = Some(args)
+            }
+            _ => {
+                match self.gref(e) {
+                    Some(x) => {
+                        g = x
+                    }
+                    None => return None
+                }
+            }
+        }
+        var i = -1
+        var is_struct = false
+        var tparams: [str] = []
+        match self.global_in(g.module, g.name) {
+            Some(Global.Struct(k)) => {
+                if self.structs[k].generic { return None }
+                i = k
+                is_struct = true
+                tparams = self.structs[k].tparams
+            }
+            Some(Global.Enum(k)) => {
+                if self.enums[k].generic { return None }
+                i = k
+                tparams = self.enums[k].tparams
+            }
+            _ => return None
+        }
+        var args: [types.Ty] = []
+        var explicit = false
+        match targs {
+            Some(written) => {
+                args = self.types_of_exprs(written)
+                if args.len != tparams.len {
+                    self.err(at_expr(e), "`{g.name}` takes {tparams.len} type arguments, found {args.len}")
+                    args = []
+                    for n in tparams { args.push(types.Ty.Unknown) }
+                }
+                explicit = true
+            }
+            None => {
+                for n in tparams { args.push(types.Ty.Param(n)) }
+            }
+        }
+        if is_struct { return Some(Head(types.Ty.Struct(i, args), explicit)) }
+        Some(Head(types.Ty.Enum(i, args), explicit))
+    }
+
+    // The type arguments of a generic type being built: the ones written,
+    // or what the expected type and the values of the fields decide. A
+    // parameter nothing decides stays open, like the element type of `[]`.
+    fn type_args(self, tparams: [str], owner: types.Ty, explicit: [types.Ty]?, hint: types.Ty?, params: [types.Ty], tys: [types.Ty]) -> [types.Binding] {
+        var env: [types.Binding] = []
+        match explicit {
+            Some(targs) => {
+                env = types.targ_env(tparams, targs)
+            }
+            None => {
+                for k in 0..params.len {
+                    if k < tys.len { types.bind(params[k], tys[k], mut env) }
+                }
+                if let Some(h) = hint { types.hinted(owner, h, mut env) }
+            }
+        }
+        for n in tparams {
+            var t = types.Ty.Never
+            if let Some(x) = types.lookup(env, n) { t = types.concretize(x) }
+            types.define(mut env, n, t)
+        }
+        env
+    }
+
+    // Builds a struct or a variant of an enum from its fields.
+    fn construct(mut self, e: parser.Expr, res: Res, owner: types.Ty, tparams: [str], fields: [CtorField], explicit: [types.Ty]?, hint: types.Ty?, args: [parser.Arg], at: Span) -> types.Ty {
+        self.set_res(e, res)
+        if tparams.len == 0 { return self.apply(ctor(fields, owner), args, at) }
+        let pre = self.arg_types(args)
+        var params: [types.Ty] = []
+        for f in fields { params.push(f.ty) }
+        let env = self.type_args(tparams, owner, explicit, hint, params, pre.tys)
+        self.arg_logs = Some(pre.logs)
+        self.apply_with(types.subst_sig(ctor(fields, owner), env), args, Some(pre.tys), at)
+    }
+
+    fn construct_struct(mut self, e: parser.Expr, i: int, explicit: [types.Ty]?, hint: types.Ty?, args: [parser.Arg], at: Span) -> types.Ty {
+        let tparams = self.structs[i].tparams
+        var fields: [CtorField] = []
+        for f in self.structs[i].fields { fields.push(CtorField(f.name, f.ty, f.optional)) }
+        var own_args: [types.Ty] = []
+        for n in tparams { own_args.push(types.Ty.Param(n)) }
+        self.construct(e, Res.StructCtor(i), types.Ty.Struct(i, own_args), tparams, fields, explicit, hint, args, at)
+    }
+
+    // The methods the language itself gives to `[T]`.
+    fn array_method(mut self, e: parser.Expr, base: parser.Expr, bt: types.Ty, called: str, args: [parser.Arg], at: Span) -> types.Ty {
+        var elem = types.Ty.Unknown
+        var fixed = false
+        match bt {
+            types.Ty.Slice(t) => {
+                elem = types.concretize(t)
+            }
+            types.Ty.Array(t) => {
+                elem = types.concretize(t)
+                fixed = true
+            }
+            _ => {}
+        }
+        var name = "get"
+        if called == "push" { name = "push" }
+        if called == "pop" { name = "pop" }
+        if name != "get" {
+            if fixed {
+                self.args_unchecked(args)
+                self.err(at, "a fixed-size array cannot change its length: give the variable the type `[{self.show(elem)}]`")
+                return types.Ty.Unknown
+            }
+            if is_never(elem) {
+                self.args_unchecked(args)
+                self.err(at, "the element type of this array is not known: give the variable a type, as in `var xs: [int] = []`")
+                return types.Ty.Unknown
+            }
+            self.require_mut_place(base)
+            self.receiver = None
+            if let Some(a) = self.access(base) { self.receiver = Some(Recv(a, true)) }
+        }
+        self.set_res(e, Res.Builtin(name))
+        let optional = types.Ty.Optional(elem)
+        if name == "push" { return self.apply(types.Sig([types.ParamSig("item", parser.Mode.Let, elem, false)], types.Ty.Unit), args, at) }
+        if name == "pop" { return self.apply(types.Sig([], optional), args, at) }
+        // Any integer type can be an index, as in `xs[i]`.
+        let pre = self.arg_types(args)
+        var index = types.Ty.Int("usize")
+        if pre.tys.len > 0 {
+            match pre.tys[0] {
+                types.Ty.Int(k) => {
+                    index = types.Ty.Int(k)
+                }
+                _ => {}
+            }
+        }
+        self.arg_logs = Some(pre.logs)
+        self.apply_with(types.Sig([types.ParamSig("index", parser.Mode.Let, index, false)], optional), args, Some(pre.tys), at)
+    }
+
+    // `Type.name(...)`: a variant of an enum, or a function of the type.
+    fn type_call(mut self, e: parser.Expr, ty: types.Ty, explicit: bool, name: str, hint: types.Ty?, args: [parser.Arg], at: Span) -> types.Ty {
+        let b = self.key(ty)
+        match ty {
+            types.Ty.Enum(i, targs) => {
+                var k = -1
+                for v in 0..self.enums[i].variants.len {
+                    if self.enums[i].variants[v].name == name && k < 0 { k = v as int }
+                }
+                if k >= 0 {
+                    let tparams = self.enums[i].tparams
+                    var fields: [CtorField] = []
+                    for f in self.enums[i].variants[k].fields {
+                        var label = ""
+                        if let Some(n) = f.label { label = n }
+                        fields.push(CtorField(label, f.ty, false))
+                    }
+                    var own_args: [types.Ty] = []
+                    for n in tparams { own_args.push(types.Ty.Param(n)) }
+                    var written: [types.Ty]? = None
+                    if explicit { written = Some(targs) }
+                    return self.construct(e, Res.Variant(i, k), types.Ty.Enum(i, own_args), tparams, fields, written, hint, args, at)
+                }
+            }
+            _ => {}
+        }
+        // A function several impls of a generic trait give the type.
+        var chosen = name
+        if self.method_index(b, chosen) < 0 {
+            match self.pick(b, name, hint, args, at) {
+                Picked.Name(m) => {
+                    chosen = m
+                }
+                Picked.Nothing => {}
+                Picked.Unclear => {
+                    self.args_unchecked(args)
+                    return types.Ty.Unknown
+                }
+            }
+        }
+        let mi = self.method_index(b, chosen)
+        if mi < 0 {
+            self.args_unchecked(args)
+            self.err(at, "`{b}` has no variant or function `{name}`")
+            return types.Ty.Unknown
+        }
+        let m = self.methods[mi].m
+        let _ = self.method_visible(m, name, at)
+        if let Some(_) = m.self_mode {
+            self.args_unchecked(args)
+            self.err(at, "`{name}` takes `self`: call it on a value of type `{b}`")
+            return types.Ty.Unknown
+        }
+        var plain = m.tparams.len == 0
+        if let Some(_) = m.default { plain = false }
+        if plain {
+            self.set_res(e, Res.Assoc(b, chosen))
+            return self.apply(m.sig, args, at)
+        }
+        var env: [types.Binding] = []
+        if explicit { types.bind(m.self_ty, ty, mut env) }
+        self.generic_call(e, Target.Method(b, chosen), env, None, hint, None, args, at)
+    }
+
+    // Whether the module being checked may call a method. Reports it when not.
+    fn method_visible(mut self, m: Method, name: str, at: Span) -> bool {
+        let module = self.module_of[m.at_decl]
+        match self.decls[m.at_decl].kind {
+            parser.DeclKind.Impl(im) => {
+                if module == self.module || has_type(im.of_trait) { return true }
+                if m.at_method >= 0 && m.at_method < (im.decls.len as int) {
+                    if im.decls[m.at_method].public { return true }
+                }
+            }
+            _ => return true
+        }
+        let shown = self.mods[module]
+        self.err(at, "the method `{name}` is private to the module `{shown}`: it is not declared `pub`")
+        false
+    }
+}
+
+// ---- bodies, variables and statements ----
+
+impl Checker {
+    fn body(mut self, f: parser.FnDecl, sig: types.Sig, self_mode: parser.Mode?, at: Span) {
+        self.scopes.push([])
+        match (self_mode, self.self_ty) {
+            (Some(mode), Some(ty)) => {
+                self.declare("self", ty, is_mut(mode))
+                self.set_movable("self", is_own(mode))
+            }
+            _ => {}
+        }
+        for p in sig.params {
+            self.declare(p.name, p.ty, is_mut(p.mode))
+            self.set_movable(p.name, is_own(p.mode))
+        }
+        for w in f.conds { self.expect(w, types.Ty.Bool, "`where` condition") }
+        var ret = sig.ret
+        var fails: types.Ty? = None
+        match sig.ret {
+            types.Ty.Result(t, e) => {
+                ret = t
+                fails = Some(e)
+            }
+            _ => {}
+        }
+        // A function that returns nothing expects nothing of its last expression.
+        self.hint = None
+        if !is_unit(ret) { self.hint = Some(ret) }
+        // A result by reference is part of `self`, or of the first parameter.
+        let kind = ref_kind(f)
+        var source: Source? = None
+        var by_ref = false
+        if let Some(mutable) = kind {
+            by_ref = true
+            var first: First? = None
+            match self_mode {
+                Some(mode) => {
+                    first = Some(First("self", is_mut(mode)))
+                }
+                None => {
+                    if sig.params.len > 0 { first = Some(First(sig.params[0].name, is_mut(sig.params[0].mode))) }
+                }
+            }
+            let once = self.inst == 0 || self.inst == DEFINITION
+            match first {
+                Some(p) => {
+                    if mutable && !p.mutable && once { self.err(at, "`{f.name}` returns `ref mut`, which is part of `{p.name}`: take `{p.name}` as `mut`") }
+                    if let Some(v) = self.lookup(p.name) { source = Some(Source(v.id, p.name)) }
+                }
+                None => {
+                    if once { self.err(at, "`{f.name}` returns `ref` but has no parameter for the result to be part of") }
+                }
+            }
+            if let Some(_) = fails {
+                if once { self.err(at, "`{f.name}` returns `ref`, so it cannot fail with `!`") }
+            }
+        }
+        self.ctx.push(FnCtx(ret, fails, [], by_ref))
+        match f.body {
+            Some(b) => {
+                let t = self.expr(b)
+                match (kind, source) {
+                    (Some(mutable), Some(src)) => self.ref_tail(b, src.id, mutable, src.name)
+                    _ => {}
+                }
+                self.returned(Some(b), t, at, true)
+                if self.inst == 0 || self.inst == DEFINITION { self.checked_fns += 1 }
+            }
+            None => {
+                self.hint = None
+            }
+        }
+        let _ = self.ctx.pop()
+        let _ = self.scopes.pop()
+    }
+
+    // ---- variables ----
+
+    fn declare(mut self, name: str, ty: types.Ty, mutable: bool) {
+        if mutable && types.undecided(ty) {
+            let shown = self.show(ty)
+            let at = self.cur
+            self.err(at, "the type of `{name}` is not fully known (`{shown}`): write it, as in `var {name}: Type = ...`")
+        }
+        if self.scopes.len == 0 { return }
+        self.next_var += 1
+        let v = Var(name, ty, mutable, self.next_var, true, false)
+        let last = self.scopes.len - 1
+        for k in 0..self.scopes[last].len {
+            if self.scopes[last][k].name == name {
+                self.scopes[last][k] = v
+                return
+            }
+        }
+        self.scopes[last].push(v)
+    }
+
+    fn set_movable(mut self, name: str, movable: bool) {
+        if self.scopes.len == 0 { return }
+        let last = self.scopes.len - 1
+        for k in 0..self.scopes[last].len {
+            if self.scopes[last][k].name == name { self.scopes[last][k].movable = movable }
+        }
+    }
+
+    fn set_deferred(mut self, name: str) {
+        if self.scopes.len == 0 { return }
+        let last = self.scopes.len - 1
+        for k in 0..self.scopes[last].len {
+            if self.scopes[last][k].name == name { self.scopes[last][k].deferred = true }
+        }
+    }
+
+    fn lookup(self, name: str) -> Var? {
+        var s = self.scopes.len as int - 1
+        while s >= 0 {
+            for v in self.scopes[s] {
+                if v.name == name { return Some(v) }
+            }
+            s -= 1
+        }
+        None
+    }
+
+    fn has_local(self, name: str) -> bool {
+        match self.lookup(name) {
+            Some(_) => true
+            None => false
+        }
+    }
+
+    // Whether a name belongs to the function around the closure being
+    // checked. Closures capture by value, so such a name cannot be written to.
+    fn captured(self, name: str) -> bool {
+        if self.closures.len == 0 { return false }
+        let floor = self.closures[self.closures.len - 1]
+        var s = self.scopes.len as int - 1
+        while s >= 0 {
+            for v in self.scopes[s] {
+                if v.name == name { return s < floor }
+            }
+            s -= 1
+        }
+        false
+    }
+
+    // The variable, field or item an expression stands for, if it is one.
+    fn access(self, e: parser.Expr) -> Access? {
+        match e.kind {
+            parser.Kind.Name(name) => {
+                match self.lookup(name) {
+                    Some(v) => Some(Access(v.id, name, []))
+                    None => None
+                }
+            }
+            parser.Kind.Field(base, name) => {
+                match self.access(base) {
+                    Some(a) => {
+                        var segs = a.segs
+                        segs.push(Seg.Field(name))
+                        Some(Access(a.root, a.name, segs))
+                    }
+                    None => None
+                }
+            }
+            parser.Kind.Index(base, args) => {
+                if args.len != 1 { return None }
+                match self.access(base) {
+                    Some(a) => {
+                        var segs = a.segs
+                        match args[0].kind {
+                            parser.Kind.Int(s) => segs.push(Seg.Index(Some(without_underscores(s))))
+                            _ => segs.push(Seg.Index(None))
+                        }
+                        Some(Access(a.root, a.name, segs))
+                    }
+                    None => None
+                }
+            }
+            // The result of a `ref` function is part of what it comes from.
+            parser.Kind.Call(_, _) => {
+                match self.ref_src(e) {
+                    Some(r) => self.access(r.src)
+                    None => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // What a call of a function that returns `ref` takes its result from,
+    // and whether the result can be written to.
+    fn ref_src(self, e: parser.Expr) -> RefSrc? {
+        match e.kind {
+            parser.Kind.Call(callee, args) => {
+                match self.ref_calls.get(self.slot(e)) {
+                    Some(rc) => {
+                        if rc.receiver {
+                            match callee.kind {
+                                parser.Kind.Field(base, _) => return Some(RefSrc(base, rc.mutable))
+                                _ => return None
+                            }
+                        }
+                        if args.len == 0 { return None }
+                        Some(RefSrc(args[0].value, rc.mutable))
+                    }
+                    None => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // The variable a place is part of, seeing through `ref mut` results.
+    fn root(self, e: parser.Expr) -> str? {
+        match e.kind {
+            parser.Kind.Name(n) => Some(n)
+            parser.Kind.Field(base, _) => self.root(base)
+            parser.Kind.Index(base, _) => self.root(base)
+            parser.Kind.Call(_, _) => {
+                match self.ref_src(e) {
+                    Some(r) => {
+                        if r.mutable { return self.root(r.src) }
+                        None
+                    }
+                    None => None
+                }
+            }
+            _ => None
+        }
+    }
+
+    // Notes that a place is written to: the `ref mut` calls it goes
+    // through must say where their result is.
+    fn written(mut self, e: parser.Expr) {
+        match e.kind {
+            parser.Kind.Field(base, _) => self.written(base)
+            parser.Kind.Index(base, _) => self.written(base)
+            parser.Kind.Call(_, _) => {
+                if let Some(r) = self.ref_src(e) {
+                    if r.mutable {
+                        self.ref_writes.set(self.slot(e), true)
+                        self.written(r.src)
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn fn_ref(self, i: int) -> bool? {
+        if i < 0 || i >= (self.decl_of_fn.len as int) { return None }
+        match self.decls[self.decl_of_fn[i]].kind {
+            parser.DeclKind.Fn(f) => ref_kind(f)
+            _ => None
+        }
+    }
+
+    fn method_ref_call(self, t: str, n: str, receiver: bool, based: bool) -> RefCall? {
+        let mi = self.method_index(t, n)
+        if mi < 0 { return None }
+        let m = self.methods[mi].m
+        var takes_self = false
+        if let Some(_) = m.self_mode { takes_self = true }
+        match self.method_ref(m) {
+            Some(mutable) => Some(RefCall(mutable, receiver && based && takes_self))
+            None => None
+        }
+    }
+
+    // Notes that a call just checked is of a function that returns `ref`.
+    fn note_ref_call(mut self, e: parser.Expr, callee: parser.Expr) {
+        let based = match callee.kind {
+            parser.Kind.Field(_, _) => true
+            _ => false
+        }
+        var found: RefCall? = None
+        match self.res.get(self.slot(e)) {
+            Some(Res.Fn(i)) => {
+                if let Some(mutable) = self.fn_ref(i) { found = Some(RefCall(mutable, false)) }
+            }
+            Some(Res.Method(t, n)) => {
+                found = self.method_ref_call(t, n, true, based)
+            }
+            Some(Res.Assoc(t, n)) => {
+                found = self.method_ref_call(t, n, false, based)
+            }
+            Some(Res.Generic(k)) => {
+                if k >= 0 && k < (self.instances.len as int) {
+                    match self.instances[k].target {
+                        Target.Fn(i) => {
+                            if let Some(mutable) = self.fn_ref(i) { found = Some(RefCall(mutable, false)) }
+                        }
+                        Target.Method(t, n) => {
+                            found = self.method_ref_call(t, n, true, based)
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(rc) = found { self.ref_calls.set(self.slot(e), rc) }
+    }
+
+    // Checks that the result of a function that returns `ref` is part of
+    // the parameter it must come from.
+    fn ref_tail(mut self, e: parser.Expr, var_id: int, mutable: bool, name: str) {
+        let key = self.slot(e)
+        var ok = false
+        match e.kind {
+            parser.Kind.Blk(b) => {
+                match b.tail {
+                    Some(t) => {
+                        self.ref_tail(t, var_id, mutable, name)
+                        return
+                    }
+                    None => {}
+                }
+            }
+            parser.Kind.If(_, then, otherwise) => {
+                if let Some(els) = otherwise {
+                    match then.tail {
+                        Some(t) => self.ref_tail(t, var_id, mutable, name)
+                        None => self.err(at_expr(e), "this branch gives no result: a function that returns `ref` ends in a part of `{name}`")
+                    }
+                    self.ref_tail(els, var_id, mutable, name)
+                    return
+                }
+            }
+            parser.Kind.Name(_) => {
+                match self.var_of.get(key) {
+                    Some(v) => {
+                        ok = v == var_id
+                    }
+                    None => {}
+                }
+            }
+            parser.Kind.Field(base, _) => {
+                match self.res.get(key) {
+                    Some(Res.Field(_)) => {
+                        self.ref_tail(base, var_id, mutable, name)
+                        return
+                    }
+                    _ => {}
+                }
+            }
+            parser.Kind.Index(base, args) => {
+                if args.len == 1 {
+                    let array = match self.types.get(self.slot(base)) {
+                        Some(types.Ty.Slice(_)) => true
+                        Some(types.Ty.Array(_)) => true
+                        _ => false
+                    }
+                    let range = match self.types.get(self.slot(args[0])) {
+                        Some(types.Ty.Range(_)) => true
+                        _ => false
+                    }
+                    if array && !range {
+                        self.ref_tail(base, var_id, mutable, name)
+                        return
+                    }
+                }
+            }
+            parser.Kind.Call(_, _) => {
+                if let Some(r) = self.ref_src(e) {
+                    if r.mutable || !mutable {
+                        if mutable { self.ref_writes.set(key, true) }
+                        self.ref_tail(r.src, var_id, mutable, name)
+                        return
+                    }
+                }
+            }
+            _ => {}
+        }
+        if !ok { self.err(at_expr(e), "the result of a function that returns `ref` must be `{name}`, or a field or an item of it") }
+    }
+
+    // Notes a write, which must not touch what a `for` goes over.
+    fn note_mut(mut self, e: parser.Expr) {
+        match self.access(e) {
+            Some(a) => {
+                var frozen = false
+                for f in self.frozen {
+                    if overlap(f, a) { frozen = true }
+                }
+                if frozen { self.err(at_expr(e), "cannot modify `{a.name}` while a `for` iterates over it") }
+                self.mut_log.push(Logged(a, at_expr(e)))
+            }
+            None => {}
+        }
+    }
+
+    // ---- statements ----
+
+    fn block(mut self, b: parser.Block) -> types.Ty {
+        let hint = self.pending
+        self.pending = None
+        self.scopes.push([])
+        var diverges = false
+        for s in b.stmts {
+            if self.stmt(s) { diverges = true }
+        }
+        var t = types.Ty.Unit
+        match b.tail {
+            Some(e) => {
+                self.hint = hint
+                t = self.expr(e)
+            }
+            None => {
+                if diverges { t = types.Ty.Never }
+            }
+        }
+        let _ = self.scopes.pop()
+        t
+    }
+
+    // Checks a block whose value is thrown away, as the body of a loop.
+    fn block_discarded(mut self, b: parser.Block, at: Span) {
+        let t = self.block(b)
+        var where_ = at
+        if let Some(e) = b.tail { where_ = at_expr(e) }
+        self.discard(t, where_)
+    }
+
+    fn discard(mut self, t: types.Ty, at: Span) {
+        match t {
+            types.Ty.Result(_, _) => self.err(at, "this result may hold an error and is ignored: use `?` or `catch`")
+            _ => {}
+        }
+    }
+
+    // Whether the statement never completes.
+    fn stmt(mut self, s: parser.Stmt) -> bool {
+        match s {
+            parser.Stmt.Let(mutable, pat, ty, value) => {
+                var deferred = false
+                var at = self.cur
+                if let Some(v) = value { at = at_expr(v) }
+                var declared: types.Ty? = None
+                if let Some(t) = ty { declared = Some(self.resolve(t, at)) }
+                self.hint = declared
+                var actual: types.Ty? = None
+                if let Some(v) = value { actual = Some(self.expr(v)) }
+                self.hint = None
+                var t = types.Ty.Unknown
+                match (declared, actual) {
+                    (Some(d), Some(a)) => {
+                        if let Some(v) = value { self.coerce(v, d, a, "initializer") }
+                        t = d
+                    }
+                    (Some(d), None) => {
+                        deferred = !mutable
+                        t = d
+                    }
+                    // A variable that starts as a list of items can grow.
+                    (None, Some(a)) => {
+                        t = types.concretize(a)
+                        var listed = false
+                        if let Some(v) = value {
+                            match v.kind {
+                                parser.Kind.Array(_) => {
+                                    listed = true
+                                }
+                                parser.Kind.Repeat(_, _) => {
+                                    listed = true
+                                }
+                                _ => {}
+                            }
+                        }
+                        if mutable && listed {
+                            match t {
+                                types.Ty.Array(item) => {
+                                    t = types.Ty.Slice(item)
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => self.err(at, "a `let` without a value needs a type")
+                }
+                if !self.irrefutable(pat, t) { self.err(at, "this pattern may not match: use `if let` or `match`") }
+                self.pattern(pat, t, mutable, at)
+                if deferred {
+                    match pat {
+                        parser.Pattern.Bind(_, name) => self.set_deferred(name)
+                        _ => {}
+                    }
+                }
+                false
+            }
+            parser.Stmt.Assign(target, op, value) => {
+                let tt = self.place(target)
+                if op == "=" {
+                    self.expect(value, tt, "assignment")
+                } else {
+                    let vt = self.expr(value)
+                    let rt = self.binop(without_last(op), tt, vt, at_expr(target))
+                    if !types.assignable(tt, rt) {
+                        let a = self.show(tt)
+                        let b = self.show(rt)
+                        self.err(at_expr(target), "assignment: expected `{a}`, found `{b}`")
+                    }
+                }
+                false
+            }
+            parser.Stmt.Defer(e) => {
+                let _ = self.expr(e)
+                false
+            }
+            parser.Stmt.Do(e) => {
+                let t = self.expr(e)
+                self.discard(t, at_expr(e))
+                is_never(t)
+            }
+            parser.Stmt.Item(d) => {
+                self.skipped_decls.push("nested {describe(d.kind)}")
+                false
+            }
+        }
+    }
+
+    // The type of what an assignment writes to, checking that it can be written.
+    fn place(mut self, target: parser.Expr) -> types.Ty {
+        let at = at_expr(target)
+        let is_name = match target.kind {
+            parser.Kind.Name(_) => true
+            _ => false
+        }
+        let is_place = match target.kind {
+            parser.Kind.Name(_) => true
+            parser.Kind.Field(_, _) => true
+            parser.Kind.Index(_, _) => true
+            parser.Kind.Call(_, _) => true
+            _ => false
+        }
+        if !is_place {
+            let _ = self.expr(target)
+            self.err(at, "this expression cannot be assigned to")
+            return types.Ty.Unknown
+        }
+        let t = self.expr(target)
+        match self.root(target) {
+            Some(_) => {}
+            None => {
+                if !is_unknown(t) { self.err(at, "this expression cannot be assigned to: it is not a variable, or a field or an item of one") }
+            }
+        }
+        self.written(target)
+        if let Some(name) = self.root(target) {
+            if self.captured(name) { self.err(at, "cannot assign to `{name}`: a closure captures it by value") }
+            self.note_mut(target)
+            match self.lookup(name) {
+                Some(v) => {
+                    // The one assignment that gives a deferred `let` its value.
+                    if !(v.deferred && is_name) && !v.mutable { self.err(at, "cannot assign to `{name}`: it is immutable (declare it with `var` or take it as `mut`)") }
+                }
+                None => {
+                    match self.global(name) {
+                        Some(Global.Const(_)) => self.err(at, "cannot assign to constant `{name}`")
+                        _ => {}
+                    }
+                }
+            }
+        }
+        t
+    }
+
+    fn require_mut_place(mut self, e: parser.Expr) {
+        self.written(e)
+        match self.root(e) {
+            Some(name) => {
+                if self.captured(name) { self.err(at_expr(e), "cannot use `{name}` as `mut`: a closure captures it by value") }
+                if let Some(v) = self.lookup(name) {
+                    if !v.mutable { self.err(at_expr(e), "cannot use `{name}` as `mut`: it is not mutable") }
+                }
+                self.note_mut(e)
+            }
+            None => self.err(at_expr(e), "a `mut` access needs a variable, field or element")
+        }
+    }
+
+    // ---- patterns ----
+
+    fn struct_field_tys(self, i: int, args: [types.Ty]) -> [types.Ty] {
+        let env = types.targ_env(self.structs[i].tparams, args)
+        var out: [types.Ty] = []
+        for f in self.structs[i].fields { out.push(types.subst(f.ty, env)) }
+        out
+    }
+
+    fn variant_field_tys(self, i: int, variant: int, args: [types.Ty]) -> [types.Ty] {
+        let env = types.targ_env(self.enums[i].tparams, args)
+        var out: [types.Ty] = []
+        for f in self.enums[i].variants[variant].fields { out.push(types.subst(f.ty, env)) }
+        out
+    }
+
+    fn irrefutable(self, p: parser.Pattern, ty: types.Ty) -> bool {
+        match p {
+            parser.Pattern.Wildcard => true
+            parser.Pattern.Bind(_, _) => true
+            parser.Pattern.Rest => true
+            parser.Pattern.Tuple(ps) => {
+                match ty {
+                    types.Ty.Tuple(ts) => {
+                        if ts.len == ps.len {
+                            for k in 0..ps.len {
+                                if !self.irrefutable(ps[k], ts[k]) { return false }
+                            }
+                            return true
+                        }
+                    }
+                    _ => {}
+                }
+                for q in ps {
+                    if !self.irrefutable(q, types.Ty.Unknown) { return false }
+                }
+                true
+            }
+            parser.Pattern.Ctor(_, args) => {
+                match ty {
+                    types.Ty.Struct(i, targs) => {
+                        let fields = self.struct_field_tys(i, targs)
+                        if args.len != fields.len { return false }
+                        for k in 0..args.len {
+                            if !self.irrefutable(args[k], fields[k]) { return false }
+                        }
+                        true
+                    }
+                    _ => false
+                }
+            }
+            parser.Pattern.Struct(_, fields, _) => {
+                match ty {
+                    types.Ty.Struct(i, targs) => {
+                        for f in fields {
+                            match f.pat {
+                                None => {}
+                                Some(sub) => {
+                                    let tys = self.struct_field_tys(i, targs)
+                                    var t = types.Ty.Unknown
+                                    for k in 0..self.structs[i].fields.len {
+                                        if self.structs[i].fields[k].name == f.name {
+                                            t = tys[k]
+                                            break
+                                        }
+                                    }
+                                    if !self.irrefutable(sub, t) { return false }
+                                }
+                            }
+                        }
+                        true
+                    }
+                    _ => false
+                }
+            }
+            parser.Pattern.Or(alts) => {
+                for a in alts {
+                    if self.irrefutable(a, ty) { return true }
+                }
+                false
+            }
+            parser.Pattern.Literal(_) => false
+            parser.Pattern.Range(_, _, _) => false
+            parser.Pattern.Slice(_) => false
+        }
+    }
+
+    fn patterns(mut self, ps: [parser.Pattern], tys: [types.Ty], mutable: bool, at: Span) {
+        for i in 0..ps.len {
+            var t = types.Ty.Unknown
+            if i < tys.len { t = tys[i] }
+            self.pattern(ps[i], t, mutable, at)
+        }
+    }
+}
+
+// ---- patterns, and what an expression must be ----
+
+impl Checker {
+    fn pattern_mismatch(mut self, e: parser.Expr, ty: types.Ty) {
+        let t = self.expr(e)
+        match types.join(ty, t) {
+            Some(_) => {}
+            None => {
+                let a = self.show(t)
+                let b = self.show(ty)
+                self.err(at_expr(e), "a pattern of type `{a}` cannot match a value of type `{b}`")
+            }
+        }
+    }
+
+    // Checks a pattern against a type and declares the names it binds.
+    fn pattern(mut self, p: parser.Pattern, ty: types.Ty, mutable: bool, at: Span) {
+        match p {
+            parser.Pattern.Wildcard => {}
+            parser.Pattern.Rest => {}
+            parser.Pattern.Bind(m, name) => self.declare(name, types.concretize(ty), m || mutable)
+            parser.Pattern.Literal(e) => {
+                self.pattern_mismatch(e, ty)
+                self.lit_range(e, ty)
+            }
+            parser.Pattern.Range(lo, hi, _) => {
+                self.pattern_mismatch(lo, ty)
+                if let Some(h) = hi { self.pattern_mismatch(h, ty) }
+            }
+            parser.Pattern.Ctor(path, args) => {
+                var name = ""
+                if path.len > 0 { name = path[path.len - 1] }
+                let shown = self.show(ty)
+                var fields: [types.Ty]? = None
+                var told = false
+                match ty {
+                    types.Ty.Unknown => {
+                        told = true
+                    }
+                    types.Ty.Optional(t) => {
+                        if path.len == 1 && name == "Some" {
+                            fields = Some([t])
+                            told = true
+                        }
+                        if path.len == 1 && name == "None" {
+                            fields = Some([])
+                            told = true
+                        }
+                    }
+                    types.Ty.Enum(i, targs) => {
+                        told = true
+                        if path.len == 2 && path[0] != self.enums[i].name {
+                            self.err(at, "pattern `{text.join(path, ".")}` cannot match a value of type `{shown}`")
+                        } else {
+                            var v = -1
+                            for k in 0..self.enums[i].variants.len {
+                                if self.enums[i].variants[k].name == name && v < 0 { v = k as int }
+                            }
+                            if v >= 0 {
+                                fields = Some(self.variant_field_tys(i, v, targs))
+                            } else {
+                                self.err(at, "`{shown}` has no variant `{name}`")
+                            }
+                        }
+                    }
+                    types.Ty.Struct(i, targs) => {
+                        if path.len == 1 && self.structs[i].name == name {
+                            fields = Some(self.struct_field_tys(i, targs))
+                            told = true
+                        }
+                    }
+                    _ => {}
+                }
+                if !told { self.err(at, "pattern `{text.join(path, ".")}` cannot match a value of type `{shown}`") }
+                match fields {
+                    Some(fs) => {
+                        if fs.len != args.len { self.err(at, "`{name}` has {fs.len} fields, the pattern has {args.len}") }
+                        self.patterns(args, fs, mutable, at)
+                    }
+                    None => self.patterns(args, [], mutable, at)
+                }
+            }
+            parser.Pattern.Struct(path, fields, rest) => {
+                var name = ""
+                if path.len > 0 { name = path[path.len - 1] }
+                var found = false
+                var names: [str] = []
+                var tys: [types.Ty] = []
+                match ty {
+                    types.Ty.Struct(i, targs) => {
+                        if self.structs[i].name == name {
+                            found = true
+                            for f in self.structs[i].fields { names.push(f.name) }
+                            tys = self.struct_field_tys(i, targs)
+                        }
+                    }
+                    types.Ty.Enum(i, targs) => {
+                        var v = -1
+                        for k in 0..self.enums[i].variants.len {
+                            if self.enums[i].variants[k].name == name && v < 0 { v = k as int }
+                        }
+                        if v >= 0 {
+                            found = true
+                            for f in self.enums[i].variants[v].fields {
+                                var label = ""
+                                if let Some(n) = f.label { label = n }
+                                names.push(label)
+                            }
+                            tys = self.variant_field_tys(i, v, targs)
+                        }
+                    }
+                    _ => {}
+                }
+                if !found && !is_unknown(ty) {
+                    let shown = self.show(ty)
+                    self.err(at, "pattern `{text.join(path, ".")}` cannot match a value of type `{shown}`")
+                }
+                for f in fields {
+                    var ft = types.Ty.Unknown
+                    if found {
+                        var at_field = -1
+                        for k in 0..names.len {
+                            if names[k] == f.name && at_field < 0 { at_field = k as int }
+                        }
+                        if at_field >= 0 {
+                            ft = tys[at_field]
+                        } else {
+                            self.err(at, "`{name}` has no field `{f.name}`")
+                        }
+                    }
+                    match f.pat {
+                        Some(sub) => self.pattern(sub, ft, mutable, at)
+                        None => self.declare(f.name, ft, mutable)
+                    }
+                }
+                if found && !rest && fields.len < names.len { self.err(at, "pattern does not mention every field of `{name}`: add `..`") }
+            }
+            parser.Pattern.Tuple(ps) => {
+                match ty {
+                    types.Ty.Tuple(ts) => {
+                        var has_rest = false
+                        for q in ps {
+                            match q {
+                                parser.Pattern.Rest => {
+                                    has_rest = true
+                                }
+                                _ => {}
+                            }
+                        }
+                        if ts.len != ps.len && !has_rest { self.err(at, "the tuple has {ts.len} elements, the pattern has {ps.len}") }
+                        self.patterns(ps, ts, mutable, at)
+                    }
+                    types.Ty.Unknown => self.patterns(ps, [], mutable, at)
+                    _ => {
+                        let shown = self.show(ty)
+                        self.err(at, "a tuple pattern cannot match a value of type `{shown}`")
+                        self.patterns(ps, [], mutable, at)
+                    }
+                }
+            }
+            parser.Pattern.Slice(ps) => {
+                var elem = types.Ty.Unknown
+                match ty {
+                    types.Ty.Slice(t) => {
+                        elem = t
+                    }
+                    types.Ty.Array(t) => {
+                        elem = t
+                    }
+                    types.Ty.Unknown => {}
+                    _ => {
+                        let shown = self.show(ty)
+                        self.err(at, "a slice pattern cannot match a value of type `{shown}`")
+                    }
+                }
+                for q in ps { self.pattern(q, elem, mutable, at) }
+            }
+            parser.Pattern.Or(alts) => {
+                var first: [Var] = []
+                var seen = false
+                for alt in alts {
+                    self.scopes.push([])
+                    self.pattern(alt, ty, mutable, at)
+                    var bound: [Var] = []
+                    if let Some(b) = self.scopes.pop() { bound = b }
+                    if !seen {
+                        first = bound
+                        seen = true
+                        continue
+                    }
+                    var same = first.len == bound.len
+                    for f in first {
+                        var there = false
+                        for b in bound {
+                            if b.name == f.name { there = true }
+                        }
+                        if !there { same = false }
+                    }
+                    if !same { self.err(at, "every alternative of an `|` pattern must bind the same names") }
+                }
+                for v in first { self.declare(v.name, v.ty, v.mutable) }
+            }
+        }
+    }
+
+    // Whether the patterns cover the variant or value called `name`.
+    fn covers(self, tops: [parser.Pattern], name: str, fields: [types.Ty]) -> bool {
+        for p in tops {
+            match p {
+                parser.Pattern.Ctor(path, args) => {
+                    if path.len == 0 { continue }
+                    if path[path.len - 1] != name { continue }
+                    var all = true
+                    for i in 0..args.len {
+                        var t = types.Ty.Unknown
+                        if i < fields.len { t = fields[i] }
+                        if !self.irrefutable(args[i], t) { all = false }
+                    }
+                    if all { return true }
+                }
+                parser.Pattern.Struct(path, fs, _) => {
+                    if path.len == 0 { continue }
+                    if path[path.len - 1] != name { continue }
+                    var all = true
+                    for f in fs {
+                        if let Some(sub) = f.pat {
+                            if !self.irrefutable(sub, types.Ty.Unknown) { all = false }
+                        }
+                    }
+                    if all { return true }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn exhaustive(mut self, ty: types.Ty, arms: [parser.Arm], at: Span) {
+        var tops: [parser.Pattern] = []
+        for arm in arms {
+            if has_expr(arm.guard) { continue }
+            match arm.pat {
+                parser.Pattern.Or(alts) => {
+                    for a in alts { tops.push(a) }
+                }
+                _ => tops.push(arm.pat)
+            }
+        }
+        if is_unknown(ty) { return }
+        for p in tops {
+            if self.irrefutable(p, ty) { return }
+        }
+        var missing: [str] = []
+        match ty {
+            types.Ty.Enum(i, targs) => {
+                for k in 0..self.enums[i].variants.len {
+                    let v = self.enums[i].variants[k]
+                    if !self.covers(tops, v.name, self.variant_field_tys(i, k as int, targs)) { missing.push(v.name) }
+                }
+            }
+            types.Ty.Optional(t) => {
+                if !self.covers(tops, "Some", [t]) { missing.push("Some") }
+                if !self.covers(tops, "None", []) { missing.push("None") }
+            }
+            types.Ty.Bool => {
+                var yes = false
+                var no = false
+                for p in tops {
+                    match p {
+                        parser.Pattern.Literal(e) => {
+                            match e.kind {
+                                parser.Kind.Bool(x) => {
+                                    if x { yes = true } else { no = true }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !yes { missing.push("true") }
+                if !no { missing.push("false") }
+            }
+            _ => {
+                let shown = self.show(ty)
+                self.err(at, "this `match` on `{shown}` does not cover every value: add a `_` arm")
+                return
+            }
+        }
+        if missing.len > 0 {
+            var list: [str] = []
+            for m in missing { list.push("`{m}`") }
+            self.err(at, "this `match` does not cover every value: missing {text.join(list, ", ")}")
+        }
+    }
+
+    // ---- expressions ----
+
+    fn expect(mut self, e: parser.Expr, want: types.Ty, what: str) {
+        self.hint = Some(want)
+        let got = self.expr(e)
+        self.coerce(e, want, got, what)
+    }
+
+    fn coerce(mut self, e: parser.Expr, want: types.Ty, got: types.Ty, what: str) {
+        if types.assignable(want, got) {
+            self.wants.set(self.slot(e), want)
+            self.lit_range(e, want)
+        } else {
+            let a = self.show(want)
+            let b = self.show(got)
+            self.err(at_expr(tail_of(e)), "{what}: expected `{a}`, found `{b}`")
+        }
+    }
+
+    // Reports a whole number written out that does not fit the type it is used as.
+    fn lit_range(mut self, given: parser.Expr, want: types.Ty) {
+        var kind = ""
+        match want {
+            types.Ty.Int(k) => {
+                kind = k
+            }
+            _ => return
+        }
+        let e = tail_of(given)
+        var negative = false
+        var digits = ""
+        match e.kind {
+            parser.Kind.Int(s) => {
+                digits = s
+            }
+            parser.Kind.Unary(op, inner) => {
+                if op != "-" { return }
+                match inner.kind {
+                    parser.Kind.Int(s) => {
+                        negative = true
+                        digits = s
+                    }
+                    _ => return
+                }
+            }
+            _ => return
+        }
+        if let Some(v) = int_value(digits) {
+            if !fits(kind, negative, v) {
+                let sign = if negative { "-" } else { "" }
+                self.err(at_expr(e), "literal `{sign}{digits}` is out of range for `{kind}`")
+            }
+        }
+    }
+
+    fn returned(mut self, e: parser.Expr?, t: types.Ty, at: Span, tail: bool) {
+        if self.ctx.len == 0 {
+            self.err(at, "`return` outside of a function")
+            return
+        }
+        let ctx = self.ctx[self.ctx.len - 1]
+        if types.assignable(ctx.ret, t) {
+            if let Some(x) = e { self.lit_range(x, ctx.ret) }
+            return
+        }
+        // A value of the declared error type is an error return.
+        if let Some(fails) = ctx.fails {
+            if !is_unknown(fails) && types.assignable(fails, t) { return }
+        }
+        var where_ = at
+        if let Some(x) = e { where_ = at_expr(tail_of(x)) }
+        if tail && is_unit(ctx.ret) {
+            self.discard(t, where_)
+            return
+        }
+        let a = self.show(ctx.ret)
+        let b = self.show(t)
+        self.err(where_, "expected return type `{a}`, found `{b}`")
+    }
+
+    fn cond(mut self, c: parser.Cond) {
+        match c {
+            parser.Cond.Test(e) => self.expect(e, types.Ty.Bool, "condition")
+            parser.Cond.Bind(pat, e) => {
+                let t = self.expr(e)
+                self.pattern(pat, t, false, at_expr(e))
+            }
+        }
+    }
+
+    fn expr(mut self, e: parser.Expr) -> types.Ty {
+        self.pending = self.hint
+        self.hint = None
+        let t = self.expr_inner(e)
+        self.types.set(self.slot(e), t)
+        t
+    }
+}
+
+// The expression that gives the value of `e`, looking through the ends of blocks.
+fn tail_of(e: parser.Expr) -> parser.Expr {
+    match e.kind {
+        parser.Kind.Blk(b) => {
+            match b.tail {
+                Some(t) => tail_of(t)
+                None => e
+            }
+        }
+        _ => e
+    }
+}
+
+fn digit_of(c: char) -> int {
+    if c >= '0' && c <= '9' { return c as int - '0' as int }
+    if c >= 'a' && c <= 'z' { return c as int - 'a' as int + 10 }
+    if c >= 'A' && c <= 'Z' { return c as int - 'A' as int + 10 }
+    99
+}
+
+// The value of a whole number as it is written, in four parts of 32 bits
+// from the lowest, or nothing when it is not a number or does not fit
+// in 128 bits.
+pub fn int_value(written: str) -> [int]? {
+    var cs: [char] = []
+    for c in text.chars(written) {
+        if c != '_' { cs.push(c) }
+    }
+    var radix = 10
+    var start = 0
+    if cs.len >= 2 && cs[0] == '0' {
+        if cs[1] == 'x' { radix = 16 }
+        if cs[1] == 'b' { radix = 2 }
+        if cs[1] == 'o' { radix = 8 }
+        if radix != 10 { start = 2 }
+    }
+    if start >= (cs.len as int) { return None }
+    var limbs = [0, 0, 0, 0]
+    for k in start..(cs.len as int) {
+        let d = digit_of(cs[k])
+        if d >= radix { return None }
+        var carry = d
+        for i in 0..4 {
+            let v = limbs[i] * radix + carry
+            limbs[i] = v & 4294967295
+            carry = v >> 32
+        }
+        if carry != 0 { return None }
+    }
+    Some(limbs)
+}
+
+// How many bits the value takes: 0 for zero.
+fn bit_length(v: [int]) -> int {
+    var i = 3
+    while i >= 0 {
+        if v[i] != 0 {
+            var n = 0
+            var x = v[i]
+            while x > 0 {
+                n += 1
+                x = x >> 1
+            }
+            return i * 32 + n
+        }
+        i -= 1
+    }
+    0
+}
+
+fn is_power_of_two(v: [int]) -> bool {
+    var ones = 0
+    for part in v {
+        var x = part
+        while x > 0 {
+            if x & 1 == 1 { ones += 1 }
+            x = x >> 1
+        }
+    }
+    ones == 1
+}
+
+fn bits_of(kind: str) -> int {
+    if kind == "i8" || kind == "u8" { return 8 }
+    if kind == "i16" || kind == "u16" { return 16 }
+    if kind == "i32" || kind == "u32" { return 32 }
+    if kind == "i128" || kind == "u128" { return 128 }
+    64
+}
+
+// Whether a value, with its sign, is one of an integer type.
+fn fits(kind: str, negative: bool, v: [int]) -> bool {
+    let signed = text.starts_with(kind, "i")
+    let bits = bits_of(kind)
+    let n = bit_length(v)
+    if negative {
+        if signed { return n < bits || (n == bits && is_power_of_two(v)) }
+        return n == 0
+    }
+    if signed { return n < bits }
+    n <= bits
+}
+
+// ---- each kind of expression ----
+
+impl Checker {
+    // Whether the module being checked is a `system` one.
+    fn in_system(self) -> bool {
+        if self.module < 0 || self.module >= (self.modules.len as int) { return false }
+        match self.modules[self.module].profile {
+            Some(p) => p == "system"
+            None => false
+        }
+    }
+
+    fn expr_inner(mut self, e: parser.Expr) -> types.Ty {
+        let at = at_expr(e)
+        self.cur = at
+        match e.kind {
+            parser.Kind.Int(s) => {
+                match int_value(s) {
+                    Some(_) => {}
+                    None => self.err(at, "invalid integer literal `{s}`")
+                }
+                types.Ty.IntLit
+            }
+            parser.Kind.Float(_) => types.Ty.FloatLit
+            parser.Kind.Char(_) => types.Ty.Char
+            parser.Kind.Bool(_) => types.Ty.Bool
+            parser.Kind.Str(parts) => {
+                for part in parts {
+                    match part {
+                        parser.StrPart.Value(inner) => {
+                            let t = self.expr(inner)
+                            self.discard(t, at_expr(inner))
+                        }
+                        _ => {}
+                    }
+                }
+                types.Ty.Str
+            }
+            parser.Kind.Name(name) => self.name(e, name, at)
+            parser.Kind.Tuple(items) => {
+                if items.len == 0 { return types.Ty.Unit }
+                var out: [types.Ty] = []
+                for i in items { out.push(self.expr(i)) }
+                types.Ty.Tuple(out)
+            }
+            parser.Kind.Array(items) => {
+                var elem = types.Ty.Never
+                for item in items {
+                    let t = self.expr(item)
+                    match types.join(elem, t) {
+                        Some(j) => {
+                            elem = j
+                        }
+                        None => {
+                            let a = self.show(elem)
+                            let b = self.show(t)
+                            self.err(at_expr(item), "array elements have different types: `{a}` and `{b}`")
+                        }
+                    }
+                }
+                types.Ty.Array(elem)
+            }
+            parser.Kind.Repeat(value, count) => {
+                let t = self.expr(value)
+                self.expect(count, types.Ty.Int("usize"), "array length")
+                types.Ty.Array(t)
+            }
+            parser.Kind.Blk(b) => self.block(b)
+            parser.Kind.If(cond, then, otherwise) => {
+                let hint = self.pending
+                self.pending = None
+                self.scopes.push([])
+                self.cond(cond)
+                self.pending = hint
+                let tt = self.block(then)
+                let _ = self.scopes.pop()
+                match otherwise {
+                    None => {
+                        self.discard(tt, at)
+                        types.Ty.Unit
+                    }
+                    Some(els) => {
+                        self.hint = hint
+                        let et = self.expr(els)
+                        match types.join(tt, et) {
+                            Some(j) => j
+                            None => {
+                                let a = self.show(tt)
+                                let b = self.show(et)
+                                self.err(at, "`if` branches have different types: `{a}` and `{b}`")
+                                types.Ty.Unknown
+                            }
+                        }
+                    }
+                }
+            }
+            parser.Kind.Match(scrutinee, arms) => {
+                let hint = self.pending
+                self.pending = None
+                let st = self.expr(scrutinee)
+                var result = types.Ty.Never
+                for arm in arms {
+                    self.scopes.push([])
+                    self.pattern(arm.pat, st, false, at_expr(arm.body))
+                    if let Some(g) = arm.guard { self.expect(g, types.Ty.Bool, "guard") }
+                    self.hint = hint
+                    let bt = self.expr(arm.body)
+                    let _ = self.scopes.pop()
+                    match types.join(result, bt) {
+                        Some(j) => {
+                            result = j
+                        }
+                        None => {
+                            let a = self.show(result)
+                            let b = self.show(bt)
+                            self.err(at_expr(arm.body), "`match` arms have different types: `{a}` and `{b}`")
+                        }
+                    }
+                }
+                self.exhaustive(st, arms, at)
+                result
+            }
+            parser.Kind.For(pat, iter, body) => {
+                let it = self.expr(iter)
+                var elem = types.Ty.Unknown
+                var ranged = false
+                match it {
+                    types.Ty.Slice(t) => {
+                        elem = types.concretize(t)
+                    }
+                    types.Ty.Array(t) => {
+                        elem = types.concretize(t)
+                    }
+                    types.Ty.Range(t) => {
+                        elem = types.concretize(t)
+                        ranged = true
+                    }
+                    types.Ty.Str => {
+                        elem = types.Ty.Char
+                    }
+                    types.Ty.Unknown => {}
+                    _ => {
+                        let shown = self.show(it)
+                        self.err(at_expr(iter), "cannot iterate over a value of type `{shown}`")
+                    }
+                }
+                self.scopes.push([])
+                if !self.irrefutable(pat, elem) { self.err(at_expr(iter), "the pattern of a `for` must always match") }
+                self.pattern(pat, elem, false, at_expr(iter))
+                let depth = self.frozen.len
+                if !ranged {
+                    if let Some(a) = self.access(iter) { self.frozen.push(a) }
+                }
+                let _ = self.looped(body, false, at)
+                while self.frozen.len > depth { let _ = self.frozen.pop() }
+                let _ = self.scopes.pop()
+                types.Ty.Unit
+            }
+            parser.Kind.While(cond, body) => {
+                self.scopes.push([])
+                self.cond(cond)
+                let _ = self.looped(body, false, at)
+                let _ = self.scopes.pop()
+                types.Ty.Unit
+            }
+            parser.Kind.Loop(body) => {
+                match self.looped(body, true, at) {
+                    Some(t) => t
+                    None => types.Ty.Never
+                }
+            }
+            parser.Kind.Break(value) => {
+                var t = types.Ty.Unit
+                if let Some(v) = value { t = self.expr(v) }
+                let shown = self.show(t)
+                var c = self.ctx.len as int - 1
+                var l = -1
+                if c >= 0 { l = self.ctx[c].loops.len as int - 1 }
+                if l < 0 {
+                    self.err(at, "`break` outside of a loop")
+                    return types.Ty.Never
+                }
+                let around = self.ctx[c].loops[l]
+                if has_expr(value) && !around.valued {
+                    self.err(at, "only `loop` can `break` with a value")
+                    return types.Ty.Never
+                }
+                var so_far = types.Ty.Never
+                if let Some(x) = around.ty { so_far = x }
+                match types.join(so_far, t) {
+                    Some(j) => {
+                        self.ctx[c].loops[l] = Loop(Some(j), around.valued)
+                    }
+                    None => self.err(at, "`break` values have different types (found `{shown}`)")
+                }
+                types.Ty.Never
+            }
+            parser.Kind.Continue => {
+                var inside = false
+                if self.ctx.len > 0 { inside = self.ctx[self.ctx.len - 1].loops.len > 0 }
+                if !inside { self.err(at, "`continue` outside of a loop") }
+                types.Ty.Never
+            }
+            parser.Kind.Return(value) => {
+                self.hint = None
+                if self.ctx.len > 0 {
+                    let ctx = self.ctx[self.ctx.len - 1]
+                    if ctx.by_ref { self.err(at, "a function that returns `ref` gives its result as the last expression of its body, not with `return`") }
+                    if has_expr(value) && !is_unit(ctx.ret) { self.hint = Some(ctx.ret) }
+                }
+                var t = types.Ty.Unit
+                if let Some(v) = value { t = self.expr(v) }
+                self.returned(value, t, at, false)
+                types.Ty.Never
+            }
+            parser.Kind.Closure(params, ret, fails, body) => {
+                self.closures.push(self.scopes.len as int)
+                self.scopes.push([])
+                var ps: [types.ParamSig] = []
+                for p in params {
+                    var ty = types.Ty.Unknown
+                    match p.ty {
+                        Some(t) => {
+                            ty = self.resolve(t, at)
+                        }
+                        None => {
+                            ty = self.skip()
+                        }
+                    }
+                    self.declare(p.name, ty, is_mut(p.mode))
+                    self.set_movable(p.name, is_own(p.mode))
+                    ps.push(types.ParamSig(p.name, p.mode, ty, false))
+                }
+                var declared: types.Ty? = None
+                if let Some(t) = ret { declared = Some(self.resolve(t, at)) }
+                var failing: types.Ty? = None
+                if let Some(t) = fails { failing = Some(self.resolve(t, at)) }
+                var ctx_ret = types.Ty.Unknown
+                if let Some(d) = declared { ctx_ret = d }
+                self.ctx.push(FnCtx(ctx_ret, failing, [], false))
+                let bt = self.block(body)
+                if let Some(_) = declared {
+                    var where_ = at
+                    if let Some(t) = body.tail { where_ = at_expr(t) }
+                    self.returned(None, bt, where_, true)
+                }
+                let _ = self.ctx.pop()
+                let _ = self.scopes.pop()
+                let _ = self.closures.pop()
+                var result = types.Ty.Unit
+                match declared {
+                    Some(d) => {
+                        result = d
+                    }
+                    None => {
+                        let c = types.concretize(bt)
+                        if !is_never(c) { result = c }
+                    }
+                }
+                if let Some(x) = failing { result = types.Ty.Result(result, x) }
+                types.Ty.Fn(types.Sig(ps, result))
+            }
+            parser.Kind.Comptime(inner) => self.expr(inner)
+            parser.Kind.Unsafe(b) => {
+                if !self.in_system() { self.err(at, "`unsafe` is only allowed in a module that starts with `@profile(system)`") }
+                self.unsafe_depth += 1
+                let t = self.block(b)
+                self.unsafe_depth -= 1
+                t
+            }
+            parser.Kind.Scope(name, body) => {
+                self.scopes.push([])
+                let unknown = self.skip()
+                self.declare(name, unknown, false)
+                let t = self.block(body)
+                let _ = self.scopes.pop()
+                t
+            }
+            parser.Kind.With(bindings, body) => {
+                for b in bindings {
+                    let _ = self.expr(b.value)
+                    // Which names of the context exist is not checked yet.
+                    self.skipped_exprs += 1
+                }
+                self.block(body)
+            }
+            parser.Kind.Unary(op, inner) => {
+                let t = self.expr(inner)
+                var ok = types.is_int(t)
+                if op == "-" {
+                    ok = types.is_num(t)
+                    match t {
+                        types.Ty.Int(k) => {
+                            if text.starts_with(k, "u") { ok = false }
+                        }
+                        _ => {}
+                    }
+                }
+                if op == "!" {
+                    ok = match t {
+                        types.Ty.Bool => true
+                        types.Ty.Unknown => true
+                        _ => false
+                    }
+                }
+                if !ok {
+                    let shown = self.show(t)
+                    self.err(at, "operator `{op}` cannot be applied to `{shown}`")
+                    return types.Ty.Unknown
+                }
+                t
+            }
+            parser.Kind.Binary(op, lhs, rhs) => {
+                let lt = self.expr(lhs)
+                let rt = self.expr(rhs)
+                self.binop(op, lt, rt, at)
+            }
+            parser.Kind.Range(lo, hi, _) => {
+                var t = types.Ty.IntLit
+                var first = true
+                var bounds: [parser.Expr] = []
+                if let Some(x) = lo { bounds.push(x) }
+                if let Some(x) = hi { bounds.push(x) }
+                for bound in bounds {
+                    let bt = self.expr(bound)
+                    var joined: types.Ty? = Some(bt)
+                    if !first { joined = types.join(t, bt) }
+                    first = false
+                    var good = false
+                    if let Some(j) = joined {
+                        if types.is_int(j) || is_char(j) {
+                            t = j
+                            good = true
+                        }
+                    }
+                    if !good {
+                        let shown = self.show(bt)
+                        self.err(at_expr(bound), "a range bound cannot have type `{shown}`")
+                        t = types.Ty.Unknown
+                    }
+                }
+                types.Ty.Range(t)
+            }
+            parser.Kind.Cast(inner, ty) => {
+                let source = self.expr(inner)
+                let target = self.resolve(ty, at)
+                match target {
+                    types.Ty.Dyn(t, targs) => {
+                        let given = types.concretize(source)
+                        let shown = self.show(given)
+                        let want = Bound(t, targs)
+                        let tname = self.show_bound(want)
+                        match given {
+                            types.Ty.Unknown => {}
+                            types.Ty.Dyn(u, uargs) => {
+                                if !(u == t && same_tys(uargs, targs)) { self.err(at, "cannot cast `{shown}` to `dyn {tname}`: a `dyn` value only keeps the methods of its own trait") }
+                            }
+                            _ => {
+                                if !self.satisfies(given, want) {
+                                    self.err(at, "cannot cast `{shown}` to `dyn {tname}`: `{shown}` does not implement `{tname}`")
+                                } else {
+                                    if self.inst != DEFINITION && types.concrete(given) {
+                                        let table = self.dyn_table(given, want)
+                                        self.set_dyn(self.slot(e), table)
+                                    }
+                                }
+                            }
+                        }
+                        return target
+                    }
+                    _ => {}
+                }
+                var ok = false
+                if is_unknown(source) || is_unknown(target) { ok = true }
+                if types.is_num(source) && types.is_num(target) { ok = true }
+                match target {
+                    types.Ty.Int(_) => {
+                        match source {
+                            types.Ty.Char => {
+                                ok = true
+                            }
+                            types.Ty.Bool => {
+                                ok = true
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                if !ok {
+                    let a = self.show(source)
+                    let b = self.show(target)
+                    self.err(at, "cannot cast `{a}` to `{b}`")
+                }
+                target
+            }
+            parser.Kind.Call(callee, args) => {
+                let t = self.call(e, callee, args, at)
+                self.note_ref_call(e, callee)
+                t
+            }
+            parser.Kind.Index(base, args) => {
+                match base.kind {
+                    parser.Kind.Name(n) => {
+                        if !self.has_local(n) {
+                            let generic = match self.global(n) {
+                                Some(Global.Fn(i)) => self.fns[i].generic || self.fns[i].tparams.len > 0
+                                Some(Global.Struct(i)) => self.structs[i].generic
+                                Some(Global.Enum(i)) => self.enums[i].generic
+                                Some(Global.Alias) => true
+                                _ => false
+                            }
+                            if generic { return self.skip() }
+                        }
+                    }
+                    _ => {}
+                }
+                let bt = self.expr(base)
+                var its: [types.Ty] = []
+                for a in args { its.push(self.expr(a)) }
+                if its.len != 1 {
+                    self.err(at, "an index takes exactly one value")
+                    return types.Ty.Unknown
+                }
+                var ranged = false
+                var whole = types.is_int(its[0])
+                match its[0] {
+                    types.Ty.Range(r) => {
+                        if types.is_int(r) {
+                            ranged = true
+                            whole = true
+                        }
+                    }
+                    _ => {}
+                }
+                if !whole {
+                    let shown = self.show(its[0])
+                    self.err(at_expr(args[0]), "an index must be an integer or a range, found `{shown}`")
+                    return types.Ty.Unknown
+                }
+                match bt {
+                    types.Ty.Slice(t) => {
+                        if ranged { return types.Ty.Slice(t) }
+                        t
+                    }
+                    types.Ty.Array(t) => {
+                        if ranged { return types.Ty.Slice(t) }
+                        t
+                    }
+                    types.Ty.Str => {
+                        if ranged { return types.Ty.Str }
+                        self.err(at, "a `str` is UTF-8 and can only be indexed with a range")
+                        types.Ty.Unknown
+                    }
+                    types.Ty.Unknown => types.Ty.Unknown
+                    _ => {
+                        let shown = self.show(bt)
+                        self.err(at, "a value of type `{shown}` cannot be indexed")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Kind.Field(base, name) => self.field(e, base, name, at)
+            parser.Kind.Try(inner) => {
+                let t = self.expr(inner)
+                var ret = types.Ty.Unit
+                var fails: types.Ty? = None
+                if self.ctx.len > 0 {
+                    ret = self.ctx[self.ctx.len - 1].ret
+                    fails = self.ctx[self.ctx.len - 1].fails
+                }
+                match t {
+                    types.Ty.Result(ok, found) => {
+                        match fails {
+                            None => self.err(at, "`?` on a result needs a function that declares an error (`! E`)")
+                            Some(declared) => {
+                                if !types.assignable(declared, found) {
+                                    let a = self.show(found)
+                                    let b = self.show(declared)
+                                    self.err(at, "`?` would return an error of type `{a}`, but the function declares `{b}`")
+                                }
+                            }
+                        }
+                        ok
+                    }
+                    types.Ty.Optional(some) => {
+                        let fine = match ret {
+                            types.Ty.Optional(_) => true
+                            types.Ty.Unknown => true
+                            _ => false
+                        }
+                        if !fine { self.err(at, "`?` on an optional needs a function that returns an optional") }
+                        some
+                    }
+                    types.Ty.Unknown => types.Ty.Unknown
+                    _ => {
+                        let shown = self.show(t)
+                        self.err(at, "`?` needs a result or an optional, found `{shown}`")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+            parser.Kind.Catch(inner, binding, handler) => {
+                let t = self.expr(inner)
+                var ok = types.Ty.Unknown
+                var failed = types.Ty.Unknown
+                match t {
+                    types.Ty.Result(x, y) => {
+                        ok = x
+                        failed = y
+                    }
+                    types.Ty.Unknown => {}
+                    _ => {
+                        let shown = self.show(t)
+                        self.err(at, "`catch` needs a result with an error, found `{shown}`")
+                    }
+                }
+                self.scopes.push([])
+                if let Some(b) = binding { self.declare(b, failed, false) }
+                let ht = self.block(handler)
+                let _ = self.scopes.pop()
+                match types.join(ok, ht) {
+                    Some(j) => j
+                    None => {
+                        let a = self.show(ok)
+                        let b = self.show(ht)
+                        self.err(at, "the `catch` handler must produce `{a}`, found `{b}`")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_dyn(mut self, key: int, table: [Res]) {
+        for k in 0..self.dyns.len {
+            if self.dyns[k].key == key {
+                self.dyns[k] = DynEntry(key, table)
+                return
+            }
+        }
+        self.dyns.push(DynEntry(key, table))
+    }
+}
+
+// ---- names, fields, operators and arguments ----
+
+impl Checker {
+    // Checks the body of a loop. Gives the type of its `break` values, if any.
+    fn looped(mut self, body: parser.Block, valued: bool, at: Span) -> types.Ty? {
+        if self.ctx.len == 0 {
+            self.err(at, "a loop cannot appear outside of a function")
+            return Some(types.Ty.Unknown)
+        }
+        self.ctx[self.ctx.len - 1].loops.push(Loop(None, valued))
+        self.block_discarded(body, at)
+        if self.ctx.len == 0 { return None }
+        match self.ctx[self.ctx.len - 1].loops.pop() {
+            Some(l) => l.ty
+            None => None
+        }
+    }
+
+    fn name(mut self, e: parser.Expr, name: str, at: Span) -> types.Ty {
+        if let Some(v) = self.lookup(name) {
+            self.set_res(e, Res.Local)
+            self.var_of.set(self.slot(e), v.id)
+            return v.ty
+        }
+        if name == "None" {
+            self.set_res(e, Res.NoneValue)
+            return types.Ty.Optional(types.Ty.Never)
+        }
+        self.global_value(e, self.module, name, at)
+    }
+
+    // A name of the top of a module used as a value.
+    fn global_value(mut self, e: parser.Expr, module: int, name: str, at: Span) -> types.Ty {
+        match self.global_in(module, name) {
+            Some(Global.Fn(i)) => {
+                if self.fns[i].generic || self.fns[i].tparams.len > 0 { return self.skip() }
+                self.set_res(e, Res.Fn(i))
+                types.Ty.Fn(self.fns[i].sig)
+            }
+            Some(Global.Const(i)) => {
+                match self.consts[i] {
+                    Some(t) => {
+                        self.set_res(e, Res.Const(i))
+                        t
+                    }
+                    None => {
+                        self.err(at, "constant `{name}` is used before its definition")
+                        types.Ty.Unknown
+                    }
+                }
+            }
+            Some(Global.Import) => self.skip()
+            Some(Global.Module(_)) => {
+                self.err(at, "`{name}` is a module, not a value")
+                types.Ty.Unknown
+            }
+            Some(_) => {
+                self.err(at, "`{name}` is a type, not a value")
+                types.Ty.Unknown
+            }
+            None => {
+                self.err(at, "undefined name `{name}`")
+                types.Ty.Unknown
+            }
+        }
+    }
+
+    fn field(mut self, e: parser.Expr, base: parser.Expr, name: str, at: Span) -> types.Ty {
+        let hint = self.pending
+        self.pending = None
+        if self.in_module(e) {
+            match self.gref(e) {
+                Some(g) => return self.global_value(e, g.module, g.name, at)
+                None => return types.Ty.Unknown
+            }
+        }
+        match base.kind {
+            parser.Kind.Name(b) => {
+                if !self.has_local(b) {
+                    match self.global(b) {
+                        Some(Global.Import) => return self.skip()
+                        Some(Global.Enum(i)) => {
+                            if self.enums[i].generic { return self.skip() }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(head) = self.type_head(base) {
+            match head.ty {
+                types.Ty.Enum(i, targs) => {
+                    let b = self.enums[i].name
+                    var v = -1
+                    for k in 0..self.enums[i].variants.len {
+                        if self.enums[i].variants[k].name == name && v < 0 { v = k as int }
+                    }
+                    if v < 0 {
+                        self.err(at, "`{b}` has no variant `{name}`")
+                        return types.Ty.Unknown
+                    }
+                    if self.enums[i].variants[v].fields.len > 0 {
+                        self.err(at, "variant `{b}.{name}` needs arguments")
+                        return types.Ty.Unknown
+                    }
+                    self.set_res(e, Res.Variant(i, v))
+                    if head.explicit { return types.Ty.Enum(i, targs) }
+                    let tparams = self.enums[i].tparams
+                    let env = self.type_args(tparams, types.Ty.Enum(i, targs), None, hint, [], [])
+                    var args: [types.Ty] = []
+                    for n in tparams {
+                        match types.lookup(env, n) {
+                            Some(t) => args.push(t)
+                            None => args.push(types.Ty.Never)
+                        }
+                    }
+                    return types.Ty.Enum(i, args)
+                }
+                _ => {}
+            }
+        }
+        let bt = self.expr(base)
+        var found: types.Ty? = None
+        match bt {
+            types.Ty.Unknown => return types.Ty.Unknown
+            types.Ty.Struct(i, targs) => {
+                for k in 0..self.structs[i].fields.len {
+                    if self.structs[i].fields[k].name == name {
+                        self.set_res(e, Res.Field(k as int))
+                        found = Some(types.subst(self.structs[i].fields[k].ty, types.targ_env(self.structs[i].tparams, targs)))
+                        break
+                    }
+                }
+            }
+            types.Ty.Tuple(ts) => {
+                if all_digits(name) {
+                    if let Some(i) = text.parse_int(name) {
+                        self.set_res(e, Res.Field(i))
+                        if i >= 0 && i < (ts.len as int) { found = Some(ts[i]) }
+                    }
+                }
+            }
+            types.Ty.Slice(_) => {
+                if name == "len" {
+                    self.set_res(e, Res.Len)
+                    found = Some(types.Ty.Int("usize"))
+                }
+            }
+            types.Ty.Array(_) => {
+                if name == "len" {
+                    self.set_res(e, Res.Len)
+                    found = Some(types.Ty.Int("usize"))
+                }
+            }
+            types.Ty.Str => {
+                if name == "len" {
+                    self.set_res(e, Res.Len)
+                    found = Some(types.Ty.Int("usize"))
+                }
+            }
+            _ => {}
+        }
+        match found {
+            Some(t) => t
+            None => {
+                let shown = self.show(bt)
+                self.err(at, "type `{shown}` has no field `{name}`")
+                types.Ty.Unknown
+            }
+        }
+    }
+
+    fn binop(mut self, op: str, l: types.Ty, r: types.Ty, at: Span) -> types.Ty {
+        let joined = types.join(l, r)
+        var result: types.Ty? = None
+        if op == "&&" || op == "||" {
+            if bool_like(l) && bool_like(r) { result = Some(types.Ty.Bool) }
+        } else {
+            if op == "<<" || op == ">>" {
+                if types.is_int(l) && types.is_int(r) { result = Some(l) }
+            } else {
+                if let Some(j) = joined {
+                    if op == "==" || op == "!=" {
+                        result = Some(types.Ty.Bool)
+                    } else {
+                        if op == "<" || op == "<=" || op == ">" || op == ">=" {
+                            if types.is_num(j) || is_char(j) || is_str(j) { result = Some(types.Ty.Bool) }
+                        } else {
+                            if op == "&" || op == "|" || op == "^" {
+                                if types.is_int(j) || is_bool(j) { result = Some(j) }
+                            } else {
+                                if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+                                    if types.is_num(j) { result = Some(j) }
+                                } else {
+                                    // Arithmetic that wraps or saturates is only for whole numbers.
+                                    if types.is_int(j) { result = Some(j) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        match result {
+            Some(t) => t
+            None => {
+                let a = self.show(l)
+                let b = self.show(r)
+                self.err(at, "operator `{op}` cannot be applied to `{a}` and `{b}`")
+                types.Ty.Unknown
+            }
+        }
+    }
+
+    // ---- calls ----
+
+    // Checks the arguments when the signature of what is called is not known.
+    fn args_unchecked(mut self, args: [parser.Arg]) {
+        // Choosing what the call means already looked at them.
+        if let Some(_) = self.pre_args {
+            self.pre_args = None
+            return
+        }
+        for a in args {
+            let t = self.expr(a.value)
+            self.discard(t, at_expr(a.value))
+            if is_mut(a.mode) { self.require_mut_place(a.value) }
+        }
+    }
+
+    fn apply(mut self, sig: types.Sig, args: [parser.Arg], at: Span) -> types.Ty { self.apply_with(sig, args, None, at) }
+
+    // Checks the arguments of a call. `given` holds their types when the
+    // caller has already worked them out.
+    fn apply_with(mut self, sig: types.Sig, args: [parser.Arg], given: [types.Ty]?, at: Span) -> types.Ty {
+        var tys = given
+        let waiting = self.pre_args
+        self.pre_args = None
+        match given {
+            Some(_) => {}
+            None => {
+                if let Some(pre) = waiting {
+                    self.arg_logs = Some(pre.logs)
+                    tys = Some(pre.tys)
+                }
+            }
+        }
+        var required = 0
+        for p in sig.params {
+            if !p.optional { required += 1 }
+        }
+        let count = args.len as int
+        let most = sig.params.len as int
+        if count < required || count > most {
+            let expected = if required == most { "{required}" } else { "{required} to {most}" }
+            self.err(at, "expected {expected} arguments, found {count}")
+        }
+        // What each argument borrows while the call lasts, starting with
+        // the receiver of a method.
+        var borrows: [Borrow] = []
+        if let Some(r) = self.receiver { borrows.push(Borrow(r.access, r.exclusive, at)) }
+        self.receiver = None
+        let logs = self.arg_logs
+        self.arg_logs = None
+        for i in 0..count {
+            let a = args[i]
+            var start = self.mut_log.len as int
+            var t = types.Ty.Unknown
+            match tys {
+                Some(known) => {
+                    t = known[i]
+                }
+                None => {
+                    // A call learns from the parameter what it must produce.
+                    if i < most {
+                        match a.value.kind {
+                            parser.Kind.Call(_, _) => {
+                                self.hint = None
+                                if types.concrete(sig.params[i].ty) { self.hint = Some(sig.params[i].ty) }
+                            }
+                            _ => {}
+                        }
+                    }
+                    t = self.expr(a.value)
+                }
+            }
+            var end = self.mut_log.len as int
+            if let Some(l) = logs {
+                if i < (l.len as int) {
+                    start = l[i].start
+                    end = l[i].end
+                }
+            }
+            // An argument that modifies what an earlier one borrows.
+            for k in start..end {
+                let m = self.mut_log[k]
+                var clash = false
+                for b in borrows {
+                    if overlap(b.access, m.access) { clash = true }
+                }
+                if clash { self.err(m.at, "`{m.access.name}` is modified here while another argument of the same call borrows it") }
+            }
+            if i >= most { continue }
+            let p = sig.params[i]
+            let av = at_expr(a.value)
+            var borrow: Borrow? = None
+            if is_mut(p.mode) && is_mut(a.mode) {
+                if let Some(x) = self.access(a.value) { borrow = Some(Borrow(x, true, av)) }
+            }
+            // Scalars are copied before the call: they borrow nothing.
+            if is_let(p.mode) && !scalar(t) {
+                if let Some(x) = self.access(a.value) { borrow = Some(Borrow(x, false, av)) }
+            }
+            if let Some(x) = borrow {
+                var clash = false
+                for b in borrows {
+                    if (x.exclusive || b.exclusive) && overlap(b.access, x.access) { clash = true }
+                }
+                if clash { self.err(x.at, "`{x.access.name}` is accessed twice by this call and one access is `mut`: exclusivity requires they do not overlap") }
+                borrows.push(x)
+            }
+            if is_own(p.mode) && is_own(a.mode) { self.movable(a.value) }
+            if let Some(label) = a.label {
+                if p.name != "" && label != p.name { self.err(av, "argument {i + 1} is named `{p.name}`, not `{label}`") }
+            }
+            self.coerce(a.value, p.ty, t, "argument")
+            if is_mut(p.mode) {
+                if is_mut(a.mode) {
+                    self.require_mut_place(a.value)
+                    // What is called writes through the argument, so the types must be the same.
+                    if types.assignable(p.ty, t) && !types.assignable(t, p.ty) {
+                        let x = self.show(p.ty)
+                        let y = self.show(t)
+                        self.err(av, "a `mut` argument must have exactly the type `{x}`, found `{y}`")
+                    }
+                } else {
+                    var shown = "value"
+                    if let Some(n) = root_name(a.value) { shown = n }
+                    self.err(av, "this parameter is `mut`: write `mut {shown}` at the call")
+                }
+            } else {
+                if is_mut(a.mode) { self.err(av, "argument is marked `mut` but the parameter is not `mut`") }
+                if is_let(p.mode) && is_own(a.mode) { self.err(av, "argument is marked `own` but the parameter only borrows") }
+            }
+        }
+        sig.ret
+    }
+
+    // Checks that an `own` argument is a variable that can be moved.
+    fn movable(mut self, e: parser.Expr) {
+        match e.kind {
+            parser.Kind.Name(name) => {
+                match self.lookup(name) {
+                    Some(v) => {
+                        if self.captured(name) {
+                            self.err(at_expr(e), "cannot move `{name}`: a closure captures it by value")
+                            return
+                        }
+                        if !v.movable {
+                            self.err(at_expr(e), "cannot move `{name}`: it is borrowed (take the parameter as `own`)")
+                            return
+                        }
+                        var frozen = false
+                        for f in self.frozen {
+                            if f.root == v.id { frozen = true }
+                        }
+                        if frozen { self.err(at_expr(e), "cannot move `{name}` while a `for` iterates over it") }
+                    }
+                    None => {}
+                }
+            }
+            _ => self.err(at_expr(e), "`own` moves a whole variable: this expression is not one")
+        }
+    }
+}
+
+fn ctor(fields: [CtorField], ret: types.Ty) -> types.Sig {
+    var params: [types.ParamSig] = []
+    for f in fields { params.push(types.ParamSig(f.name, parser.Mode.Own, f.ty, f.optional)) }
+    types.Sig(params, ret)
+}
+
+fn root_name(e: parser.Expr) -> str? {
+    match e.kind {
+        parser.Kind.Name(n) => Some(n)
+        parser.Kind.Field(base, _) => root_name(base)
+        parser.Kind.Index(base, _) => root_name(base)
+        _ => None
+    }
+}
+
+fn all_digits(s: str) -> bool {
+    let cs = text.chars(s)
+    if cs.len == 0 { return false }
+    for c in cs {
+        if !text.is_digit(c) { return false }
+    }
+    true
+}
+
+fn bool_like(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Bool => true
+        types.Ty.Unknown => true
+        _ => false
+    }
+}
+
+fn is_bool(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Bool => true
+        _ => false
+    }
+}
+
+fn is_char(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Char => true
+        _ => false
+    }
+}
+
+fn is_str(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Str => true
+        _ => false
+    }
+}
+
+fn scalar(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Int(_) => true
+        types.Ty.IntLit => true
+        types.Ty.Float(_) => true
+        types.Ty.FloatLit => true
+        types.Ty.Bool => true
+        types.Ty.Char => true
+        types.Ty.Unit => true
+        _ => false
+    }
+}
+
+fn is_mut(m: parser.Mode) -> bool {
+    match m {
+        parser.Mode.Mut => true
+        _ => false
+    }
+}
+
+fn is_own(m: parser.Mode) -> bool {
+    match m {
+        parser.Mode.Own => true
+        _ => false
+    }
+}
+
+fn is_let(m: parser.Mode) -> bool {
+    match m {
+        parser.Mode.Let => true
+        _ => false
+    }
+}
+
+// Whether two accesses can touch the same memory. Different fields and
+// different written indices do not; anything else may.
+fn overlap(a: Access, b: Access) -> bool {
+    if a.root != b.root { return false }
+    for k in 0..a.segs.len {
+        if k >= b.segs.len { break }
+        match (a.segs[k], b.segs[k]) {
+            (Seg.Field(p), Seg.Field(q)) => {
+                if p != q { return false }
+            }
+            (Seg.Index(Some(p)), Seg.Index(Some(q))) => {
+                if p != q { return false }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+// ---- calls ----
+
+fn param(name: str, ty: types.Ty) -> types.ParamSig { types.ParamSig(name, parser.Mode.Let, ty, false) }
+
+fn fails_io(ty: types.Ty) -> types.Ty { types.Ty.Result(ty, types.Ty.Builtin("io.Error")) }
+
+// A function a module of the compiler gives: the name later stages know
+// it by, and its signature.
+fn native(module: str, name: str) -> Native? {
+    let int = types.Ty.Int("i64")
+    if module == "std.io" {
+        if name == "print" { return Some(Native("io.print", types.Sig([param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "eprint" { return Some(Native("io.eprint", types.Sig([param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "read_line" { return Some(Native("io.read_line", types.Sig([], fails_io(types.Ty.Optional(types.Ty.Str))))) }
+        if name == "read_file" { return Some(Native("io.read_file", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Str)))) }
+        if name == "write_file" { return Some(Native("io.write_file", types.Sig([param("path", types.Ty.Str), param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "args" { return Some(Native("io.args", types.Sig([], types.Ty.Slice(types.Ty.Str)))) }
+    }
+    if module == "std.raw" {
+        if name == "concat" { return Some(Native("raw.concat", types.Sig([param("parts", types.Ty.Slice(types.Ty.Str))], types.Ty.Str))) }
+        if name == "from_chars" { return Some(Native("raw.from_chars", types.Sig([param("chars", types.Ty.Slice(types.Ty.Char))], types.Ty.Str))) }
+        if name == "hash" { return Some(Native("raw.hash", types.Sig([param("text", types.Ty.Str)], int))) }
+        if name == "mix" { return Some(Native("raw.mix", types.Sig([param("n", int)], int))) }
+    }
+    None
+}
+
+impl Checker {
+    fn import_path(self, name: str) -> str? {
+        for i in self.imports {
+            if i.module == self.module && i.name == name { return Some(i.path) }
+        }
+        None
+    }
+
+    fn extern_id(self, alias: str, name: str) -> int {
+        for x in self.extern_ids {
+            if x.module == self.module && x.alias == alias && x.name == name { return x.id }
+        }
+        -1
+    }
+
+    // The traits that bound a type parameter, with all they require.
+    fn bounds_of(self, n: str) -> [Bound] {
+        var out: [Bound] = []
+        for p in self.bounds {
+            if p.name != n { continue }
+            for b in p.bounds {
+                for s in self.with_supers(b) { out.push(s) }
+            }
+        }
+        out
+    }
+
+    fn no_method(mut self, args: [parser.Arg], key: str, name: str, at: Span) -> types.Ty {
+        self.args_unchecked(args)
+        self.err(at, "type `{key}` has no method `{name}`")
+        types.Ty.Unknown
+    }
+
+    fn call(mut self, e: parser.Expr, callee: parser.Expr, args: [parser.Arg], at: Span) -> types.Ty {
+        let hint = self.pending
+        self.pending = None
+        let target = self.gref(callee)
+        let plain_name = match callee.kind {
+            parser.Kind.Name(_) => true
+            _ => false
+        }
+        match target {
+            None => {
+                if self.in_module(callee) {
+                    // The name is missing or private: already reported.
+                    self.args_unchecked(args)
+                    return types.Ty.Unknown
+                }
+            }
+            Some(g) => {
+                let found = self.global_in(g.module, g.name)
+                var defined = false
+                if let Some(_) = found { defined = true }
+                if g.name == "panic" && !defined && plain_name {
+                    self.set_res(e, Res.Builtin("panic"))
+                    let _ = self.apply(types.Sig([param("message", types.Ty.Str)], types.Ty.Never), args, at)
+                    return types.Ty.Never
+                }
+                if g.name == "assert" && !defined && plain_name {
+                    self.set_res(e, Res.Builtin("assert"))
+                    return self.apply(types.Sig([param("condition", types.Ty.Bool), types.ParamSig("message", parser.Mode.Let, types.Ty.Str, true)], types.Ty.Unit), args, at)
+                }
+                if g.name == "Some" && g.module == self.module && plain_name {
+                    if args.len != 1 { self.err(at, "`Some` takes 1 argument, found {args.len}") }
+                    var inner = types.Ty.Unknown
+                    if args.len > 0 { inner = self.expr(args[0].value) }
+                    self.set_res(e, Res.SomeCtor)
+                    return types.Ty.Optional(inner)
+                }
+                match found {
+                    Some(Global.Fn(i)) => {
+                        if self.fns[i].generic {
+                            self.args_unchecked(args)
+                            return self.skip()
+                        }
+                        if self.fns[i].tparams.len > 0 { return self.generic_call(e, Target.Fn(i), [], None, hint, None, args, at) }
+                        self.set_res(e, Res.Fn(i))
+                        let sig = self.fns[i].sig
+                        return self.apply(sig, args, at)
+                    }
+                    Some(Global.Struct(i)) => {
+                        if self.structs[i].generic {
+                            self.args_unchecked(args)
+                            return self.skip()
+                        }
+                        return self.construct_struct(e, i, None, hint, args, at)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        match callee.kind {
+            parser.Kind.Index(base, targs) => {
+                if let Some(g) = self.gref(base) {
+                    match self.global_in(g.module, g.name) {
+                        Some(Global.Fn(i)) => {
+                            if !self.fns[i].generic && self.fns[i].tparams.len > 0 { return self.generic_call(e, Target.Fn(i), [], Some(targs), None, None, args, at) }
+                        }
+                        Some(Global.Struct(i)) => {
+                            if !self.structs[i].generic {
+                                if let Some(head) = self.type_head(callee) {
+                                    match head.ty {
+                                        types.Ty.Struct(_, written) => return self.construct_struct(e, i, Some(written), None, args, at)
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            parser.Kind.Field(base, name) => return self.method_call(e, base, name, hint, args, at)
+            _ => {}
+        }
+        let ct = self.expr(callee)
+        match ct {
+            types.Ty.Fn(sig) => self.apply(sig, args, at)
+            types.Ty.Unknown => {
+                self.args_unchecked(args)
+                types.Ty.Unknown
+            }
+            _ => {
+                self.args_unchecked(args)
+                let shown = self.show(ct)
+                self.err(at, "a value of type `{shown}` cannot be called")
+                types.Ty.Unknown
+            }
+        }
+    }
+
+    // `base.name(...)`: a function of a module or of a type, or a method of a value.
+    fn method_call(mut self, e: parser.Expr, base: parser.Expr, name: str, hint: types.Ty?, args: [parser.Arg], at: Span) -> types.Ty {
+        var base_name = ""
+        var named = false
+        match base.kind {
+            parser.Kind.Name(b) => {
+                if !self.has_local(b) {
+                    base_name = b
+                    named = true
+                }
+            }
+            _ => {}
+        }
+        if named {
+            let b = base_name
+            let x = self.extern_id(b, name)
+            if x >= 0 {
+                if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`") }
+                self.set_res(e, Res.Extern(x))
+                let sig = self.externs[x].sig
+                return self.apply(sig, args, at)
+            }
+            if let Some(path) = self.import_path(b) {
+                if let Some(n) = native(path, name) {
+                    self.set_res(e, Res.Builtin(n.name))
+                    return self.apply(n.sig, args, at)
+                }
+            }
+            let skipped = match self.global(b) {
+                Some(Global.Import) => true
+                Some(Global.Enum(i)) => self.enums[i].generic
+                Some(Global.Struct(i)) => self.structs[i].generic
+                _ => false
+            }
+            if skipped {
+                self.args_unchecked(args)
+                return self.skip()
+            }
+            // A function of a type parameter: `T.from(x)`.
+            match types.lookup(self.tenv, b) {
+                Some(types.Ty.Param(n)) => {
+                    let bounds = self.bounds_of(n)
+                    for bound in bounds {
+                        let methods = self.traits[bound.tr].methods
+                        for m in methods {
+                            if m.name != name { continue }
+                            if let Some(_) = m.self_mode { continue }
+                            var env = self.trait_env(bound)
+                            types.define(mut env, "Self", types.Ty.Param(n))
+                            return self.apply(types.subst_sig(m.sig, env), args, at)
+                        }
+                    }
+                    self.args_unchecked(args)
+                    self.err(at, "no bound of `{n}` has a function `{name}` without `self`")
+                    return types.Ty.Unknown
+                }
+                Some(ty) => {
+                    if !is_unknown(ty) { return self.type_call(e, ty, true, name, hint, args, at) }
+                }
+                None => {}
+            }
+        }
+        if let Some(head) = self.type_head(base) { return self.type_call(e, head.ty, head.explicit, name, hint, args, at) }
+        let bt = self.expr(base)
+        match bt {
+            types.Ty.Dyn(t, targs) => {
+                let bound = Bound(t, targs)
+                let slots = self.dyn_slots(bound)
+                let tname = self.show_bound(bound)
+                var k = -1
+                for i in 0..slots.len {
+                    if slots[i].name == name && k < 0 { k = i as int }
+                }
+                if k >= 0 {
+                    var mutates = false
+                    if let Some(mode) = slots[k].self_mode { mutates = is_mut(mode) }
+                    if mutates { self.require_mut_place(base) }
+                    self.set_res(e, Res.Dyn(k, mutates))
+                    return self.apply(slots[k].sig, args, at)
+                }
+                self.args_unchecked(args)
+                var declared = false
+                for b in self.with_supers(bound) {
+                    for m in self.traits[b.tr].methods {
+                        if m.name == name { declared = true }
+                    }
+                }
+                if declared {
+                    self.err(at, "`{name}` cannot be called on a `dyn {tname}`: it has no `self`, names `Self` or has type parameters, so it needs the real type")
+                } else {
+                    self.err(at, "`dyn {tname}` has no method `{name}`")
+                }
+                return types.Ty.Unknown
+            }
+            _ => {}
+        }
+        let key = self.key(types.concretize(bt))
+        var chosen = name
+        // A method several impls of a generic trait give the type.
+        if self.method_index(key, chosen) < 0 {
+            match self.pick(key, name, hint, args, at) {
+                Picked.Name(m) => {
+                    chosen = m
+                }
+                Picked.Nothing => {}
+                Picked.Unclear => {
+                    self.args_unchecked(args)
+                    return types.Ty.Unknown
+                }
+            }
+        }
+        let mi = self.method_index(key, chosen)
+        if mi >= 0 {
+            let m = self.methods[mi].m
+            let _ = self.method_visible(m, name, at)
+            var receiver: Recv? = None
+            match m.self_mode {
+                Some(mode) => {
+                    if is_mut(mode) {
+                        if let Some(a) = self.access(base) { receiver = Some(Recv(a, true)) }
+                        self.require_mut_place(base)
+                    }
+                    if is_let(mode) && !scalar(bt) {
+                        if let Some(a) = self.access(base) { receiver = Some(Recv(a, false)) }
+                    }
+                }
+                None => self.err(at, "`{name}` has no `self`: call it as `{key}.{name}(...)`")
+            }
+            var plain = m.tparams.len == 0
+            if let Some(_) = m.default { plain = false }
+            if plain {
+                self.set_res(e, Res.Method(key, chosen))
+                self.receiver = receiver
+                return self.apply(m.sig, args, at)
+            }
+            var env: [types.Binding] = []
+            types.bind(m.self_ty, types.concretize(bt), mut env)
+            return self.generic_call(e, Target.Method(key, chosen), env, None, hint, receiver, args, at)
+        }
+        match bt {
+            types.Ty.Param(n) => return self.bound_call(e, base, bt, n, name, hint, args, at)
+            types.Ty.Struct(i, targs) => {
+                let env = types.targ_env(self.structs[i].tparams, targs)
+                let fields = self.structs[i].fields
+                for f in fields {
+                    if f.name != name { continue }
+                    match types.subst(f.ty, env) {
+                        types.Ty.Fn(sig) => return self.apply(sig, args, at)
+                        _ => {}
+                    }
+                    break
+                }
+                self.no_method(args, key, name, at)
+            }
+            types.Ty.Enum(_, _) => self.no_method(args, key, name, at)
+            types.Ty.Unknown => {
+                self.args_unchecked(args)
+                types.Ty.Unknown
+            }
+            types.Ty.Slice(_) => {
+                if name == "push" || name == "pop" || name == "get" { return self.array_method(e, base, bt, name, args, at) }
+                self.args_unchecked(args)
+                self.skip()
+            }
+            types.Ty.Array(_) => {
+                if name == "push" || name == "pop" || name == "get" { return self.array_method(e, base, bt, name, args, at) }
+                self.args_unchecked(args)
+                self.skip()
+            }
+            // Other methods of the types of the language are not defined yet.
+            _ => {
+                self.args_unchecked(args)
+                self.skip()
+            }
+        }
+    }
+
+    // A method called on a value whose type is a type parameter: one of
+    // the traits that bound it gives the method.
+    fn bound_call(mut self, e: parser.Expr, base: parser.Expr, bt: types.Ty, n: str, name: str, hint: types.Ty?, args: [parser.Arg], at: Span) -> types.Ty {
+        var bounds: [Bound] = []
+        var methods: [TraitMethod] = []
+        for b in self.bounds_of(n) {
+            for m in self.traits[b.tr].methods {
+                if m.name == name {
+                    bounds.push(b)
+                    methods.push(m)
+                    break
+                }
+            }
+        }
+        if bounds.len == 0 {
+            self.args_unchecked(args)
+            self.err(at, "type `{n}` has no method `{name}`: add a trait bound that provides it")
+            return types.Ty.Unknown
+        }
+        // Of several bounds with the method, the one that gives what the call must.
+        var k = 0
+        if bounds.len > 1 {
+            if let Some(h) = hint {
+                for i in 0..bounds.len {
+                    if types.assignable(h, types.subst(methods[i].sig.ret, self.trait_env(bounds[i]))) {
+                        k = i as int
+                        break
+                    }
+                }
+            }
+        }
+        let bound = bounds[k]
+        let sig = methods[k].sig
+        let self_mode = methods[k].self_mode
+        var takes_self = false
+        if let Some(mode) = self_mode {
+            takes_self = true
+            if is_mut(mode) { self.require_mut_place(base) }
+        }
+        var env = self.trait_env(bound)
+        types.define(mut env, "Self", bt)
+        for r in self.traits[bound.tr].refs {
+            if r.name == name {
+                self.ref_calls.set(self.slot(e), RefCall(r.mutable, takes_self))
+                break
+            }
+        }
+        var extra: [TParam] = []
+        for o in self.traits[bound.tr].own_params {
+            if o.name == name {
+                extra = o.tparams
+                break
+            }
+        }
+        if extra.len == 0 { return self.apply(types.subst_sig(sig, env), args, at) }
+        // The type parameters of the method itself follow from the
+        // arguments and from what the call must give. They get names
+        // nothing else has.
+        for p in extra { types.define(mut env, p.name, types.Ty.Param("{p.name}'")) }
+        let open_sig = types.subst_sig(sig, env)
+        let pre = self.arg_types(args)
+        var found: [types.Binding] = []
+        for i in 0..open_sig.params.len {
+            if i < pre.tys.len { types.bind(open_sig.params[i].ty, pre.tys[i], mut found) }
+        }
+        if let Some(h) = hint { types.hinted(open_sig.ret, h, mut found) }
+        var decided: [types.Binding] = []
+        for p in extra {
+            match types.lookup(found, "{p.name}'") {
+                Some(t) => types.define(mut decided, "{p.name}'", types.concretize(t))
+                None => {
+                    self.err(at, "cannot infer the type parameter `{p.name}`: give the result a type")
+                    types.define(mut decided, "{p.name}'", types.Ty.Unknown)
+                }
+            }
+        }
+        for p in extra {
+            var t = types.Ty.Unknown
+            if let Some(x) = types.lookup(decided, "{p.name}'") { t = x }
+            for b in p.bounds {
+                let want = Bound(b.tr, subst_all(subst_all(b.args, env), decided))
+                if !self.satisfies(t, want) {
+                    let shown = self.show(t)
+                    let tname = self.show_bound(want)
+                    self.err(at, "type `{shown}` does not implement `{tname}`, which `{p.name}` requires")
+                }
+            }
+        }
+        self.arg_logs = Some(pre.logs)
+        self.apply_with(types.subst_sig(open_sig, decided), args, Some(pre.tys), at)
+    }
+}
+
+// ---- constants, bodies and instances ----
+
+fn at_expr(e: parser.Expr) -> Span { Span(e.line, e.col) }
+
+fn without_underscores(s: str) -> str {
+    var out: [char] = []
+    for c in text.chars(s) {
+        if c != '_' { out.push(c) }
+    }
+    text.from_chars(out)
+}
+
+// An operator that also assigns, without its `=`: `+` for `+=`.
+fn without_last(s: str) -> str {
+    let cs = text.chars(s)
+    var out: [char] = []
+    for k in 0..cs.len {
+        if k + 1 < cs.len { out.push(cs[k]) }
+    }
+    text.from_chars(out)
+}
+
+fn same_target(a: Target, b: Target) -> bool {
+    match (a, b) {
+        (Target.Fn(x), Target.Fn(y)) => x == y
+        (Target.Method(t, n), Target.Method(u, m)) => t == u && n == m
+        _ => false
+    }
+}
+
+fn same_sig(a: types.Sig, b: types.Sig) -> bool {
+    if a.params.len != b.params.len || a.ret != b.ret { return false }
+    for k in 0..a.params.len {
+        let p = a.params[k]
+        let q = b.params[k]
+        if p.name != q.name || p.mode != q.mode || p.ty != q.ty || p.optional != q.optional { return false }
+    }
+    true
+}
+
+// Whether two lists of type arguments say the same where both are known.
+fn agree(a: [types.Ty], b: [types.Ty]) -> bool {
+    for k in 0..a.len {
+        if k >= b.len { break }
+        if !(a[k] == b[k] || is_unknown(a[k]) || is_unknown(b[k])) { return false }
+    }
+    true
+}
+
+// A declaration inside a block, in a few words.
+fn describe(k: parser.DeclKind) -> str {
+    match k {
+        parser.DeclKind.Fn(f) => "fn {f.name}"
+        parser.DeclKind.Struct(s) => "struct {s.name}"
+        parser.DeclKind.Enum(e) => "enum {e.name}"
+        parser.DeclKind.Trait(t) => "trait {t.name}"
+        parser.DeclKind.Impl(i) => "impl {parser.ty_text(i.ty)}"
+        parser.DeclKind.Const(name, _, _) => "let {name}"
+        parser.DeclKind.Alias(name, _, _) => "type {name}"
+    }
+}
+
+impl Checker {
+    // Notes what the bounds of the instance being checked say its types
+    // implement, to choose among several impls of one trait.
+    fn activate(mut self, tparams: [TParam]) {
+        var out: [Active] = []
+        for p in tparams {
+            match types.lookup(self.tenv, p.name) {
+                Some(t) => {
+                    for b in p.bounds { out.push(Active(t, Bound(b.tr, subst_all(b.args, self.tenv)))) }
+                }
+                None => {}
+            }
+        }
+        self.active = out
+    }
+
+    // Pass 4: the constants, in order.
+    fn pass_consts(mut self) {
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            match d.kind {
+                parser.DeclKind.Const(name, ty, value) => {
+                    var i = -1
+                    match self.global(name) {
+                        Some(Global.Const(k)) => {
+                            i = k
+                        }
+                        _ => continue
+                    }
+                    var declared: types.Ty? = None
+                    if let Some(t) = ty { declared = Some(self.resolve(t, Span(d.line, d.col))) }
+                    let actual = self.expr(value)
+                    match declared {
+                        Some(t) => {
+                            self.coerce(value, t, actual, "constant")
+                            self.consts[i] = Some(t)
+                        }
+                        None => {
+                            self.consts[i] = Some(types.concretize(actual))
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 5: the bodies.
+    fn pass_bodies(mut self) {
+        let count = self.decls.len as int
+        for di in 0..count {
+            let d = self.decls[di]
+            self.module = self.module_of[di]
+            let at = Span(d.line, d.col)
+            match d.kind {
+                parser.DeclKind.Fn(f) => {
+                    let idx = self.fn_of_decl[di]
+                    if idx < 0 { continue }
+                    if self.fns[idx].generic { continue }
+                    let sig = self.fns[idx].sig
+                    let tparams = self.fns[idx].tparams
+                    self.enter_definition(tparams)
+                    self.body(f, sig, None, at)
+                    self.leave_generic()
+                }
+                parser.DeclKind.Impl(im) => {
+                    var ty = types.Ty.Unknown
+                    var found = false
+                    for i in self.impl_tys {
+                        if i.decl == di {
+                            ty = i.ty
+                            found = true
+                        }
+                    }
+                    if !found { continue }
+                    let key = self.key(ty)
+                    var suffix = ""
+                    for s in self.suffixes {
+                        if s.decl == di { suffix = s.suffix }
+                    }
+                    for m in im.decls {
+                        match m.kind {
+                            parser.DeclKind.Fn(f) => {
+                                let mi = self.method_index(key, "{f.name}{suffix}")
+                                if mi < 0 { continue }
+                                let method = self.methods[mi].m
+                                self.enter_definition(method.tparams)
+                                self.self_ty = Some(ty)
+                                self.body(f, method.sig, method.self_mode, Span(m.line, m.col))
+                                self.self_ty = None
+                                self.leave_generic()
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // The bodies a trait gives: checked here for any `Self` that
+                // implements the trait, and again for each type that uses them.
+                parser.DeclKind.Trait(t) => {
+                    var ti = -1
+                    match self.global(t.name) {
+                        Some(Global.Trait(k)) => {
+                            ti = k
+                        }
+                        _ => continue
+                    }
+                    let defaults = self.traits[ti].defaults
+                    for dflt in defaults {
+                        if dflt.method < 0 || dflt.method >= (t.methods.len as int) { continue }
+                        let md = t.methods[dflt.method]
+                        match md.kind {
+                            parser.DeclKind.Fn(f) => {
+                                var sig = types.Sig([], types.Ty.Unit)
+                                var self_mode: parser.Mode? = None
+                                var found = false
+                                for m in self.traits[ti].methods {
+                                    if m.name == dflt.name && !found {
+                                        sig = m.sig
+                                        self_mode = m.self_mode
+                                        found = true
+                                    }
+                                }
+                                if !found { continue }
+                                var own_args: [types.Ty] = []
+                                for n in self.traits[ti].tparams { own_args.push(types.Ty.Param(n)) }
+                                var tparams: [TParam] = []
+                                if let Some(ps) = self.type_params(t.generics, at) { tparams = ps }
+                                tparams.push(TParam("Self", [Bound(ti, own_args)]))
+                                for o in self.traits[ti].own_params {
+                                    if o.name == dflt.name {
+                                        for p in o.tparams { tparams.push(p) }
+                                        break
+                                    }
+                                }
+                                self.enter_definition(tparams)
+                                self.self_ty = Some(types.Ty.Param("Self"))
+                                self.body(f, sig, self_mode, Span(md.line, md.col))
+                                self.self_ty = None
+                                self.leave_generic()
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 6: the bodies of generic functions, once for each set of type arguments.
+    fn pass_instances(mut self) {
+        var k = 0
+        while k < (self.instances.len as int) {
+            if k >= 500 {
+                let at = self.cur
+                self.err(at, "more than 500 instances of generic functions: the recursion never settles on a type")
+                break
+            }
+            let target = self.instances[k].target
+            let targs = self.instances[k].targs
+            match target {
+                Target.Fn(fi) => {
+                    let di = self.decl_of_fn[fi]
+                    let d = self.decls[di]
+                    match d.kind {
+                        parser.DeclKind.Fn(f) => {
+                            self.module = self.module_of[di]
+                            self.inst = k + 1
+                            let tparams = self.fns[fi].tparams
+                            self.tenv = []
+                            for i in 0..tparams.len {
+                                if i < targs.len { types.define(mut self.tenv, tparams[i].name, targs[i]) }
+                            }
+                            self.activate(tparams)
+                            let signed = self.signature(f, Span(d.line, d.col))
+                            self.instances[k].sig = signed.sig
+                            self.body(f, signed.sig, None, Span(d.line, d.col))
+                        }
+                        _ => break
+                    }
+                }
+                Target.Method(t, n) => {
+                    let mi = self.method_index(t, n)
+                    if mi < 0 { break }
+                    let m = self.methods[mi].m
+                    var found = false
+                    var md = self.decls[m.at_decl]
+                    if let Some(x) = self.method_decl(m) {
+                        md = x
+                        found = true
+                    }
+                    if !found { break }
+                    match md.kind {
+                        parser.DeclKind.Fn(f) => {
+                            // A body of the trait sees the names of the module of the trait.
+                            var home = m.at_decl
+                            if let Some(dflt) = m.default { home = dflt.decl }
+                            self.module = self.module_of[home]
+                            self.inst = k + 1
+                            self.tenv = []
+                            for i in 0..m.tparams.len {
+                                if i < targs.len { types.define(mut self.tenv, m.tparams[i].name, targs[i]) }
+                            }
+                            // What the trait calls `T` is what the `impl` gave it.
+                            for b in m.trait_env {
+                                let t2 = types.subst(b.ty, self.tenv)
+                                types.define(mut self.tenv, b.name, t2)
+                            }
+                            let me = types.subst(m.self_ty, self.tenv)
+                            self.self_ty = Some(me)
+                            self.activate(m.tparams)
+                            // A body of the trait runs for the `impl` that took it.
+                            if let Some(b) = m.of_trait { self.active.push(Active(me, Bound(b.tr, subst_all(b.args, self.tenv)))) }
+                            let signed = self.signature(f, Span(md.line, md.col))
+                            self.instances[k].sig = signed.sig
+                            self.body(f, signed.sig, signed.self_mode, Span(md.line, md.col))
+                            self.self_ty = None
+                        }
+                        _ => break
+                    }
+                }
+            }
+            self.leave_generic()
+            k += 1
+        }
+    }
+}
+
+// Checks a loaded program: its declarations, then every body.
+pub fn check(p: load.Program) -> Checker {
+    var c = start(p, false)
+    c.pass_modules()
+    c.pass_names()
+    c.pass_fields()
+    c.pass_traits()
+    c.pass_signatures()
+    c.pass_consts()
+    c.pass_bodies()
+    c.pass_instances()
+    c
+}
+
+// ---- what was found about each expression, as text ----
+
+// Every expression of a program, each one before those inside it.
+struct Walk { ids: [int], lines: [int], cols: [int] }
+
+impl Walk {
+    fn pat(mut self, p: parser.Pattern) {
+        match p {
+            parser.Pattern.Literal(e) => self.expr(e)
+            parser.Pattern.Range(lo, hi, _) => {
+                self.expr(lo)
+                if let Some(h) = hi { self.expr(h) }
+            }
+            parser.Pattern.Ctor(_, args) => {
+                for a in args { self.pat(a) }
+            }
+            parser.Pattern.Tuple(args) => {
+                for a in args { self.pat(a) }
+            }
+            parser.Pattern.Slice(args) => {
+                for a in args { self.pat(a) }
+            }
+            parser.Pattern.Or(args) => {
+                for a in args { self.pat(a) }
+            }
+            parser.Pattern.Struct(_, fields, _) => {
+                for f in fields {
+                    if let Some(sub) = f.pat { self.pat(sub) }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn cond(mut self, c: parser.Cond) {
+        match c {
+            parser.Cond.Test(e) => self.expr(e)
+            parser.Cond.Bind(p, e) => {
+                self.pat(p)
+                self.expr(e)
+            }
+        }
+    }
+
+    fn block(mut self, b: parser.Block) {
+        for s in b.stmts {
+            match s {
+                parser.Stmt.Let(_, p, _, value) => {
+                    self.pat(p)
+                    if let Some(v) = value { self.expr(v) }
+                }
+                parser.Stmt.Assign(target, _, value) => {
+                    self.expr(target)
+                    self.expr(value)
+                }
+                parser.Stmt.Defer(e) => self.expr(e)
+                parser.Stmt.Do(e) => self.expr(e)
+                parser.Stmt.Item(_) => {}
+            }
+        }
+        if let Some(t) = b.tail { self.expr(t) }
+    }
+
+    fn expr(mut self, e: parser.Expr) {
+        self.ids.push(e.id)
+        self.lines.push(e.line)
+        self.cols.push(e.col)
+        match e.kind {
+            parser.Kind.Str(parts) => {
+                for p in parts {
+                    match p {
+                        parser.StrPart.Value(inner) => self.expr(inner)
+                        _ => {}
+                    }
+                }
+            }
+            parser.Kind.Tuple(items) => {
+                for i in items { self.expr(i) }
+            }
+            parser.Kind.Array(items) => {
+                for i in items { self.expr(i) }
+            }
+            parser.Kind.Repeat(a, b) => {
+                self.expr(a)
+                self.expr(b)
+            }
+            parser.Kind.Blk(b) => self.block(b)
+            parser.Kind.Loop(b) => self.block(b)
+            parser.Kind.Unsafe(b) => self.block(b)
+            parser.Kind.If(c, then, otherwise) => {
+                self.cond(c)
+                self.block(then)
+                if let Some(x) = otherwise { self.expr(x) }
+            }
+            parser.Kind.Match(scrutinee, arms) => {
+                self.expr(scrutinee)
+                for arm in arms {
+                    self.pat(arm.pat)
+                    if let Some(g) = arm.guard { self.expr(g) }
+                    self.expr(arm.body)
+                }
+            }
+            parser.Kind.For(p, iter, body) => {
+                self.pat(p)
+                self.expr(iter)
+                self.block(body)
+            }
+            parser.Kind.While(c, body) => {
+                self.cond(c)
+                self.block(body)
+            }
+            parser.Kind.Closure(_, _, _, body) => self.block(body)
+            parser.Kind.Scope(_, body) => self.block(body)
+            parser.Kind.With(bindings, body) => {
+                for b in bindings { self.expr(b.value) }
+                self.block(body)
+            }
+            parser.Kind.Comptime(x) => self.expr(x)
+            parser.Kind.Try(x) => self.expr(x)
+            parser.Kind.Return(x) => {
+                if let Some(v) = x { self.expr(v) }
+            }
+            parser.Kind.Break(x) => {
+                if let Some(v) = x { self.expr(v) }
+            }
+            parser.Kind.Unary(_, x) => self.expr(x)
+            parser.Kind.Cast(x, _) => self.expr(x)
+            parser.Kind.Field(x, _) => self.expr(x)
+            parser.Kind.Binary(_, lhs, rhs) => {
+                self.expr(lhs)
+                self.expr(rhs)
+            }
+            parser.Kind.Range(lo, hi, _) => {
+                if let Some(x) = lo { self.expr(x) }
+                if let Some(x) = hi { self.expr(x) }
+            }
+            parser.Kind.Call(callee, args) => {
+                self.expr(callee)
+                for a in args { self.expr(a.value) }
+            }
+            parser.Kind.Index(base, args) => {
+                self.expr(base)
+                for a in args { self.expr(a) }
+            }
+            parser.Kind.Catch(x, _, handler) => {
+                self.expr(x)
+                self.block(handler)
+            }
+            _ => {}
+        }
+    }
+
+    fn decl(mut self, d: parser.Decl) {
+        match d.kind {
+            parser.DeclKind.Fn(f) => {
+                for p in f.params {
+                    if let Some(e) = p.default { self.expr(e) }
+                }
+                for w in f.conds { self.expr(w) }
+                if let Some(b) = f.body { self.expr(b) }
+            }
+            parser.DeclKind.Struct(s) => {
+                for f in s.fields {
+                    if let Some(e) = f.default { self.expr(e) }
+                }
+            }
+            parser.DeclKind.Enum(en) => {
+                for v in en.variants {
+                    if let Some(e) = v.value { self.expr(e) }
+                }
+            }
+            parser.DeclKind.Trait(t) => {
+                for m in t.methods { self.decl(m) }
+            }
+            parser.DeclKind.Impl(i) => {
+                for m in i.decls { self.decl(m) }
+            }
+            parser.DeclKind.Const(_, _, value) => self.expr(value)
+            parser.DeclKind.Alias(_, _, _) => {}
+        }
+    }
+}
+
+fn res_text(r: Res) -> str {
+    match r {
+        Res.Extern(i) => "extern {i}"
+        Res.Local => "local"
+        Res.NoneValue => "none"
+        Res.Fn(i) => "fn {i}"
+        Res.Const(i) => "const {i}"
+        Res.Variant(i, v) => "variant {i}.{v}"
+        Res.Field(k) => "field {k}"
+        Res.Len => "len"
+        Res.SomeCtor => "some"
+        Res.StructCtor(i) => "struct {i}"
+        Res.Assoc(t, n) => "assoc {t}.{n}"
+        Res.Method(t, n) => "method {t}.{n}"
+        Res.Builtin(s) => "builtin {s}"
+        Res.Generic(k) => "generic {k}"
+        Res.Dyn(k, m) => "dyn {k} {m}"
+    }
+}
+
+// What the checker found out about each expression, as lines of text,
+// in the form `mou types` prints it.
+pub fn dump_types(c: Checker) -> [str] {
+    var out: [str] = []
+    var last = lexer.Error("", -1, -1)
+    for e in sorted_errors(c.errors) {
+        if e.line == last.line && e.col == last.col && e.msg == last.msg { continue }
+        out.push("error {e.line}:{e.col} {e.msg}")
+        last = e
+    }
+    out.push("checked {c.checked_fns} skipped_exprs {c.skipped_exprs}")
+    for s in c.skipped_decls { out.push("skipped {s}") }
+    for i in 0..c.consts.len {
+        let shown = match c.consts[i] {
+            Some(t) => types.plain(t)
+            None => "_"
+        }
+        out.push("const {i} {shown}")
+    }
+    for k in 0..c.instances.len {
+        let i = c.instances[k]
+        let target = match i.target {
+            Target.Fn(f) => "fn {f}"
+            Target.Method(t, n) => "method {t}.{n}"
+        }
+        out.push("instance {k} {target} [{types.texts(i.targs)}] <{i.shown}> {sig_text(i.sig)}")
+    }
+    var walk = Walk([], [], [])
+    for d in c.decls { walk.decl(d) }
+    // The place of each expression in that order, by its number.
+    var seq: [int] = []
+    for k in 0..c.total { seq.push(-1) }
+    for k in 0..walk.ids.len { seq[walk.ids[k]] = k as int }
+    var keys: [int] = []
+    var unseen = 0
+    var slots: [int] = []
+    for k in c.types.keys() { slots.push(k) }
+    for k in c.wants.keys() { slots.push(k) }
+    for k in c.res.keys() { slots.push(k) }
+    for d in c.dyns { slots.push(d.key) }
+    for k in c.ref_writes.keys() { slots.push(k) }
+    for k in slots {
+        let s = seq[k % c.total]
+        if s < 0 {
+            unseen += 1
+        } else {
+            keys.push((k / c.total) * c.total + s)
+        }
+    }
+    cmp.sort(mut keys)
+    var before = -1
+    for k in keys {
+        if k == before { continue }
+        before = k
+        let slot = k / c.total
+        let s = k % c.total
+        let key = slot * c.total + walk.ids[s]
+        let t = match c.types.get(key) {
+            Some(x) => types.plain(x)
+            None => "-"
+        }
+        let w = match c.wants.get(key) {
+            Some(x) => types.plain(x)
+            None => "-"
+        }
+        let r = match c.res.get(key) {
+            Some(x) => res_text(x)
+            None => "-"
+        }
+        var d = "-"
+        for entry in c.dyns {
+            if entry.key == key {
+                var items: [str] = []
+                for x in entry.table { items.push(res_text(x)) }
+                d = text.join(items, "; ")
+            }
+        }
+        out.push("e {slot} {s} {walk.lines[s]}:{walk.cols[s]} t={t} w={w} r={r} d={d} rw={c.ref_writes.has(key)}")
+    }
+    out.push("unseen {unseen}")
+    out
 }
 
 // ---- the declarations as text ----

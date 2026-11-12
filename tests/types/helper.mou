@@ -1,0 +1,11 @@
+pub struct Point { x: int, y: int }
+struct Hidden { v: int }
+pub fn visible(a: int) -> int { a }
+fn private(a: int) -> int { a }
+pub enum Shape { Dot, Circle(int), Rect(w: int, h: int) }
+impl Point {
+    pub fn sum(self) -> int { self.x + self.y }
+    fn secret(self) -> int { self.x }
+    pub fn origin() -> Point { Point(0, 0) }
+}
+pub let LIMIT: int = 10

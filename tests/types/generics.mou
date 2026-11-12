@@ -1,0 +1,104 @@
+import std.list
+import std.cmp
+
+trait Show { fn show(self) -> str }
+trait Make { fn make() -> Self
+    fn twice(self) -> Self { self } }
+trait Conv[T] { fn conv(self) -> T }
+trait Grow { fn grow(mut self) }
+trait Peek { fn first(mut self) -> ref mut int }
+
+struct Box[T] { item: T }
+struct Num { n: int }
+enum Tree[T] { Leaf, Node(T) }
+
+impl Show for Num { fn show(self) -> str { "n" } }
+impl Make for Num { fn make() -> Num { Num(0) } }
+impl Conv[str] for Num { fn conv(self) -> str { "n" } }
+impl Conv[int] for Num { fn conv(self) -> int { self.n } }
+impl Grow for Num { fn grow(mut self) { self.n += 1 } }
+impl Peek for Num { fn first(mut self) -> ref mut int { self.n } }
+impl[T] Box[T] {
+    fn get(self) -> T { self.item }
+    fn set(mut self, item: T) { self.item = item }
+    fn map[U](self, f: fn(T) -> U) -> Box[U] { Box(f(self.item)) }
+    fn new(item: T) -> Box[T] { Box(item) }
+}
+
+fn id[T](x: T) -> T { x }
+fn show_it[T: Show](x: T) -> str { x.show() }
+fn make_it[T: Make]() -> T { T.make() }
+fn bad_bound[T](x: T) -> str { x.show() }
+fn bad_assoc[T: Show]() -> T { T.make() }
+fn conv_it[T: Conv[U], U](x: T) -> U { x.conv() }
+fn pair[A, B](a: A, b: B) -> (A, B) { (a, b) }
+fn first_of[T](xs: [T]) -> T? { xs.get(0) }
+fn grow_it[T: Grow](x: T) { x.grow() }
+fn grow_ok[T: Grow](x: mut T) { x.grow() }
+fn by_ref(n: mut Num) -> ref mut int { n.n }
+fn by_ref_bad(n: Num) -> ref mut int { n.n }
+fn by_ref_none() -> ref int { 5 }
+fn by_ref_other(n: mut Num, m: mut Num) -> ref mut int { m.n }
+fn by_ref_ret(n: mut Num) -> ref mut int { return n.n }
+
+fn uses() -> int {
+    let a = id(1)
+    let b = id("s")
+    let c: str = id(1)
+    let d = show_it(Num(1))
+    let e = show_it(5)
+    let f = make_it()
+    let g: Num = make_it()
+    let h = id[int]("s")
+    let i = id[int, str](1)
+    let j = pair(1)
+    let k = Box(1)
+    let l = Box[str](1)
+    let m: Box[int] = Box("s")
+    let n = k.get()
+    let o = k.map(fn(x: int) -> str { "s" })
+    let p = k.nothing()
+    let q = Box.new(1)
+    let r = Box[int].new("s")
+    let s = Tree.Leaf
+    let t: Tree[int] = Tree.Leaf
+    let u = Tree.Node(1)
+    let v = Tree[str].Node(1)
+    let w = Num(1).conv()
+    let x: str = Num(1).conv()
+    let y: int = Num(1).conv()
+    let z: bool = Num(1).conv()
+    let aa = conv_it(Num(1))
+    let ab: str = conv_it(Num(1))
+    let ac = first_of([])
+    let ad = first_of([1, 2])
+    let ae = Num(1) as dyn Show
+    let af = 5 as dyn Show
+    let ag = ae as dyn Make
+    let ah = ae.show()
+    let ai = ae.nothing()
+    let aj = Num(1) as dyn Make
+    let ak = aj.make()
+    var num = Num(1)
+    let al = num as dyn Grow
+    al.grow()
+    var am = num as dyn Grow
+    am.grow()
+    by_ref(mut num) = 5
+    by_ref(mut num) += 1
+    let an = by_ref(mut num)
+    num.first() = 2
+    let lst = list.List.of([3, 1, 2])
+    let ao = lst.len()
+    let ap = lst.nothing()
+    let aq = list.List.new()
+    let ar: list.List[int] = list.List.new()
+    let at = cmp.max(1, "s")
+    let au = cmp.max(Num(1), Num(2))
+    grow_it(num)
+    grow_ok(num)
+    grow_ok(mut num)
+    1
+}
+
+fn main() { }

@@ -720,6 +720,13 @@ static inline kv *kfield(kv *v, int64_t k, bool write) {
     return &ITEMS(v->u.o)[k];
 }
 
+/* Takes the value out of a place for the time of a call, which puts it back. */
+static inline kv ktake(kv *v) {
+    kv out = *v;
+    *v = KUNIT;
+    return out;
+}
+
 /* Item `i` of an array of tagged values. */
 static inline kv *kitemp(kv *v, i128 i, bool write) {
     int64_t k = kat(v, i);

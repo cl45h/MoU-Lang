@@ -36,7 +36,8 @@ commands:
   lex      print the tokens in the form the lexer written in Mou prints them
   tree     print the syntax tree in the form the parser written in Mou prints it
   modules  print the program with all it imports, as the loader written in Mou does
-  decls    print what the declarations say, as the checker written in Mou does";
+  decls    print what the declarations say, as the checker written in Mou does
+  types    print what the checker finds out about each expression, in the same form";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -129,6 +130,10 @@ fn main() -> ExitCode {
         }
         "modules" => {
             print!("{}", load::dump(path, &src));
+            Ok(())
+        }
+        "types" => {
+            print!("{}", types_text(path, &src));
             Ok(())
         }
         "decls" => {
@@ -236,6 +241,15 @@ fn lower(file: &ast::File) -> Result<mir::Program, Vec<lexer::Error>> {
         Ok(program)
     } else {
         Err(errors)
+    }
+}
+
+/// What the checker finds out about each expression of a program, or why
+/// the program could not be loaded.
+fn types_text(path: &str, src: &str) -> String {
+    match load::load(path, src).1 {
+        Ok(file) => check::info_dump(&file),
+        Err(es) => es.iter().map(|e| format!("error {}:{} {}\n", e.span.line, e.span.col, e.msg)).collect(),
     }
 }
 
@@ -426,10 +440,10 @@ fn report(path: &str, src: &str, e: &lexer::Error) {
 mod selfhost {
     use crate::{check, comptime, interp, lexer, load, mir, own};
 
-    /// The lexer, the parser, the loader and the check of declarations
-    /// written in Mou give, for every file of the project, what the ones of
-    /// this compiler give. `tests/decls` holds programs with mistakes in
-    /// their declarations, which both must report in the same words.
+    /// The lexer, the parser, the loader and the checker written in Mou
+    /// give, for every file of the project, what the ones of this compiler
+    /// give. `tests/decls` and `tests/types` hold programs with mistakes,
+    /// which both must report in the same words.
     #[test]
     fn the_compiler_in_mou_agrees_with_this_one() {
         let root = env!("CARGO_MANIFEST_DIR");
@@ -441,7 +455,7 @@ mod selfhost {
         assert!(own::check(&program).is_empty());
         assert!(comptime::eval(&mut program).is_empty());
         let mut files = Vec::new();
-        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls"] {
+        for dir in ["compiler", "examples", "std", "tests/native", "tests/decls", "tests/types"] {
             for entry in std::fs::read_dir(format!("{root}/{dir}")).unwrap() {
                 let path = entry.unwrap().path();
                 if path.extension().is_some_and(|e| e == "mou") {
@@ -463,6 +477,7 @@ mod selfhost {
                 ("tree", crate::ast::dump(&crate::parser::parse_file(&text))),
                 ("modules", load::dump(&shown, &text)),
                 ("decls", crate::decls_text(&shown, &text)),
+                ("types", crate::types_text(&shown, &text)),
             ];
             for (stage, expected) in stages {
                 interp::ARGS.with(|a| *a.borrow_mut() = vec![stage.to_string(), shown.clone(), format!("{root}/std")]);

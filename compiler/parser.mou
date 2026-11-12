@@ -27,7 +27,9 @@ pub struct FnParam { mode: Mode, ty: Type }
 
 pub enum GenArg { OfType(Type), OfExpr(Expr) }
 
-pub struct Expr { kind: Kind, line: int, col: int }
+// `id` tells the expressions of a program apart: the checker files what
+// it finds out about each one under it.
+pub struct Expr { kind: Kind, line: int, col: int, id: int }
 
 pub enum StrPart { Text(str), Value(Expr) }
 
@@ -144,7 +146,8 @@ pub struct ImplDecl { generics: [GenParam], of_trait: Type?, ty: Type, decls: [D
 
 pub struct Import { origin: str?, path: str, alias: str?, decls: [Decl] }
 
-pub struct File { profile: str?, imports: [Import], decls: [Decl] }
+// `exprs` is the number the next expression would get.
+pub struct File { profile: str?, imports: [Import], decls: [Decl], exprs: int }
 
 // ---- the parser ----
 
@@ -152,7 +155,9 @@ let ASSIGN_OPS: [str] = ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<
 
 struct Ret { ret: Type?, by_ref: bool, err: Type? }
 
-struct Parser { toks: [lexer.Token], pos: int }
+struct Parser { toks: [lexer.Token], pos: int, next_id: int }
+
+struct Sub { e: Expr, next_id: int }
 
 fn has(list: [str], s: str) -> bool {
     for k in list {
@@ -160,8 +165,6 @@ fn has(list: [str], s: str) -> bool {
     }
     false
 }
-
-fn mk(kind: Kind, line: int, col: int) -> Expr { Expr(kind, line, col) }
 
 fn prec_of(p: str) -> int {
     if p == "||" { return 2 }
@@ -179,9 +182,9 @@ fn prec_of(p: str) -> int {
 
 // Parses the source of a value inserted in a string, which starts at a
 // position of the file.
-fn parse_expr_at(src: str, line: int, col: int) -> Expr ! lexer.Error {
+fn parse_expr_at(src: str, line: int, col: int, first_id: int) -> Sub ! lexer.Error {
     let toks = lexer.lex_at(src, line, col)?
-    var p = Parser(toks, 0)
+    var p = Parser(toks, 0, first_id)
     let _ = p.skip_nl()
     let e = p.expr()?
     let _ = p.skip_nl()
@@ -189,10 +192,16 @@ fn parse_expr_at(src: str, line: int, col: int) -> Expr ! lexer.Error {
         lexer.Tok.Eof => {}
         _ => return p.err("unexpected {p.describe()} after expression")
     }
-    e
+    Sub(e, p.next_id)
 }
 
 impl Parser {
+    fn mk(mut self, kind: Kind, line: int, col: int) -> Expr {
+        let id = self.next_id
+        self.next_id += 1
+        Expr(kind, line, col, id)
+    }
+
     // ---- token helpers ----
 
     fn tok_at(self, n: int) -> lexer.Tok {
@@ -383,7 +392,7 @@ impl Parser {
             decls.push(self.decl()?)
             self.expect_nl()?
         }
-        File(profile, imports, decls)
+        File(profile, imports, decls, self.next_id)
     }
 
     fn import_decl(mut self) -> Import ! lexer.Error {
@@ -440,7 +449,7 @@ impl Parser {
         }
         let public = self.eat_kw("pub")
         let k = self.peek_kw()
-        var kind = DeclKind.Const("", None, mk(Kind.Continue, line, col))
+        var kind = DeclKind.Const("", None, self.mk(Kind.Continue, line, col))
         if k == "fn" {
             kind = DeclKind.Fn(self.fn_decl()?)
         } else if k == "struct" {
@@ -574,7 +583,8 @@ impl Parser {
         if self.is_p("{{") {
             let line = self.line()
             let col = self.col()
-            body = Some(mk(Kind.Blk(self.block()?), line, col))
+            let made = self.block()?
+            body = Some(self.mk(Kind.Blk(made), line, col))
         } else {
             self.pos = save
             if self.eat_p("=") { body = Some(self.expr()?) }
@@ -860,7 +870,7 @@ impl Parser {
             var binding: str? = None
             if self.ident_at(0) { binding = Some(self.ident()?) }
             let handler = self.block()?
-            e = mk(Kind.Catch(e, binding, handler), e.line, e.col)
+            e = self.mk(Kind.Catch(e, binding, handler), e.line, e.col)
         }
         e
     }
@@ -877,11 +887,11 @@ impl Parser {
             if prec == 5 {
                 var hi: Expr? = None
                 if self.starts_expr() { hi = Some(self.binary(6)?) }
-                lhs = mk(Kind.Range(Some(lhs), hi, op == "..="), line, col)
+                lhs = self.mk(Kind.Range(Some(lhs), hi, op == "..="), line, col)
                 continue
             }
             let rhs = self.binary(prec + 1)?
-            lhs = mk(Kind.Binary(op, lhs, rhs), line, col)
+            lhs = self.mk(Kind.Binary(op, lhs, rhs), line, col)
             if prec == 4 && prec_of(self.peek_p()) == 4 {
                 return self.err("comparison operators cannot be chained; use `&&`")
             }
@@ -893,7 +903,7 @@ impl Parser {
         var e = self.unary()?
         while self.eat_kw("as") {
             let ty = self.ty_base()?
-            e = mk(Kind.Cast(e, ty), e.line, e.col)
+            e = self.mk(Kind.Cast(e, ty), e.line, e.col)
         }
         e
     }
@@ -905,7 +915,7 @@ impl Parser {
             let col = self.col()
             self.bump()
             let inner = self.unary()?
-            return mk(Kind.Unary(op, inner), line, col)
+            return self.mk(Kind.Unary(op, inner), line, col)
         }
         self.postfix()?
     }
@@ -928,10 +938,10 @@ impl Parser {
                     args.push(Arg(label, mode, self.expr()?))
                     if self.list_end(")")? { break }
                 }
-                e = mk(Kind.Call(e, args), line, col)
+                e = self.mk(Kind.Call(e, args), line, col)
             } else if self.eat_p("[") {
                 let args = self.exprs("]")?
-                e = mk(Kind.Index(e, args), line, col)
+                e = self.mk(Kind.Index(e, args), line, col)
             } else if self.eat_p(".") {
                 let name = match self.peek() {
                     lexer.Tok.Ident(s) => s
@@ -939,9 +949,9 @@ impl Parser {
                     _ => return self.err("expected field name, found {self.describe()}")
                 }
                 self.bump()
-                e = mk(Kind.Field(e, name), line, col)
+                e = self.mk(Kind.Field(e, name), line, col)
             } else if self.eat_p("?") {
-                e = mk(Kind.Try(e), line, col)
+                e = self.mk(Kind.Try(e), line, col)
             } else {
                 return e
             }
@@ -970,10 +980,11 @@ impl Parser {
             } else {
                 let bline = self.line()
                 let bcol = self.col()
-                els = Some(mk(Kind.Blk(self.block()?), bline, bcol))
+                let made = self.block()?
+                els = Some(self.mk(Kind.Blk(made), bline, bcol))
             }
         }
-        mk(Kind.If(c, then, els), line, col)
+        self.mk(Kind.If(c, then, els), line, col)
     }
 
     fn opt_operand(mut self) -> Expr? ! lexer.Error {
@@ -984,11 +995,11 @@ impl Parser {
     fn keyword(mut self, k: str, line: int, col: int) -> Expr ! lexer.Error {
         if k == "true" || k == "false" {
             self.bump()
-            return mk(Kind.Bool(k == "true"), line, col)
+            return self.mk(Kind.Bool(k == "true"), line, col)
         }
         if k == "self" || k == "Self" {
             self.bump()
-            return mk(Kind.Name(k), line, col)
+            return self.mk(Kind.Name(k), line, col)
         }
         if k == "if" { return self.if_expr()? }
         if k == "match" {
@@ -1005,50 +1016,58 @@ impl Parser {
                 arms.push(Arm(pat, guard, self.expr()?))
                 if self.list_end("}}")? { break }
             }
-            return mk(Kind.Match(scrutinee, arms), line, col)
+            return self.mk(Kind.Match(scrutinee, arms), line, col)
         }
         if k == "for" {
             self.bump()
             let pat = self.pattern()?
             self.expect_kw("in")?
             let iter = self.expr()?
-            return mk(Kind.For(pat, iter, self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.For(pat, iter, made), line, col)
         }
         if k == "while" {
             self.bump()
             let c = self.cond()?
-            return mk(Kind.While(c, self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.While(c, made), line, col)
         }
         if k == "loop" {
             self.bump()
-            return mk(Kind.Loop(self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.Loop(made), line, col)
         }
         if k == "fn" {
             self.bump()
             self.expect_p("(")?
             let params = self.params()?
             let r = self.ret()?
-            return mk(Kind.Closure(params, r.ret, r.err, self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.Closure(params, r.ret, r.err, made), line, col)
         }
         if k == "comptime" {
             self.bump()
             if self.is_p("{{") {
                 let bline = self.line()
                 let bcol = self.col()
-                let inner = mk(Kind.Blk(self.block()?), bline, bcol)
-                return mk(Kind.Comptime(inner), line, col)
+                let made = self.block()?
+                let inner = self.mk(Kind.Blk(made), bline, bcol)
+                return self.mk(Kind.Comptime(inner), line, col)
             }
             // All of the expression that follows: `comptime a + b`.
-            return mk(Kind.Comptime(self.expr()?), line, col)
+            let made = self.expr()?
+            return self.mk(Kind.Comptime(made), line, col)
         }
         if k == "unsafe" {
             self.bump()
-            return mk(Kind.Unsafe(self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.Unsafe(made), line, col)
         }
         if k == "scope" {
             self.bump()
             let name = self.ident()?
-            return mk(Kind.Scope(name, self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.Scope(name, made), line, col)
         }
         if k == "with" {
             self.bump()
@@ -1059,19 +1078,22 @@ impl Parser {
                 bindings.push(Binding(name, self.expr()?))
                 if !self.eat_p(",") { break }
             }
-            return mk(Kind.With(bindings, self.block()?), line, col)
+            let made = self.block()?
+            return self.mk(Kind.With(bindings, made), line, col)
         }
         if k == "return" {
             self.bump()
-            return mk(Kind.Return(self.opt_operand()?), line, col)
+            let made = self.opt_operand()?
+            return self.mk(Kind.Return(made), line, col)
         }
         if k == "break" {
             self.bump()
-            return mk(Kind.Break(self.opt_operand()?), line, col)
+            let made = self.opt_operand()?
+            return self.mk(Kind.Break(made), line, col)
         }
         if k == "continue" {
             self.bump()
-            return mk(Kind.Continue, line, col)
+            return self.mk(Kind.Continue, line, col)
         }
         return self.err("expected an expression, found {self.describe()}")
     }
@@ -1082,15 +1104,15 @@ impl Parser {
         match self.peek() {
             lexer.Tok.Int(s) => {
                 self.bump()
-                return mk(Kind.Int(s), line, col)
+                return self.mk(Kind.Int(s), line, col)
             }
             lexer.Tok.Float(s) => {
                 self.bump()
-                return mk(Kind.Float(s), line, col)
+                return self.mk(Kind.Float(s), line, col)
             }
             lexer.Tok.Char(c) => {
                 self.bump()
-                return mk(Kind.Char(c), line, col)
+                return self.mk(Kind.Char(c), line, col)
             }
             lexer.Tok.Str(parts) => {
                 self.bump()
@@ -1098,14 +1120,18 @@ impl Parser {
                 for part in parts {
                     match part {
                         lexer.Part.Lit(s) => out.push(StrPart.Text(s))
-                        lexer.Part.Expr(src, eline, ecol) => out.push(StrPart.Value(parse_expr_at(src, eline, ecol)?))
+                        lexer.Part.Expr(src, eline, ecol) => {
+                            let sub = parse_expr_at(src, eline, ecol, self.next_id)?
+                            self.next_id = sub.next_id
+                            out.push(StrPart.Value(sub.e))
+                        }
                     }
                 }
-                return mk(Kind.Str(out), line, col)
+                return self.mk(Kind.Str(out), line, col)
             }
             lexer.Tok.Ident(s) => {
                 self.bump()
-                return mk(Kind.Name(s), line, col)
+                return self.mk(Kind.Name(s), line, col)
             }
             lexer.Tok.Kw(k) => return self.keyword(k, line, col)?
             _ => {}
@@ -1125,16 +1151,16 @@ impl Parser {
                 }
             }
             if items.len == 1 && !trailing_comma { return items[0] }
-            return mk(Kind.Tuple(items), line, col)
+            return self.mk(Kind.Tuple(items), line, col)
         }
         if p == "[" {
             self.bump()
-            if self.eat_p("]") { return mk(Kind.Array([]), line, col) }
+            if self.eat_p("]") { return self.mk(Kind.Array([]), line, col) }
             let first = self.expr()?
             if self.eat_p(";") {
                 let len = self.expr()?
                 self.expect_p("]")?
-                return mk(Kind.Repeat(first, len), line, col)
+                return self.mk(Kind.Repeat(first, len), line, col)
             }
             var items: [Expr] = []
             items.push(first)
@@ -1143,14 +1169,17 @@ impl Parser {
             } else {
                 self.expect_p("]")?
             }
-            return mk(Kind.Array(items), line, col)
+            return self.mk(Kind.Array(items), line, col)
         }
-        if p == "{{" { return mk(Kind.Blk(self.block()?), line, col) }
+        if p == "{{" {
+            let made = self.block()?
+            return self.mk(Kind.Blk(made), line, col)
+        }
         if p == ".." || p == "..=" {
             self.bump()
             var hi: Expr? = None
             if self.starts_expr() { hi = Some(self.binary(6)?) }
-            return mk(Kind.Range(None, hi, p == "..="), line, col)
+            return self.mk(Kind.Range(None, hi, p == "..="), line, col)
         }
         return self.err("expected an expression, found {self.describe()}")
     }
@@ -1181,22 +1210,22 @@ impl Parser {
         let col = self.col()
         if self.eat_p("-") {
             let inner = self.pattern_literal()?
-            return mk(Kind.Unary("-", inner), line, col)
+            return self.mk(Kind.Unary("-", inner), line, col)
         }
         let t = self.peek()
         self.bump()
         match t {
-            lexer.Tok.Int(s) => return mk(Kind.Int(s), line, col)
-            lexer.Tok.Float(s) => return mk(Kind.Float(s), line, col)
-            lexer.Tok.Char(c) => return mk(Kind.Char(c), line, col)
+            lexer.Tok.Int(s) => return self.mk(Kind.Int(s), line, col)
+            lexer.Tok.Float(s) => return self.mk(Kind.Float(s), line, col)
+            lexer.Tok.Char(c) => return self.mk(Kind.Char(c), line, col)
             lexer.Tok.Kw(k) => {
-                if k == "true" { return mk(Kind.Bool(true), line, col) }
-                if k == "false" { return mk(Kind.Bool(false), line, col) }
+                if k == "true" { return self.mk(Kind.Bool(true), line, col) }
+                if k == "false" { return self.mk(Kind.Bool(false), line, col) }
             }
             lexer.Tok.Str(parts) => {
                 if parts.len == 1 {
                     match parts[0] {
-                        lexer.Part.Lit(s) => return mk(Kind.Str([StrPart.Text(s)]), line, col)
+                        lexer.Part.Lit(s) => return self.mk(Kind.Str([StrPart.Text(s)]), line, col)
                         _ => {}
                     }
                 }
@@ -1291,9 +1320,12 @@ impl Parser {
 pub fn parse(src: str) -> File ! lexer.Error { parse_at(src, 1)? }
 
 // Parses a file whose first line has the given number.
-pub fn parse_at(src: str, line: int) -> File ! lexer.Error {
+pub fn parse_at(src: str, line: int) -> File ! lexer.Error { parse_from(src, line, 0)? }
+
+// The same, numbering the expressions from `first_id`.
+pub fn parse_from(src: str, line: int, first_id: int) -> File ! lexer.Error {
     let toks = lexer.lex_at(src, line, 1)?
-    var p = Parser(toks, 0)
+    var p = Parser(toks, 0, first_id)
     p.file()?
 }
 
@@ -1385,7 +1417,7 @@ fn params_text(ps: [Param]) -> str {
     seq(out)
 }
 
-fn ty_text(t: Type) -> str {
+pub fn ty_text(t: Type) -> str {
     match t {
         Type.Path(path, args) => {
             var out: [str] = []

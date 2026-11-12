@@ -1,0 +1,180 @@
+import helper
+import std.io
+
+struct Pair { a: int, b: str }
+enum Color { Red, Green, Blue(int) }
+let BIG: u8 = 300
+let LATE: int = EARLY + 1
+let EARLY: int = 2
+
+fn basics() -> int {
+    let a = 1 + "x"
+    let b: str = 5
+    let c = undefined_name
+    let d = Pair
+    let e = helper
+    let f = -true
+    let g = !3
+    let h = 1 < "a"
+    let i = true && 1
+    let j = [1, "a", 2.0]
+    let k = if true { 1 } else { "no" }
+    let l: u8 = 256
+    let m: i8 = -129
+    let n = 99999999999999999999999999999999999999999999
+    let o = 0x
+    let p = 1 as str
+    let q = "s" as int
+    let r = 'c' as int
+    let s = 1.5 as int
+    let t = (1, 2).5
+    let u = (1, 2).0
+    let v = a.nothing
+    let w = "abc"[0]
+    let x = "abc"[0..1]
+    let y = [1, 2][true]
+    let z = 5[0]
+    a = 2
+    BIG = 3
+    1 + 1 = 2
+    return "wrong"
+}
+
+fn control(xs: [int]) -> int {
+    break
+    continue
+    for x in 5 { }
+    for (a, b) in xs { }
+    for Some(v) in xs { }
+    while 1 { }
+    let v = loop { break 1
+        break "two" }
+    while true { break 3 }
+    let w = match xs.len { 0 => 1
+        1 => "one" }
+    let col = Color.Red
+    match col { Color.Red => 1 }
+    match col { Color.Red => 1
+        Color.Purple => 2
+        Color.Blue(a, b) => 3
+        _ => 4 }
+    match true { true => 1 }
+    match Some(1) { Some(x) => x }
+    match (1, 2) { (a, b, c) => 1
+        _ => 2 }
+    match col { Pair(a, b) => 1
+        _ => 2 }
+    let Some(q) = Some(1)
+    let (m, n) = 5
+    let Pair { a, zz } = Pair(1, "x")
+    let Pair { a: first } = Pair(1, "x")
+    match 5 { 1 | 2 => 0
+        x | 3 => 1
+        "s" => 2
+        _ => 3 }
+    match xs { [a, b] => 1
+        _ => 2 }
+    match 5 { [a] => 1
+        _ => 2 }
+    if let Some(z) = 5 { }
+    let none: int = None
+    let opt: int? = None
+    let got = opt?
+    let res = io.read_file("x")?
+    let caught = 5 catch e { 1 }
+    let caught2 = io.read_file("x") catch e { 5 }
+    io.print("ignored")
+    1
+}
+
+fn calls(p: mut Pair, o: own Pair, r: Pair) -> int {
+    basics(1)
+    control()
+    control(xs: [1], extra: 2)
+    control(wrong: [1])
+    control("s")
+    let f = 5
+    f(1)
+    Pair(1)
+    Pair(1, 2)
+    Pair(b: 1, a: "s")
+    Color.Blue
+    Color.Red(1)
+    Color.Nope
+    Color.Blue("s")
+    helper.private(1)
+    helper.missing(1)
+    helper.visible("s")
+    helper.Hidden(1)
+    let pt = helper.Point(1, 2)
+    pt.sum(1)
+    pt.secret()
+    pt.nothing()
+    helper.Point.origin(1)
+    helper.Point.sum()
+    pt.origin()
+    takes_mut(p)
+    takes_mut(mut r)
+    takes_mut(mut Pair(1, "s"))
+    takes_let(mut p)
+    takes_let(own o)
+    takes_own(own r)
+    takes_own(own p.a)
+    takes_two(mut p, mut p)
+    takes_two(mut p, p)
+    r.a = 1
+    p.a = "s"
+    p.b += 1
+    xs_push()
+    Some(1, 2)
+    Some()
+    panic(5)
+    assert(1)
+    assert(true, 2)
+    unsafe { 1 }
+    with a = 1 { 2 }
+    1
+}
+
+fn takes_mut(p: mut Pair) { }
+fn takes_let(p: Pair) { }
+fn takes_own(p: own Pair) { }
+fn takes_two(a: mut Pair, b: Pair) { }
+fn xs_push() {
+    let xs = [1, 2]
+    xs.push(3)
+    var ys = []
+    ys.push(1)
+    var zs: [int] = []
+    zs.push("s")
+    zs.pop(1)
+    let g = zs.get("x")
+    let arr: [int; 3] = [1, 2, 3]
+    for z in zs { zs.push(z) }
+    let cl = fn(a: int) -> int { zs.push(a)
+        a }
+    let cl2 = fn(a) { a }
+    var und = None
+    var und2 = []
+    return 5
+}
+
+fn fails() -> int ! str {
+    let a = io.read_file("x")?
+    if a == "" { return "empty" }
+    return Error("bad")
+}
+
+fn no_fail() -> int {
+    let a = fails()?
+    fails()
+    a
+}
+
+fn opt() -> int? {
+    let a = fails()?
+    let b = Some(1)?
+    None
+}
+
+fn main() { }

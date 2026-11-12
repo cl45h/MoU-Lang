@@ -28,6 +28,7 @@ struct Loader {
     modules: [Module]
     merged: parser.File
     errors: [lexer.Error]
+    next_id: int
 }
 
 fn has(list: [str], s: str) -> bool {
@@ -66,10 +67,11 @@ impl Loader {
         self.names.push(name)
         self.modules.push(Module(name, path, 0, 0, [], None, false))
         let origin = (id << FILE_SHIFT) + 1
-        let file = parser.parse_at(src, origin) catch e {
+        let file = parser.parse_from(src, origin, self.next_id) catch e {
             self.errors.push(e)
             return id
         }
+        self.next_id = file.exprs
         var imports: [ModImport] = []
         var kept: [parser.Import] = []
         for imp in file.imports {
@@ -143,8 +145,9 @@ impl Loader {
 // Loads a program: the file at `path`, whose text is `src`, and all it
 // imports. The standard library is read from `std_dir`.
 pub fn load(path: str, src: str, std_dir: str) -> Program {
-    var ld = Loader(dirname(path), std_dir, [], [], parser.File(None, [], []), [])
+    var ld = Loader(dirname(path), std_dir, [], [], parser.File(None, [], [], 0), [], 0)
     let _ = ld.module("", path, src)
+    ld.merged.exprs = ld.next_id
     var modules: [Module] = []
     for m in ld.modules {
         if m.loaded { modules.push(m) }
