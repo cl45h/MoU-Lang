@@ -37,8 +37,16 @@ fn main() ! io.Error {
 
 ## Qué le falta
 
-- Rendimiento parejo con C: hoy iguala en bucles y cálculo numérico, pero es varias veces más lento en recursión y en arrays de structs.
-- Referencias guardadas en structs, concurrencia, y punteros y structs en las llamadas a C.
+El núcleo del lenguaje está completo y el compilador se compila a sí mismo. Lo que sigue está diseñado en [DESIGN.md](DESIGN.md) pero no hecho; cada punto es un trabajo grande por sí solo:
+
+- Rendimiento parejo con C: hoy iguala en bucles y cálculo numérico, pero es varias veces más lento donde hay structs y enums, porque todavía no tienen layout propio.
+- Referencias guardadas en structs y regiones explícitas.
+- Concurrencia.
+- El contexto (`with alloc = arena`) y los efectos en los tipos de función.
+- Parámetros `comptime`, tipos como valores y reflexión.
+- Punteros, strings y structs en las llamadas a C, y leer los headers en vez de declarar las funciones a mano.
+- Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
+- Declaraciones dentro de un bloque y los bloques `scope` y `with`: se leen, pero el compilador avisa que no los soporta.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).
 

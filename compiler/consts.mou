@@ -7,9 +7,9 @@
 // twice gives the same program, and it has a limit of steps. A panic
 // becomes a mistake of the compilation.
 //
-// A constant that works with `f32`, or that cuts a number with a
-// fraction to a whole one, is left to be worked out when the program
-// starts: this file does not do that yet exactly as the compiler in Rust does.
+// A constant that works with `f32` is left to be worked out when the
+// program starts: this file does not do that yet exactly as the compiler
+// in Rust does.
 
 import std.raw
 import std.text
@@ -713,9 +713,15 @@ fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir
                     if b { return mir.Value.Int(1) }
                     mir.Value.Int(0)
                 }
-                // A number with a fraction cut to a whole one is left for
-                // when the program runs.
-                mir.Value.Float(_) => return quit()
+                mir.Value.Float(f) => {
+                    let x = float_of(f)?
+                    // Far outside every kind of whole number.
+                    if !(x > -1.7e38 && x < 1.7e38) { return panic_of("`as`: the value {f} does not fit in `{kind}`") }
+                    let i = x as i128
+                    let t = i as f64
+                    if t >= (range.lo as f64) && t <= (range.hi as f64) && range.lo <= i && i <= range.hi { return mir.Value.Int(i) }
+                    return panic_of("`as`: the value {f} does not fit in `{kind}`")
+                }
                 _ => return internal("a cast of a value that is not a number")
             }
         }

@@ -1,0 +1,3 @@
+fn big() -> f64 { 1e30 }
+let A: int = big() as int
+fn main() { }

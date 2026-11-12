@@ -10,4 +10,7 @@ let TINY: f64 = 0.000000000000000000001234567890123456789
 let HALF: f64? = text.parse_float("0.5")
 let Z: char = 90 as char
 let SUM: f64 = PI + 1.0
+let CUT: int = (PI * 100.0) as int
+let NEG: i8 = -7.9 as i8
+let BACK: f64 = CUT as f64 / 4.0
 fn main() -> int { (ABC.len as int) + (Z as int) }
