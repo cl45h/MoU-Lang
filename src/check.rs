@@ -4909,7 +4909,7 @@ mod tests {
         bad(&f("unsafe { m.sqrt(x, x) }"), "expected 1 arguments, found 2");
         bad(&f("unsafe { m.sqrt(true) }"), "expected `f64`");
         bad("import c \"math.h\" as m { fn sqrt(x: f64) -> f64 }\nfn f() -> f64 { unsafe { m.sqrt(1.0) } }", "`unsafe` is only allowed in a module that starts with `@profile(system)`");
-        bad("import c \"s.h\" as s { fn len(t: str) -> usize }", "a C function can only take and return numbers");
+        bad("import c \"s.h\" as s { fn len(t: [int]) -> usize }", "a C function can only take and return numbers");
         bad("import c \"s.h\" as s { fn one() -> int { 1 } }", "is a C function: it is declared with its parameters and its result");
     }
 
