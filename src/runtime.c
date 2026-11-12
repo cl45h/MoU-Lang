@@ -1834,7 +1834,90 @@ static kv ktask_wait(kv task) {
     krelease(task);
     return r;
 }
+#else
+/* A program that starts no tasks has none to wait for. */
+static kv ktask_open(void) { return kint(0); }
+static kv ktask_close(kv mark) { (void)mark; return KUNIT; }
+static kv ktask_wait(kv task) { return task; }
 #endif
+
+/* ---- channels ----
+ *
+ * A channel is a block: how many values it holds at most, how many it
+ * holds now, where the first of them is, whether it is closed, and then
+ * the values, in a ring. The lock of the tasks covers every channel. A
+ * program that starts no tasks has nobody to wait for. */
+#ifdef KTHREADS
+static pthread_cond_t kchan_moved = PTHREAD_COND_INITIALIZER;
+#define KCHAN_LOCK() pthread_mutex_lock(&ktask_lock)
+#define KCHAN_UNLOCK() pthread_mutex_unlock(&ktask_lock)
+#define KCHAN_WAIT(what) pthread_cond_wait(&kchan_moved, &ktask_lock)
+#define KCHAN_WAKE() pthread_cond_broadcast(&kchan_moved)
+#else
+#define KCHAN_LOCK() ((void)0)
+#define KCHAN_UNLOCK() ((void)0)
+#define KCHAN_WAIT(what) kpanic(what " would wait forever: this program starts no tasks")
+#define KCHAN_WAKE() ((void)0)
+#endif
+enum { KCHAN_CAP, KCHAN_LEN, KCHAN_HEAD, KCHAN_CLOSED, KCHAN_ITEMS };
+
+static kv kchan_new(kv cap) {
+    if (cap.u.i < 1) kpanic("a channel holds at least one value");
+    if (cap.u.i > ((i128)1 << 24)) kpanic("a channel cannot hold that many values");
+    int64_t n = (int64_t)cap.u.i;
+    kv v = kmk(T_TUPLE);
+    v.u.o = kalloc((size_t)(KCHAN_ITEMS + n) * sizeof(kv), KCHAN_ITEMS + n);
+    kv *it = ITEMS(v.u.o);
+    it[KCHAN_CAP] = kint(n);
+    it[KCHAN_LEN] = it[KCHAN_HEAD] = it[KCHAN_CLOSED] = kint(0);
+    for (int64_t i = 0; i < n; i++) it[KCHAN_ITEMS + i] = KUNIT;
+    return v;
+}
+
+static kv kchan_send(kv chan, kv value) {
+    kv *it = ITEMS(chan.u.o);
+    KCHAN_LOCK();
+    while (it[KCHAN_LEN].u.i == it[KCHAN_CAP].u.i && it[KCHAN_CLOSED].u.i == 0) KCHAN_WAIT("`send`");
+    if (it[KCHAN_CLOSED].u.i != 0) {
+        KCHAN_UNLOCK();
+        kpanic("`send` on a closed channel");
+    }
+    int64_t cap = (int64_t)it[KCHAN_CAP].u.i;
+    it[KCHAN_ITEMS + (int64_t)(it[KCHAN_HEAD].u.i + it[KCHAN_LEN].u.i) % cap] = value;
+    it[KCHAN_LEN].u.i++;
+    KCHAN_WAKE();
+    KCHAN_UNLOCK();
+    krelease(chan);
+    return KUNIT;
+}
+
+static kv kchan_recv(kv chan) {
+    kv *it = ITEMS(chan.u.o);
+    KCHAN_LOCK();
+    while (it[KCHAN_LEN].u.i == 0 && it[KCHAN_CLOSED].u.i == 0) KCHAN_WAIT("`recv`");
+    bool got = it[KCHAN_LEN].u.i > 0;
+    kv value = KUNIT;
+    if (got) {
+        int64_t head = (int64_t)it[KCHAN_HEAD].u.i;
+        value = it[KCHAN_ITEMS + head];
+        it[KCHAN_ITEMS + head] = KUNIT;
+        it[KCHAN_HEAD].u.i = (head + 1) % (int64_t)it[KCHAN_CAP].u.i;
+        it[KCHAN_LEN].u.i--;
+        KCHAN_WAKE();
+    }
+    KCHAN_UNLOCK();
+    krelease(chan);
+    return got ? kbox(T_SOME, value) : KNONE;
+}
+
+static kv kchan_close(kv chan) {
+    KCHAN_LOCK();
+    ITEMS(chan.u.o)[KCHAN_CLOSED].u.i = 1;
+    KCHAN_WAKE();
+    KCHAN_UNLOCK();
+    krelease(chan);
+    return KUNIT;
+}
 
 /* Calls a function value. Takes ownership of `f`; the callee leaves the
  * final values of its parameters in `args`. */

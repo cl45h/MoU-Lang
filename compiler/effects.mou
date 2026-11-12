@@ -1332,6 +1332,20 @@ impl Walk {
                         if name == "task.wait" { notes.push(Note(BLOCK, "`wait` waits for a task")) }
                         if name == "task.close" { notes.push(Note(BLOCK, "a `scope` waits for its tasks where it ends")) }
                         if name == "io.read_line" { notes.push(Note(BLOCK, "`io.read_line` waits for input")) }
+                        if name == "chan.new" {
+                            notes.push(Note(ALLOC, "a channel is created on the heap"))
+                            var cap = top_range()
+                            if args.len > 0 { cap = st.val(args[0]).iv }
+                            if !inside(cap, Range(1, 16777216)) { notes.push(Note(PANIC, "this capacity is not proved to be between 1 and 16777216")) }
+                        }
+                        if name == "chan.send" {
+                            notes.push(Note(BLOCK, "`send` waits while the channel is full"))
+                            notes.push(Note(PANIC, "`send` panics on a closed channel"))
+                        }
+                        if name == "chan.recv" {
+                            notes.push(Note(BLOCK, "`recv` waits while the channel is empty"))
+                            notes.push(Note(ALLOC, "`recv` creates its result on the heap"))
+                        }
                         if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
                         if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
                             let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }

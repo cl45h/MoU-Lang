@@ -905,6 +905,21 @@ impl Walk<'_> {
                             "task.wait" => notes.push((BLOCK, "`wait` waits for a task".into())),
                             "task.close" => notes.push((BLOCK, "a `scope` waits for its tasks where it ends".into())),
                             "io.read_line" => notes.push((BLOCK, "`io.read_line` waits for input".into())),
+                            "chan.new" => {
+                                notes.push((ALLOC, "a channel is created on the heap".into()));
+                                let iv = args.first().map_or(TOP, |a| st.val(a).iv);
+                                if !inside(iv, (1, 1 << 24)) {
+                                    notes.push((PANIC, "this capacity is not proved to be between 1 and 16777216".into()));
+                                }
+                            }
+                            "chan.send" => {
+                                notes.push((BLOCK, "`send` waits while the channel is full".into()));
+                                notes.push((PANIC, "`send` panics on a closed channel".into()));
+                            }
+                            "chan.recv" => {
+                                notes.push((BLOCK, "`recv` waits while the channel is empty".into()));
+                                notes.push((ALLOC, "`recv` creates its result on the heap".into()));
+                            }
                             _ => {}
                         }
                         if name.starts_with("io.") {

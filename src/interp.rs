@@ -60,6 +60,50 @@ thread_local! {
     pub static ARGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// The channels of the program being run: for each, the values it
+    /// holds and whether it is closed. A channel is its number here.
+    static CHANS: std::cell::RefCell<Vec<(std::collections::VecDeque<Value>, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// What a channel does. Here a task runs whole where it is started, so a
+/// channel holds whatever is sent and nothing can wait.
+fn channel(name: &str, args: &[Value]) -> Result<Value, String> {
+    if FUEL.get() != u64::MAX {
+        return Err("a channel cannot be used while the program is compiled".into());
+    }
+    if name == "chan.new" {
+        return match args.first() {
+            Some(Value::Int(n)) if *n < 1 => Err("a channel holds at least one value".into()),
+            Some(Value::Int(n)) if *n > 1 << 24 => Err("a channel cannot hold that many values".into()),
+            _ => CHANS.with_borrow_mut(|cs| {
+                cs.push(Default::default());
+                Ok(Value::Int(cs.len() as i128 - 1))
+            }),
+        };
+    }
+    let Some(Value::Int(c)) = args.first() else { return Err(internal("a channel that is not one")) };
+    CHANS.with_borrow_mut(|cs| {
+        let Some((items, closed)) = cs.get_mut(*c as usize) else { return Err(internal("a channel that does not exist")) };
+        match name {
+            "chan.send" if *closed => Err("`send` on a closed channel".into()),
+            "chan.send" => {
+                items.push_back(args.get(1).cloned().unwrap_or(Value::Unit));
+                Ok(Value::Unit)
+            }
+            "chan.recv" => match items.pop_front() {
+                Some(v) => Ok(Value::Some(Box::new(v))),
+                None if *closed => Ok(Value::None),
+                None => Err("`recv` would wait forever: with `mou run` a task runs whole where it is started, so nobody is left to send; build the program to run its tasks at once".into()),
+            },
+            _ => {
+                *closed = true;
+                Ok(Value::Unit)
+            }
+        }
+    })
+}
+
 /// The hash of a text: FNV-1a, 64 bits.
 pub fn hash(text: &str) -> i64 {
     let mut h: u64 = 0xcbf29ce484222325;
@@ -93,6 +137,7 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         Err(e) => Value::Err(Box::new(Value::Str(e.to_string().into()))),
     };
     Ok(match name {
+        _ if name.starts_with("chan.") => channel(name, args)?,
         "task.open" => Value::Int(0),
         "task.close" => Value::Unit,
         "task.wait" => match args.first() {

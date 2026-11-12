@@ -471,7 +471,32 @@ fn both(xs: [int]) -> int {
 
 Medido en `tests/native/tasks.mou` y con cuatro tareas de cálculo en una máquina de 32 hilos: 0,63 s en serie, 0,17 s con tareas. Verificado con los sanitizers de hilos y de memoria.
 
-Faltan: canales, exclusión mutua para estado compartido que cambia, cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
+Faltan: exclusión mutua para estado compartido que cambia, cancelar una tarea, un límite a la cantidad de hilos (hoy es un hilo por tarea) y la entrada y salida sin bloquear.
+
+### Canales: qué hay
+
+```mou
+fn worker(jobs: Chan[int], done: Chan[int]) {
+    while true {
+        match jobs.recv() {
+            Some(x) => { done.send(x * 2) }
+            None => { break }
+        }
+    }
+}
+```
+
+- `Chan[T](n)` crea un canal que guarda hasta `n` valores de tipo `T` (entre 1 y 16.777.216). Es un valor común: se pasa a funciones, se guarda en structs y lo leen las tareas que lo capturan. Todas las copias son el mismo canal.
+- `c.send(v)` deja un valor; espera mientras el canal está lleno. Sobre un canal cerrado es un panic.
+- `c.recv()` da `T?`: el valor más viejo, o `None` cuando el canal está cerrado y vacío. Espera mientras está vacío y abierto.
+- `c.close()` lo cierra: lo que ya tiene se sigue recibiendo.
+- Efectos: `send` y `recv` cuentan como esperar (`@noblock` los rechaza), crear el canal aloca y `send` puede dar panic.
+- En un programa compilado que no lanza tareas, un `send` o un `recv` que tendría que esperar es un panic, porque nadie más puede mover el canal.
+- Con `mou run` y `mou test` una tarea corre entera donde se lanza. Ahí un canal guarda todo lo que se le manda sin esperar, y un `recv` sobre un canal vacío y abierto es un panic que lo explica. Un programa donde el que manda arranca antes que el que recibe da lo mismo de las dos formas; uno donde los que reciben arrancan primero hay que compilarlo.
+- Un canal no se puede usar al calcular una constante.
+- Un valor que nadie recibe se libera con el canal. Si un `scope` espera a una tarea que quedó en `recv` sobre un canal que nadie cierra, el programa no termina: cerrar el canal es parte del protocolo.
+
+Verificado con cuatro tareas que reciben de un canal y devuelven por otro, bajo los sanitizers de hilos y de memoria.
 
 ### Facilidad de uso: lo que el compilador deduce
 

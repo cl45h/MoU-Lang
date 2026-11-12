@@ -563,6 +563,7 @@ impl Checker {
             types.Ty.Array(x) => "[{self.show(x)}; _]"
             types.Ty.Range(x) => "range of {self.show(x)}"
             types.Ty.Task(x) => "Task[{self.show(x)}]"
+            types.Ty.Chan(x) => "Chan[{self.show(x)}]"
             types.Ty.Optional(x) => {
                 if is_never(x) { return "None" }
                 "{self.show(x)}?"
@@ -886,6 +887,8 @@ impl Checker {
             _ => {
                 // `Task[T]` is what `spawn` gives, unless the program declares its own.
                 if name == "Task" && args.len == 1 { return types.Ty.Task(args[0]) }
+                // `Chan[T]` is a channel of the language, on the same terms.
+                if name == "Chan" && args.len == 1 { return types.Ty.Chan(args[0]) }
                 self.err(at, "unknown type `{name}`")
                 return types.Ty.Unknown
             }
@@ -4742,6 +4745,13 @@ fn overlap(a: Access, b: Access) -> bool {
 
 // ---- calls ----
 
+fn is_path(e: parser.Expr) -> bool {
+    match e.kind {
+        parser.Kind.Name(_) => true
+        _ => false
+    }
+}
+
 fn param(name: str, ty: types.Ty) -> types.ParamSig { types.ParamSig(name, parser.Mode.Let, ty, false) }
 
 fn fails_io(ty: types.Ty) -> types.Ty { types.Ty.Result(ty, types.Ty.Builtin("io.Error")) }
@@ -4874,6 +4884,14 @@ impl Checker {
                                         _ => {}
                                     }
                                 }
+                            }
+                        }
+                        None => {
+                            // `Chan[T](n)`: a channel that holds up to `n` values.
+                            if g.name == "Chan" && targs.len == 1 && is_path(base) {
+                                let item = self.type_of_expr(targs[0])
+                                self.set_res(e, Res.Builtin("chan.new"))
+                                return self.apply(types.Sig([param("capacity", types.Ty.Int("usize"))], types.Ty.Chan(item)), args, at)
                             }
                         }
                         _ => {}
@@ -5082,6 +5100,23 @@ impl Checker {
                 if name == "wait" {
                     self.set_res(e, Res.Builtin("task.wait"))
                     return self.apply(types.Sig([], t), args, at)
+                }
+                self.args_unchecked(args)
+                self.err(at, "type `{self.show(bt)}` has no method `{name}`")
+                types.Ty.Unknown
+            }
+            types.Ty.Chan(t) => {
+                if name == "send" {
+                    self.set_res(e, Res.Builtin("chan.send"))
+                    return self.apply(types.Sig([param("value", t)], types.Ty.Unit), args, at)
+                }
+                if name == "recv" {
+                    self.set_res(e, Res.Builtin("chan.recv"))
+                    return self.apply(types.Sig([], types.Ty.Optional(t)), args, at)
+                }
+                if name == "close" {
+                    self.set_res(e, Res.Builtin("chan.close"))
+                    return self.apply(types.Sig([], types.Ty.Unit), args, at)
                 }
                 self.args_unchecked(args)
                 self.err(at, "type `{self.show(bt)}` has no method `{name}`")

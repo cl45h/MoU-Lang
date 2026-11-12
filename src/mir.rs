@@ -2516,6 +2516,12 @@ impl<'a> Lower<'a> {
                 let task = self.expr(base);
                 self.finish_call(Callee::Native("task.wait"), vec![task], Vec::new(), span)
             }
+            Some(Res::Builtin(name @ ("chan.send" | "chan.recv" | "chan.close"))) => {
+                let ExprKind::Field { base, .. } = &callee.kind else { return self.unsupported(span, "this call") };
+                let mut ops = vec![self.expr(base)];
+                ops.extend(args.iter().map(|a| self.expr(&a.value)));
+                self.finish_call(Callee::Native(name), ops, Vec::new(), span)
+            }
             Some(Res::Builtin(name)) if name.contains('.') && *name != "io.print" => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();
                 self.finish_call(Callee::Native(name), ops, Vec::new(), span)

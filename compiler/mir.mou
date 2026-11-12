@@ -3033,6 +3033,16 @@ impl Lower {
                         _ => return self.unsupported(at, "this call")
                     }
                 }
+                if name == "chan.send" || name == "chan.recv" || name == "chan.close" {
+                    match callee.kind {
+                        parser.Kind.Field(base, _) => {
+                            var ops = [self.expr(base)]
+                            for a in args { ops.push(self.expr(a.value)) }
+                            return self.finish_call(Callee.Native(name), ops, [], at)
+                        }
+                        _ => return self.unsupported(at, "this call")
+                    }
+                }
                 if has_dot(name) {
                     let ops = self.arg_ops(args)
                     return self.finish_call(Callee.Native(name), ops, [], at)

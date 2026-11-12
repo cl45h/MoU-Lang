@@ -1,0 +1,39 @@
+import std.io
+
+fn produce(c: Chan[int], n: int) -> int {
+    for i in 0..n { c.send(i * i) }
+    c.close()
+    n
+}
+
+fn drain(c: Chan[int]) -> int {
+    var sum = 0
+    while true {
+        match c.recv() {
+            Some(x) => { sum += x }
+            None => { break }
+        }
+    }
+    sum
+}
+
+fn text(o: str?) -> str {
+    match o {
+        Some(t) => t
+        None => "nada"
+    }
+}
+
+fn main() ! io.Error {
+    scope s {
+        let c = Chan[int](4)
+        let p = s.spawn(produce(c, 1000))
+        let total = drain(c)
+        io.print("{p.wait()} {total}")?
+    }
+    let d = Chan[str](2)
+    d.send("uno")
+    d.send("dos")
+    d.close()
+    io.print("{text(d.recv())} {text(d.recv())} {text(d.recv())}")?
+}
