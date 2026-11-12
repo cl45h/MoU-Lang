@@ -211,6 +211,15 @@ enum Rep {
 
 // How a field of a struct kept as a struct of C is stored, by the kind
 // the program gives for it: 1 a boolean, 2 a whole number, 3 an `f64`.
+// Keeps in an optional without a block what `found` leaves in `it_`.
+fn raw_item(l: int, made: str, k: int, found: str) -> str {
+    var item = "(int64_t)it_.u.i"
+    if k == 1 { item = "it_.u.t" }
+    if k == 3 { item = "it_.u.f" }
+    if k == 4 { item = "(uint64_t)it_.u.i" }
+    "{{ kv it_; if ({found}) s{l} = (struct {made}){{true, {item}}}; else s{l} = (struct {made}){{0}}; }}"
+}
+
 fn field_rep(kind: int) -> Rep {
     if kind == 1 { return Rep.Bool }
     if kind == 3 { return Rep.F64 }
@@ -1556,6 +1565,19 @@ impl Cx {
                                 if opt_kind(self.rep(q)) == k { return "s{l} = s{q.local};" }
                             }
                         }
+                    }
+                    // What an array gives is read where it is, with no
+                    // block made for the optional.
+                    mir.Rvalue.Get(a, i) => {
+                        let x = self.operand(a)?
+                        let y = self.operand(i)?
+                        return raw_item(l, made, k, "kget_raw({x}, {y}, &it_)")
+                    }
+                    mir.Rvalue.Pop(p) => {
+                        if has_path(p.proj) {
+                            if let Some(ptr) = self.ptr(p.local, p.proj, true) { return raw_item(l, made, k, "kpop_raw({ptr}, 0, NULL, &it_)") }
+                        }
+                        return raw_item(l, made, k, "kpop_raw({self.target(p)?}, &it_)")
                     }
                     _ => {}
                 }

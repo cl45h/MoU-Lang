@@ -1036,6 +1036,18 @@ impl Lower {
         unit()
     }
 
+    // Says how the temporary that holds the value of `e` is kept, when
+    // its type says it.
+    fn typed(mut self, e: parser.Expr, value: Operand) -> Operand {
+        match value {
+            Operand.At(p) => {
+                if let Some(s) = scalar_of(self.c.structs, self.ty(e)) { self.hints.push(Hint(p.local, s)) }
+            }
+            _ => {}
+        }
+        value
+    }
+
     fn ty(self, e: parser.Expr) -> types.Ty {
         match self.c.types.get(self.slot(e)) {
             Some(t) => t
@@ -3075,12 +3087,14 @@ impl Lower {
                         }
                         if name == "pop" {
                             let p = self.place(base)
-                            return self.tmp(Rvalue.Pop(p))
+                            let got = self.tmp(Rvalue.Pop(p))
+                            return self.typed(e, got)
                         }
                         let b = self.expr(base)
                         if args.len == 0 { return Operand.Const(Value.None) }
                         let i = self.expr(args[0].value)
-                        self.tmp(Rvalue.Get(b, i))
+                        let got = self.tmp(Rvalue.Get(b, i))
+                        self.typed(e, got)
                     }
                     _ => self.unsupported(at, "this call")
                 }

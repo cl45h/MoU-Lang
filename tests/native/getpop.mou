@@ -1,0 +1,32 @@
+import std.io
+struct Bag { items: [int] }
+fn at(xs: [int], i: usize) -> int {
+    match xs.get(i) {
+        Some(v) => v
+        None => 0 - 1
+    }
+}
+fn main() ! io.Error {
+    var xs: [int] = []
+    for i in 0..10 { xs.push(i * i) }
+    var sum = 0
+    for i in 0..12 { sum += at(xs, i as usize) }
+    var fs = [1.5, 2.5]
+    var bs = [true, false]
+    var us: [u64] = [18446744073709551615, 2]
+    var bag = Bag([7, 8, 9])
+    var popped = 0
+    while true {
+        let o: int? = xs.pop()
+        match o {
+            Some(v) => { popped += v }
+            None => { break }
+        }
+    }
+    let f: f64? = fs.get(1)
+    let g: f64? = fs.get(5)
+    let b: bool? = bs.pop()
+    let u: u64? = us.get(0)
+    let inner: int? = bag.items.pop()
+    io.print("{sum} {popped} {xs.len} {f} {g} {b} {u} {inner} {bag.items.len}")?
+}

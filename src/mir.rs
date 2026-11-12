@@ -1042,6 +1042,15 @@ impl<'a> Lower<'a> {
         Operand::Const(Value::Unit)
     }
 
+    /// Says how the temporary that holds the value of `e` is kept, when
+    /// its type says it.
+    fn typed(&mut self, e: &Expr, value: Operand) -> Operand {
+        if let (Operand::Place(p), Some(s)) = (&value, scalar_of(self.info, &self.ty(e))) {
+            self.hints.push((p.local, s));
+        }
+        value
+    }
+
     fn ty(&self, e: &Expr) -> Ty {
         self.info.types.get(&(self.inst, id(e))).cloned().unwrap_or(Ty::Unknown)
     }
@@ -2552,13 +2561,15 @@ impl<'a> Lower<'a> {
                     }
                     "pop" => {
                         let p = self.place(base);
-                        self.tmp(Rvalue::Pop(p))
+                        let got = self.tmp(Rvalue::Pop(p));
+                        self.typed(e, got)
                     }
                     _ => {
                         let b = self.expr(base);
                         let Some(a) = args.first() else { return Operand::Const(Value::None) };
                         let i = self.expr(&a.value);
-                        self.tmp(Rvalue::Get(b, i))
+                        let got = self.tmp(Rvalue::Get(b, i));
+                        self.typed(e, got)
                     }
                 }
             }

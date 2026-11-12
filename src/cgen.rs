@@ -1069,6 +1069,25 @@ impl Cx<'_> {
                     Rvalue::Some(op) => Ok(format!("s{l} = (struct {name}){{true, {}}};", self.machine(opt_inner(k), op)?)),
                     Rvalue::Use(Operand::Const(Value::None)) | Rvalue::Uninit | Rvalue::Moved => Ok(format!("s{l} = (struct {name}){{0}};")),
                     Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Opt(k) => Ok(format!("s{l} = s{};", q.local)),
+                    // What an array gives is read where it is, with no
+                    // block made for the optional.
+                    Rvalue::Get(..) | Rvalue::Pop(_) => {
+                        let found = match rv {
+                            Rvalue::Get(a, i) => format!("kget_raw({}, {}, &it_)", operand(self, a)?, operand(self, i)?),
+                            Rvalue::Pop(p) => match self.ptr(p.local, &p.proj, true) {
+                                Some(ptr) if p.proj.iter().any(|pr| matches!(pr, Proj::Path(_))) => format!("kpop_raw({ptr}, 0, NULL, &it_)"),
+                                _ => format!("kpop_raw({}, &it_)", target(self, p)?),
+                            },
+                            _ => String::new(),
+                        };
+                        let item = match k {
+                            1 => "it_.u.t",
+                            3 => "it_.u.f",
+                            4 => "(uint64_t)it_.u.i",
+                            _ => "(int64_t)it_.u.i",
+                        };
+                        Ok(format!("{{ kv it_; if ({found}) s{l} = (struct {name}){{true, {item}}}; else s{l} = (struct {name}){{0}}; }}"))
+                    }
                     _ => Ok(format!("s{l} = {name}_take({});", rvalue(self, rv)?)),
                 }
             }

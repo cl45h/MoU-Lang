@@ -723,6 +723,25 @@ static kv kget(kv a, kv i) {
     return r;
 }
 
+/* `pop` and `get` of an array of numbers or booleans, for whoever keeps
+   the optional without a block: whether there is an item, and the item. */
+static bool kpop_raw(kv *root, int n, const kstep *steps, kv *item) {
+    kv *v = karray_at(root, n, steps, "`pop` on a value that is not an array");
+    kobj *o = v->u.o;
+    if (o->len == 0) return false;
+    o->len--;
+    *item = kelem(o, o->len);
+    return true;
+}
+
+static bool kget_raw(kv a, kv i, kv *item) {
+    if (a.tag != T_ARRAY || i.tag != T_INT) kinternal("`get` on a value that is not an array");
+    bool has = i.u.i >= 0 && i.u.i < klen(a);
+    if (has) *item = kelem(a.u.o, (int64_t)i.u.i);
+    krelease(a);
+    return has;
+}
+
 /* Puts `value` at position `k` of the array `v`, which is in range. */
 static void kitem_put(kv *v, int64_t k, kv value) {
     kunique(v);
