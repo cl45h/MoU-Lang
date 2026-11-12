@@ -1632,10 +1632,14 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                             if k >= (ext.params.len as int) { break }
                             let v = cx.operand(args[k])?
                             let t = ext.params[k]
-                            if t == "str" {
+                            if t == "str" || t == "ptr?" {
                                 line(mut out, "        kv e{k} = {v};")
-                                parts.push("kbytes(e{k})")
+                                if t == "str" { parts.push("kbytes(e{k})") } else { parts.push("kptr_c_opt(e{k})") }
                                 held.push(k)
+                                continue
+                            }
+                            if t == "ptr" {
+                                parts.push("(void *)(uintptr_t)({v}).u.i")
                                 continue
                             }
                             if t == "bool" {
@@ -1660,6 +1664,8 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if ext.ret == "f32" { r = "kf32({call})" }
                         if ext.ret == "str" { r = "kstr_c({call}, {quote(ext.name)})" }
                         if ext.ret == "str?" { r = "kstr_c_opt({call})" }
+                        if ext.ret == "ptr" { r = "kptr_v({call}, {quote(ext.name)})" }
+                        if ext.ret == "ptr?" { r = "kptr_v_opt({call})" }
                         line(mut out, "        kv r = {r};")
                         for k in held { line(mut out, "        krelease(e{k});") }
                     }

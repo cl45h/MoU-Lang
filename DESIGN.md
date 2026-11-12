@@ -437,13 +437,14 @@ pub fn root(x: f64) -> f64 { unsafe { m.sqrt(x) } }
 ```
 
 - El compilador no lee el header: confía en la declaración. Por eso la llamada solo se acepta dentro de `unsafe { }`, y `unsafe` solo se acepta en un módulo `system`. Lo normal es un módulo `system` chico que envuelve las funciones de C en funciones seguras, y el resto del programa usa esas.
-- Parámetros y resultado: enteros de hasta 64 bits, `f32`, `f64`, `bool` y `str`, o ningún resultado. Los argumentos se verifican contra la declaración como en cualquier llamada.
-- Un `str` se pasa a C como `const char *` terminado en cero, sin copiarlo, y vale mientras dura la llamada. Un resultado `str` se copia a un string de Mou; si la función puede devolver un puntero nulo se declara `str?` y el nulo es `None` (con `str`, un nulo es un panic). Mou no libera lo que devuelve C: una función que devuelve memoria que hay que liberar todavía no se puede usar sin perderla.
+- Parámetros y resultado: enteros de hasta 64 bits, `f32`, `f64`, `bool`, `str` y `ptr`, o ningún resultado. Los argumentos se verifican contra la declaración como en cualquier llamada.
+- Un `str` se pasa a C como `const char *` terminado en cero, sin copiarlo, y vale mientras dura la llamada. Un resultado `str` se copia a un string de Mou; si la función puede devolver un puntero nulo se declara `str?` y el nulo es `None` (con `str`, un nulo es un panic). Mou no libera lo que devuelve C: si hay que liberarlo, el resultado se declara `ptr` y se le pasa a `free`.
+- `ptr` es una dirección de C: un `FILE *`, lo que da `malloc`, el manejador de una librería. Es opaca: se guarda (en variables, structs y arrays), se compara con `==` y se le devuelve a C, pero Mou no puede leer ni escribir a través de ella ni hacer cuentas con ella, y solo una función de C la puede crear. Un `ptr` nunca es nulo: donde C puede dar o aceptar un nulo se declara `ptr?`, y el nulo es `None` (con `ptr`, un resultado nulo es un panic). Probado en `tests/c/cmem.mou` con `malloc`, `free`, `strdup`, `fopen` y `tmpfile`.
 - El binario incluye el header y llama a la función directamente. `mou build archivo.mou -l sqlite3` enlaza una librería.
 - Una función que llega a una de C tiene el efecto `unsafe`, que `mou effects` muestra. De lo que hace la función de C (alocar, entrada y salida) responde quien escribió el `unsafe`.
 - El intérprete no puede llamar a C: `mou run`, `mou test`, el `repl` y `comptime` se detienen con un panic que lo dice cuando llegan a una. Un programa que usa C se prueba compilado.
 
-Faltan: leer el header en vez de declarar a mano, punteros, structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
+Faltan: leer el header en vez de declarar a mano, leer y escribir a través de un puntero (buffers), structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
 
 ### Facilidad de uso: lo que el compilador deduce
 

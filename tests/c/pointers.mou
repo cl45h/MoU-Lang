@@ -1,0 +1,35 @@
+import std.io
+import cmem
+
+struct Handle { name: str, at: ptr? }
+
+fn main() ! io.Error {
+    let b = cmem.copy_of("hello, pointers")
+    io.print("{b.len}")?
+    let same = cmem.fill(b, 120, 5)
+    io.print("{same == b.at} {same != b.at} {cmem.length(same)}")?
+    match cmem.find(b.at, 44) {
+        Some(comma) => io.print("comma: {comma == b.at} {cmem.length(comma)}")?
+        None => io.print("no comma")?
+    }
+    let missing = cmem.find(b.at, 63)
+    io.print("{missing == None}")?
+    cmem.release(b.at)
+    var kept: [Handle] = []
+    kept.push(Handle("room", cmem.room(64)))
+    kept.push(Handle("file", cmem.open("/no/such/dir/file")))
+    for h in kept {
+        match h.at {
+            Some(p) => {
+                io.print("{h.name}: an address")?
+                cmem.release(p)
+            }
+            None => io.print("{h.name}: nothing")?
+        }
+    }
+    match cmem.round_trip() {
+        Some((x, y, z)) => io.print("{x} {y} {z}")?
+        None => io.print("no file")?
+    }
+    io.print("{cmem.flush_all()} {cmem.length(cmem.static_text()) > 0}")?
+}

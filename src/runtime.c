@@ -1585,6 +1585,23 @@ static kv kstr_c(const char *s, const char *name) {
     return kstr(s, strlen(s));
 }
 
+/* An address a C function gave or takes. It is kept as a number; null is
+   no address. */
+static kv kptr_v_opt(const void *p) { return p ? kbox(T_SOME, kint((i128)(uintptr_t)p)) : KNONE; }
+
+static kv kptr_v(const void *p, const char *name) {
+    if (!p) {
+        ksb sb = {0};
+        ksb_str(&sb, "the C function `");
+        ksb_str(&sb, name);
+        ksb_str(&sb, "` gave a null pointer: declare its result as `ptr?`");
+        kpanic(sb.p);
+    }
+    return kint((i128)(uintptr_t)p);
+}
+
+static void *kptr_c_opt(kv v) { return v.tag == T_NONE ? NULL : (void *)(uintptr_t)ITEMS(v.u.o)[0].u.i; }
+
 /* `n as char`: the character with that code. */
 static kv kraw_to_char(kv n) {
     i128 i = n.u.i;

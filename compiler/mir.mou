@@ -768,9 +768,15 @@ fn c_type(t: types.Ty) -> str {
         types.Ty.Float(k) => k
         types.Ty.Bool => "bool"
         types.Ty.Str => "str"
+        types.Ty.Builtin(k) => {
+            if k == "ptr" { "ptr" } else { "unit" }
+        }
         types.Ty.Optional(inner) => {
             match inner {
                 types.Ty.Str => "str?"
+                types.Ty.Builtin(k) => {
+                    if k == "ptr" { "ptr?" } else { "unit" }
+                }
                 _ => "unit"
             }
         }

@@ -30,7 +30,7 @@ fn main() ! io.Error {
 - Ownership sin lifetimes: las referencias no se guardan, así que no hace falta anotarlas.
 - Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
 - Constantes y expresiones `comptime` calculadas al compilar.
-- Llamadas a funciones de C con números y `bool`.
+- Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
 - Herramientas: `mou test`, `mou fmt`, `mou repl`, `mou effects` y `mou fuzz`.
 - El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
@@ -44,7 +44,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Concurrencia.
 - El contexto (`with alloc = arena`) y los efectos en los tipos de función.
 - Parámetros `comptime`, tipos como valores y reflexión.
-- Punteros y structs en las llamadas a C (números, `bool` y strings ya se pueden), y leer los headers en vez de declarar las funciones a mano.
+- Structs con layout de C, buffers y callbacks en las llamadas a C (números, `bool`, strings y punteros opacos ya se pueden), y leer los headers en vez de declarar las funciones a mano.
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 - Los bloques `scope` y `with`, que son parte de las regiones y del contexto: se leen, pero el compilador avisa que no los soporta.
 

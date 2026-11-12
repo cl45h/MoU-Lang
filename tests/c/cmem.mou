@@ -1,0 +1,60 @@
+// Addresses of C: a `ptr` is kept and given back, never looked into.
+@profile(system)
+import c "stdlib.h" as lib {
+    fn malloc(n: usize) -> ptr?
+    fn free(p: ptr)
+}
+import c "string.h" as s {
+    fn strdup(text: str) -> ptr
+    fn strlen(p: ptr) -> usize
+    fn memset(p: ptr, byte: i32, n: usize) -> ptr
+    fn strchr(p: ptr, c: i32) -> ptr?
+    fn strerror(code: i32) -> ptr
+}
+import c "stdio.h" as f {
+    fn fopen(path: str, how: str) -> ptr?
+    fn fclose(file: ptr) -> i32
+    fn fputs(text: str, file: ptr) -> i32
+    fn fgetc(file: ptr) -> i32
+    fn tmpfile() -> ptr?
+    fn rewind(file: ptr)
+    fn fflush(file: ptr?) -> i32
+}
+
+pub struct Buffer { pub at: ptr, pub len: usize }
+
+pub fn copy_of(text: str) -> Buffer {
+    unsafe {
+        let p = s.strdup(text)
+        Buffer(p, s.strlen(p))
+    }
+}
+
+pub fn fill(b: Buffer, byte: i32, n: usize) -> ptr { unsafe { s.memset(b.at, byte, n) } }
+pub fn length(p: ptr) -> usize { unsafe { s.strlen(p) } }
+pub fn find(p: ptr, c: i32) -> ptr? { unsafe { s.strchr(p, c) } }
+pub fn release(p: ptr) { unsafe { lib.free(p) } }
+pub fn room(n: usize) -> ptr? { unsafe { lib.malloc(n) } }
+pub fn open(path: str) -> ptr? { unsafe { f.fopen(path, "r") } }
+pub fn close(file: ptr) -> i32 { unsafe { f.fclose(file) } }
+pub fn flush_all() -> i32 { unsafe { f.fflush(None) } }
+pub fn flush(file: ptr) -> i32 { unsafe { f.fflush(Some(file)) } }
+pub fn static_text() -> ptr { unsafe { s.strerror(0) } }
+
+// Writes two bytes to a file that goes away, and reads three back.
+pub fn round_trip() -> (i32, i32, i32)? {
+    unsafe {
+        match f.tmpfile() {
+            Some(file) => {
+                f.fputs("ab", file)
+                f.rewind(file)
+                let a = f.fgetc(file)
+                let b = f.fgetc(file)
+                let c = f.fgetc(file)
+                f.fclose(file)
+                Some((a, b, c))
+            }
+            None => None
+        }
+    }
+}

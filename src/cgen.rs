@@ -1155,13 +1155,14 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     let mut held = Vec::new();
                     for (k, (a, t)) in args.iter().zip(&x.params).enumerate() {
                         let v = operand(cx, a)?;
-                        if *t == "str" {
+                        if *t == "str" || *t == "ptr?" {
                             writeln!(out, "        kv e{k} = {v};").unwrap();
-                            parts.push(format!("kbytes(e{k})"));
+                            parts.push(if *t == "str" { format!("kbytes(e{k})") } else { format!("kptr_c_opt(e{k})") });
                             held.push(k);
                             continue;
                         }
                         parts.push(match *t {
+                            "ptr" => format!("(void *)(uintptr_t)({v}).u.i"),
                             "bool" => format!("({v}).u.t"),
                             "f64" => format!("({v}).u.f"),
                             "f32" => format!("({v}).u.g"),
@@ -1176,6 +1177,8 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         "f32" => format!("kf32({call})"),
                         "str" => format!("kstr_c({call}, {})", quote(&x.name)),
                         "str?" => format!("kstr_c_opt({call})"),
+                        "ptr" => format!("kptr_v({call}, {})", quote(&x.name)),
+                        "ptr?" => format!("kptr_v_opt({call})"),
                         _ => format!("kint((i128)({call}))"),
                     };
                     writeln!(out, "        kv r = {r};").unwrap();

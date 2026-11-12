@@ -54,6 +54,7 @@ pub fn prim(name: str) -> Ty? {
     if name == "bool" { return Some(Ty.Bool) }
     if name == "char" { return Some(Ty.Char) }
     if name == "str" { return Some(Ty.Str) }
+    if name == "ptr" { return Some(Ty.Builtin("ptr")) }
     for k in INT_KINDS {
         if k == name { return Some(Ty.Int(k)) }
     }

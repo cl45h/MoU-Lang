@@ -907,6 +907,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         Ty::Bool => "bool",
         Ty::Str => "str",
         Ty::Optional(inner) if **inner == Ty::Str => "str?",
+        Ty::Builtin("ptr") => "ptr",
+        Ty::Optional(inner) if **inner == Ty::Builtin("ptr") => "ptr?",
         _ => "unit",
     };
     let externs = info
