@@ -360,10 +360,160 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
     Some((name, made))
 }
 
+/// The names an `enum` of the header gives to numbers.
+fn enumerators(toks: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i] != "enum" {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if i < toks.len() && toks[i] != "{" {
+            i += 1;
+        }
+        if i >= toks.len() || toks[i] != "{" {
+            continue;
+        }
+        // A name comes after the brace and after each comma.
+        let (mut depth, mut wanted) = (0, true);
+        i += 1;
+        while i < toks.len() && !(toks[i] == "}" && depth == 0) {
+            match toks[i].as_str() {
+                "(" => depth += 1,
+                ")" => depth -= 1,
+                "," if depth == 0 => wanted = true,
+                t if wanted => {
+                    out.push(t.to_string());
+                    wanted = false;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The type in Mou of a number as C writes it, or nothing when the text
+/// is not a number this reads.
+fn number_type(text: &str, negative: bool) -> Option<&'static str> {
+    let cs: Vec<char> = text.chars().collect();
+    if cs.is_empty() || !cs[0].is_ascii_digit() {
+        return None;
+    }
+    let hex = cs.len() > 2 && cs[0] == '0' && (cs[1] == 'x' || cs[1] == 'X');
+    // With a fraction or an exponent: an `f64`.
+    if !hex && cs.iter().any(|c| matches!(c, '.' | 'e' | 'E')) {
+        let end = if matches!(cs[cs.len() - 1], 'f' | 'F' | 'l' | 'L') { cs.len() - 1 } else { cs.len() };
+        let fine = cs[..end].iter().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'));
+        return fine.then_some("f64");
+    }
+    let mut end = cs.len();
+    let mut unsigned = false;
+    while end > 0 && matches!(cs[end - 1], 'u' | 'U' | 'l' | 'L') {
+        unsigned |= matches!(cs[end - 1], 'u' | 'U');
+        end -= 1;
+    }
+    let (digits, base): (&[char], i64) = if hex { (&cs[2..end], 16) } else if cs[0] == '0' && end > 1 { (&cs[1..end], 8) } else { (&cs[..end], 10) };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut v: i64 = 0;
+    for c in digits {
+        let d = c.to_digit(16)? as i64;
+        if d >= base || v > (i64::MAX - d) / base {
+            return None;
+        }
+        v = v * base + d;
+    }
+    if unsigned {
+        return Some(if negative || v > 4294967295 { "u64" } else { "u32" });
+    }
+    Some(if v <= 2147483647 || (negative && v == 2147483648) { "i32" } else { "i64" })
+}
+
+/// The values of a header that are numbers: the names of its `enum`s,
+/// and the macros that are a number written out or another such name.
+/// Each with its type in Mou, in order of name.
+fn values(defines: &str, toks: &[String]) -> Vec<(String, &'static str)> {
+    let usable = |name: &str| {
+        let mut cs = name.chars();
+        cs.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && name.chars().any(|c| c.is_ascii_uppercase())
+            && !crate::lexer::KEYWORDS.contains(&name)
+    };
+    let mut known: HashMap<String, &'static str> = HashMap::new();
+    for name in enumerators(toks) {
+        known.insert(name, "i32");
+    }
+    // The macros without parameters, and what each one stands for.
+    let mut macros: Vec<(String, Vec<String>)> = Vec::new();
+    for line in defines.lines() {
+        let Some(rest) = line.strip_prefix("#define ") else { continue };
+        let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let after = &rest[name.len()..];
+        if name.is_empty() || after.starts_with('(') {
+            continue;
+        }
+        let mut body = tokens(after);
+        // `1e` `-` `5` is one number.
+        if body.len() == 3 && (body[1] == "-" || body[1] == "+") && body[0].ends_with(['e', 'E']) && body[0].starts_with(|c: char| c.is_ascii_digit()) {
+            body = vec![body.concat()];
+        }
+        while body.len() >= 3 && body[0] == "(" && body[body.len() - 1] == ")" {
+            body = body[1..body.len() - 1].to_vec();
+        }
+        macros.push((name, body));
+    }
+    let by_name: HashMap<&str, &Vec<String>> = macros.iter().map(|(n, b)| (n.as_str(), b)).collect();
+    // What a body is, following a name to what it stands for.
+    fn kind(body: &[String], known: &HashMap<String, &'static str>, by_name: &HashMap<&str, &Vec<String>>, depth: usize) -> Option<&'static str> {
+        match body {
+            [one] => number_type(one, false).or_else(|| {
+                if let Some(t) = known.get(one) {
+                    return Some(*t);
+                }
+                if depth >= 8 {
+                    return None;
+                }
+                kind(by_name.get(one.as_str())?, known, by_name, depth + 1)
+            }),
+            [sign, one] if sign == "-" => number_type(one, true),
+            _ => None,
+        }
+    }
+    let mut out: Vec<(String, &'static str)> = Vec::new();
+    for (name, body) in &macros {
+        if !usable(name) || known.contains_key(name) {
+            continue;
+        }
+        // A macro that is its own name stands for something that is not a macro.
+        if body.len() == 1 && body[0] == *name {
+            continue;
+        }
+        if let Some(t) = kind(body, &known, &by_name, 0) {
+            if !out.iter().any(|(n, _)| n == name) {
+                out.push((name.clone(), t));
+            }
+        }
+    }
+    for (name, t) in &known {
+        if usable(name) {
+            out.push((name.clone(), t));
+        }
+    }
+    out.sort();
+    out.dedup_by(|a, b| a.0 == b.0);
+    out
+}
+
 /// The functions a header declares, from what the preprocessor gives:
 /// the declarations in Mou of the ones that can be called, and the names
 /// of the others with the reason they are left out.
-fn declared(preprocessed: &str) -> (Vec<String>, Vec<(String, String)>) {
+fn declared(preprocessed: &str, defines: &str) -> (Vec<String>, Vec<(String, String)>) {
     let toks = tokens(preprocessed);
     let mut r = Reader { typedefs: HashMap::new(), long: 8 };
     let mut fns: Vec<(String, Result<String, String>)> = Vec::new();
@@ -390,20 +540,31 @@ fn declared(preprocessed: &str) -> (Vec<String>, Vec<(String, String)>) {
     fns.sort_by(|a, b| a.0.cmp(&b.0));
     let mut good = Vec::new();
     let mut left = Vec::new();
+    let mut names = Vec::new();
     for (name, made) in fns {
         match made {
-            Ok(line) => good.push(line),
+            Ok(line) => {
+                good.push(line);
+                names.push(name);
+            }
             Err(why) => left.push((name, why)),
+        }
+    }
+    // Then its values, which are read and not called.
+    for (name, t) in values(defines, &toks) {
+        if !names.contains(&name) {
+            good.push(format!("@value fn {name}() -> {t}"));
         }
     }
     (good, left)
 }
 
 /// The text of the bindings of a header, from what the preprocessor gives.
-fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
-    let (good, left) = declared(preprocessed);
+fn bindings(header: &str, alias: &str, preprocessed: &str, defines: &str) -> String {
+    let (good, left) = declared(preprocessed, defines);
     let mut out = String::new();
-    out.push_str(&format!("// Written by `mou bind {header}`: {} functions, {} left out.\n", good.len(), left.len()));
+    let values = good.iter().filter(|g| g.starts_with("@value ")).count();
+    out.push_str(&format!("// Written by `mou bind {header}`: {} functions, {values} values, {} left out.\n", good.len() - values, left.len()));
     out.push_str("// A pointer to numbers is written as an array (`[T]`, or `mut [T]` when C can\n");
     out.push_str("// write through it), text as `str`, and any other pointer as `ptr?`. What a\n");
     out.push_str("// pointer is for is not in the header: check the ones you use.\n");
@@ -422,23 +583,28 @@ fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
     out
 }
 
-/// What the preprocessor of the C compiler gives for a header.
-fn preprocessed(header: &str) -> Result<String, String> {
+/// What the preprocessor of the C compiler gives for a header: its
+/// text, and the macros it defines.
+fn preprocessed(header: &str) -> Result<(String, String), String> {
     // The name goes into a line of C: only what a name of a header has.
     let fine = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '-');
     if header.is_empty() || !header.chars().all(fine) {
         return Err(format!("`{header}` is not the name of a header"));
     }
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let args: Vec<String> = ["-E", "-P", "-x", "c", "-"].iter().map(|s| s.to_string()).collect();
     let source = format!("#include <{header}>\nmou_long_size __SIZEOF_LONG__;\n");
-    crate::interp::run_program(&cc, &args, &source).map_err(|e| format!("cannot read the header `{header}`: {e}"))
+    let run = |flags: &[&str]| {
+        let args: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+        crate::interp::run_program(&cc, &args, &source).map_err(|e| format!("cannot read the header `{header}`: {e}"))
+    };
+    Ok((run(&["-E", "-P", "-x", "c", "-"])?, run(&["-E", "-dM", "-x", "c", "-"])?))
 }
 
 /// The declarations of the functions of a header, as they are written
 /// inside an `import c` block.
 pub fn functions(header: &str) -> Result<Vec<String>, String> {
-    Ok(declared(&preprocessed(header)?).0)
+    let (text, defines) = preprocessed(header)?;
+    Ok(declared(&text, &defines).0)
 }
 
 /// `mou bind <header> [name]`: the bindings, or what failed.
@@ -446,7 +612,8 @@ pub fn bind(header: &str, alias: Option<&str>) -> Result<String, String> {
     let stem = header.rsplit('/').next().unwrap_or(header).split('.').next().unwrap_or("c");
     let stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
     let alias = alias.map(str::to_string).unwrap_or_else(|| mou_name(&stem, 0));
-    Ok(bindings(header, &alias, &preprocessed(header)?))
+    let (text, defines) = preprocessed(header)?;
+    Ok(bindings(header, &alias, &text, &defines))
 }
 
 #[cfg(test)]
@@ -492,7 +659,28 @@ extern void srand (unsigned int __seed);
 extern int rand (void);
 extern int pick (int, int type, char fn[8]);
 ";
-        let out = bindings("x.h", "x", src);
+        let defines = "#define BIG 0x7fffffffffL\n#define ONE 1\n#define NEG (-1)\n#define PI 3.14159\n#define TINY 1e-5\n#define ALIAS ONE\n#define RED RED\n#define stdin stdin\n#define CALL(x) x\n#define U 4000000000U\n#define TEXT \"a\"\n#define _HIDDEN 3\n#define OCT 0644\n";
+        let src = format!("{src}enum color {{ RED, GREEN = (1 << 2), BLUE }};\n");
+        let out = bindings("x.h", "x", &src, defines);
+        for line in [
+            "@value fn BIG() -> i64",
+            "@value fn ONE() -> i32",
+            "@value fn NEG() -> i32",
+            "@value fn PI() -> f64",
+            "@value fn TINY() -> f64",
+            "@value fn ALIAS() -> i32",
+            "@value fn RED() -> i32",
+            "@value fn GREEN() -> i32",
+            "@value fn BLUE() -> i32",
+            "@value fn U() -> u32",
+            "@value fn OCT() -> i32",
+            "10 functions, 11 values, 4 left out",
+        ] {
+            assert!(out.contains(line), "missing {line:?} in:\n{out}");
+        }
+        for absent in ["stdin", "CALL", "TEXT", "HIDDEN"] {
+            assert!(!out.contains(absent), "{absent} should not be there:\n{out}");
+        }
         for line in [
             "fn sqrt(x: f64) -> f64",
             "fn strlen(s: str) -> u64",

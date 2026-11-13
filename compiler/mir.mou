@@ -951,6 +951,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
             }
             params.push(kind)
         }
+        // A value is told apart by what it takes: `const`, and nothing.
+        if x.value { params = ["const"] }
         externs.push(Extern(x.name, x.header, params, c_type(x.sig.ret)))
     }
     var sums: [[int]] = []
@@ -3018,6 +3020,8 @@ impl Lower {
     fn field(mut self, e: parser.Expr, base: parser.Expr, name: str) -> Operand {
         let at = span_of(e)
         match self.res(e) {
+            // A value of a C header is read where it is used.
+            Some(check.Res.Extern(x)) => self.finish_call(Callee.Extern(x), [], [], at)
             Some(check.Res.Variant(en, v)) => Operand.Const(Value.Enum(en, v))
             Some(check.Res.Field(_)) => {
                 let place = self.place(e)

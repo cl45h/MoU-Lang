@@ -944,7 +944,11 @@ impl Walk<'_> {
                     Callee::Extern(x) => {
                         let name = &self.p.externs[*x].name;
                         // What it does is up to who wrote the `unsafe` around it.
-                        notes.push((UNSAFE, format!("the C function `{name}` is called here")));
+                        if self.p.externs[*x].params == ["const"] {
+                            notes.push((UNSAFE, format!("the C value `{name}` is read here")));
+                        } else {
+                            notes.push((UNSAFE, format!("the C function `{name}` is called here")));
+                        }
                         // What C calls back counts as called here.
                         for a in args {
                             if let (Operand::Const(Value::Fn(f)), Some(found)) = (a, &mut found) {

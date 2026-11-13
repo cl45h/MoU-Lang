@@ -1471,6 +1471,9 @@ pub struct Extern {
     pub name: String,
     pub header: String,
     pub sig: Sig,
+    /// A value of the header (a constant or a macro that is a number),
+    /// declared with `@value`: it is read, not called.
+    pub value: bool,
 }
 
 /// A function a built-in module provides: the name later stages know it
@@ -1517,6 +1520,14 @@ impl<'a> Checker<'a> {
                 self.err(d.span, format!("`{}` is a C function: it is declared with its parameters and its result, and nothing else", f.name));
                 continue;
             }
+            let value = d.attrs.iter().any(|a| a.name == "value");
+            if value {
+                let ret = f.ret.as_ref().map(|t| self.resolve(t, d.span));
+                if !f.params.is_empty() || !ret.as_ref().is_some_and(plain) {
+                    self.err(d.span, format!("`{}` is a value of C: it is declared as `@value fn {}() -> T`, where `T` is the type of a number or `bool`", f.name, f.name));
+                    continue;
+                }
+            }
             let mut params = Vec::new();
             for p in &f.params {
                 let ty = match &p.ty {
@@ -1555,7 +1566,7 @@ impl<'a> Checker<'a> {
                 self.err(d.span, format!("the result of `{}`: {only}", f.name));
             }
             self.extern_ids.insert((module, alias.to_string(), f.name.clone()), self.externs.len());
-            self.externs.push(Extern { name: f.name.clone(), header: header.to_string(), sig: Sig { params, ret } });
+            self.externs.push(Extern { name: f.name.clone(), header: header.to_string(), sig: Sig { params, ret }, value });
         }
         self.module = 0;
     }
@@ -4322,7 +4333,25 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            ExprKind::Field { base, name } => self.field(e, base, name, span),
+            ExprKind::Field { base, name } => {
+                // A value of a C header: `m.M_PI`.
+                if let ExprKind::Path(b) = &base.kind {
+                    if self.lookup(b).is_none() {
+                        if let Some(&x) = self.extern_ids.get(&(self.module, b.clone(), name.clone())) {
+                            if !self.externs[x].value {
+                                self.err(span, format!("`{b}.{name}` is a C function: it is called, as in `{b}.{name}(...)`"));
+                                return Ty::Unknown;
+                            }
+                            if self.unsafe_depth == 0 {
+                                self.err(span, format!("`{b}.{name}` is a value of C, which the compiler cannot check: read it inside `unsafe {{ }}`"));
+                            }
+                            self.res.insert((self.inst, id(e)), Res::Extern(x));
+                            return self.externs[x].sig.ret.clone();
+                        }
+                    }
+                }
+                self.field(e, base, name, span)
+            }
             ExprKind::Try(inner) => {
                 let t = self.expr(inner);
                 let (ret, err) = match self.ctx.last() {
@@ -4754,7 +4783,9 @@ impl<'a> Checker<'a> {
                 if let ExprKind::Path(b) = &base.kind {
                     if self.lookup(b).is_none() {
                         if let Some(&x) = self.extern_ids.get(&(self.module, b.clone(), name.clone())) {
-                            if self.unsafe_depth == 0 {
+                            if self.externs[x].value {
+                                self.err(span, format!("`{b}.{name}` is a value of C, not a function: write it without `()`"));
+                            } else if self.unsafe_depth == 0 {
                                 self.err(span, format!("`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`"));
                             }
                             self.res.insert((self.inst, id(e)), Res::Extern(x));

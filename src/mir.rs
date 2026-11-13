@@ -1068,7 +1068,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         .map(|x| Extern {
             name: x.name.clone(),
             header: x.header.clone(),
-            params: x.sig.params.iter().map(c_param).collect(),
+            // A value is told apart by what it takes: `const`, and nothing.
+            params: if x.value { vec!["const"] } else { x.sig.params.iter().map(c_param).collect() },
             ret: c_type(&x.sig.ret),
         })
         .collect();
@@ -2477,6 +2478,8 @@ impl<'a> Lower<'a> {
                 self.read_as(place, &self.ty(e))
             }
             ExprKind::Field { base, .. } => match info.res.get(&(self.inst, id(e))) {
+                // A value of a C header is read where it is used.
+                Some(Res::Extern(x)) => self.finish_call(Callee::Extern(*x), Vec::new(), Vec::new(), span),
                 Some(Res::Variant(en, v)) => Operand::Const(Value::Enum(*en, *v, Vec::new())),
                 Some(Res::Field(_)) => {
                     let place = self.place(e);

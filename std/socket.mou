@@ -1,7 +1,8 @@
 // The functions of the system that `std.net` is made of. Nothing here
 // creates a value: whoever calls brings the arrays that are filled.
 //
-// The numbers are the ones of Linux.
+// The numbers the system gives names to are read from its header. The
+// shape of an address is the one of Linux.
 @profile(system)
 
 import c "sys/socket.h" as sys {
@@ -15,14 +16,20 @@ import c "sys/socket.h" as sys {
     fn setsockopt(fd: i32, level: i32, name: i32, value: [i32], len: u32) -> i32
     fn getsockname(fd: i32, addr: mut [u8], len: mut [u32]) -> i32
     fn shutdown(fd: i32, how: i32) -> i32
+    @value fn AF_INET() -> i32
+    @value fn SOCK_STREAM() -> i32
+    @value fn SOL_SOCKET() -> i32
+    @value fn SO_REUSEADDR() -> i32
+    @value fn MSG_NOSIGNAL() -> i32
+    @value fn SHUT_WR() -> i32
 }
 import c "unistd.h" as unix { fn close(fd: i32) -> i32 }
 
 /// A socket for TCP over IPv4, or a negative number.
-pub fn open() -> int { unsafe { sys.socket(2, 1, 0) as int } }
+pub fn open() -> int { unsafe { sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0) as int } }
 
 /// Lets the port be taken again right after the program that had it ends.
-pub fn reuse(fd: int, one: [i32]) -> bool { unsafe { sys.setsockopt(fd as i32, 1, 2, one, 4) == 0 } }
+pub fn reuse(fd: int, one: [i32]) -> bool { unsafe { sys.setsockopt(fd as i32, sys.SOL_SOCKET, sys.SO_REUSEADDR, one, 4) == 0 } }
 
 pub fn bind(fd: int, addr: [u8]) -> bool { unsafe { sys.bind(fd as i32, addr, 16) == 0 } }
 
@@ -36,7 +43,7 @@ pub fn connect(fd: int, addr: [u8]) -> bool { unsafe { sys.connect(fd as i32, ad
 
 /// Sends the first `n` bytes: how many went out, or a negative number.
 /// Writing to a connection the other side closed is an error, not a signal.
-pub fn send(fd: int, data: [u8], n: usize) -> int { unsafe { sys.send(fd as i32, data, n, 16384) as int } }
+pub fn send(fd: int, data: [u8], n: usize) -> int { unsafe { sys.send(fd as i32, data, n, sys.MSG_NOSIGNAL) as int } }
 
 /// Waits for bytes and leaves them in `data`: how many came, 0 when the
 /// other side closed, or a negative number.
@@ -46,6 +53,6 @@ pub fn recv(fd: int, data: mut [u8]) -> int { unsafe { sys.recv(fd as i32, mut d
 pub fn name(fd: int, addr: mut [u8], len: mut [u32]) -> bool { unsafe { sys.getsockname(fd as i32, mut addr, mut len) == 0 } }
 
 /// Says that nothing more will be sent.
-pub fn finish(fd: int) { unsafe { sys.shutdown(fd as i32, 1) } }
+pub fn finish(fd: int) { unsafe { sys.shutdown(fd as i32, sys.SHUT_WR) } }
 
 pub fn close(fd: int) { unsafe { unix.close(fd as i32) } }

@@ -1488,7 +1488,8 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                             int => format!("({})({v}).u.i", c_int(int)),
                         });
                     }
-                    let call = format!("{}({})", x.name, parts.join(", "));
+                    // A value of the header is read, not called.
+                    let call = if x.params == ["const"] { format!("({})", x.name) } else { format!("{}({})", x.name, parts.join(", ")) };
                     let r = match x.ret {
                         "unit" => format!("({call}, KUNIT)"),
                         "bool" => format!("kbool({call})"),

@@ -7,5 +7,6 @@ fn main() ! io.Error {
     io.print("{cmath.hyp(3.0, 4.0)} {cmath.larger(2.5, -7.0)} {cmath.span("aabbc", "ab")} {cmath.upper('q')} {cmath.number("-1234")}")?
     var whole = [0.0]
     let frac = cmath.parts(2.75, mut whole)
+    io.print("{cmath.pi()} {cmath.half_turn()} {cmath.family()} {cmath.end_of_file()} {cmath.room()}")?
     io.print("{whole[0]} {frac} {cmath.from("uno dos", ' ')} {cmath.from("uno", 'x')}")?
 }

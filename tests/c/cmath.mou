@@ -6,6 +6,11 @@ import c "math.h" as m
 import c "string.h" as cs
 import c "ctype.h" as ct
 import c "stdlib.h" as lib
+import c "sys/socket.h" as sock
+import c "stdio.h" as stdio {
+    @value fn EOF() -> i32
+    @value fn BUFSIZ() -> i32
+}
 
 pub fn hyp(a: f64, b: f64) -> f64 { unsafe { m.hypot(a, b) } }
 
@@ -21,3 +26,14 @@ pub fn number(s: str) -> i64 { unsafe { lib.strtol(s, None, 10) } }
 
 /// The text from the first `c` on, when there is one.
 pub fn from(s: str, c: char) -> str? { unsafe { cs.strchr(s, c as i32) } }
+
+/// Numbers the headers name.
+pub fn pi() -> f64 { unsafe { m.M_PI } }
+
+pub fn half_turn() -> f64 { unsafe { m.M_PI * 0.5 + m.M_PI_2 } }
+
+pub fn family() -> bool { unsafe { sock.AF_INET == sock.PF_INET && sock.SOCK_STREAM > 0 } }
+
+pub fn end_of_file() -> i32 { unsafe { stdio.EOF } }
+
+pub fn room() -> bool { unsafe { stdio.BUFSIZ >= 256 } }

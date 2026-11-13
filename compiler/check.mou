@@ -91,7 +91,9 @@ pub enum Global {
 
 pub enum AliasState { Todo(int), Busy, Done(types.Ty) }
 
-pub struct Extern { name: str, header: str, sig: types.Sig }
+// `value` is for a value of the header (a constant or a macro that is a
+// number), declared with `@value`: it is read, not called.
+pub struct Extern { name: str, header: str, sig: types.Sig, value: bool }
 
 struct GlobalEntry { module: int, name: str, what: Global }
 
@@ -1234,6 +1236,25 @@ impl Checker {
                         self.err(at, "`{f.name}` is a C function: it is declared with its parameters and its result, and nothing else")
                         continue
                     }
+                    var value = false
+                    for a in d.attrs {
+                        if a.name == "value" { value = true }
+                    }
+                    if value {
+                        var fine = f.params.len == 0
+                        match f.ret {
+                            Some(t) => {
+                                if !c_plain(self.resolve(t, at)) { fine = false }
+                            }
+                            None => {
+                                fine = false
+                            }
+                        }
+                        if !fine {
+                            self.err(at, "`{f.name}` is a value of C: it is declared as `@value fn {f.name}() -> T`, where `T` is the type of a number or `bool`")
+                            continue
+                        }
+                    }
                     var params: [types.ParamSig] = []
                     for p in f.params {
                         var ty = types.Ty.Unknown
@@ -1270,7 +1291,7 @@ impl Checker {
                     }
                     if !c_plain(ret) && !is_unit(ret) && !textual && !is_address(ret) && !self.is_cstruct(ret) { self.err(at, "the result of `{f.name}`: {only}") }
                     self.set_extern_id(module, alias, f.name, self.externs.len as int)
-                    self.externs.push(Extern(f.name, header, types.Sig(params, ret)))
+                    self.externs.push(Extern(f.name, header, types.Sig(params, ret), value))
                 }
                 _ => self.err(at, "only functions can be declared for a C header")
             }
@@ -4570,7 +4591,27 @@ impl Checker {
                     }
                 }
             }
-            parser.Kind.Field(base, name) => self.field(e, base, name, at)
+            parser.Kind.Field(base, name) => {
+                // A value of a C header: `m.M_PI`.
+                match base.kind {
+                    parser.Kind.Name(b) => {
+                        if !self.has_local(b) {
+                            let x = self.extern_id(b, name)
+                            if x >= 0 {
+                                if !self.externs[x].value {
+                                    self.err(at, "`{b}.{name}` is a C function: it is called, as in `{b}.{name}(...)`")
+                                    return types.Ty.Unknown
+                                }
+                                if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a value of C, which the compiler cannot check: read it inside `unsafe {{ }}`") }
+                                self.set_res(e, Res.Extern(x))
+                                return self.externs[x].sig.ret
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                self.field(e, base, name, at)
+            }
             parser.Kind.Try(inner) => {
                 let t = self.expr(inner)
                 var ret = types.Ty.Unit
@@ -5343,7 +5384,11 @@ impl Checker {
             let b = base_name
             let x = self.extern_id(b, name)
             if x >= 0 {
-                if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`") }
+                if self.externs[x].value {
+                    self.err(at, "`{b}.{name}` is a value of C, not a function: write it without `()`")
+                } else {
+                    if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`") }
+                }
                 self.set_res(e, Res.Extern(x))
                 let sig = self.externs[x].sig
                 let ret = self.apply(sig, args, at)

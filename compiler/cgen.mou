@@ -2327,7 +2327,8 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                 }
                             }
                         }
-                        let call = "{ext.name}({text.join(parts, ", ")})"
+                        // A value of the header is read, not called.
+                        let call = if ext.params.len == 1 && ext.params[0] == "const" { "({ext.name})" } else { "{ext.name}({text.join(parts, ", ")})" }
                         var r = "kint((i128)({call}))"
                         if ext.ret == "unit" { r = "({call}, KUNIT)" }
                         if ext.ret == "bool" { r = "kbool({call})" }
