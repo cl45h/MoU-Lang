@@ -170,6 +170,34 @@ pub fn mix(n: i64) -> i64 {
 }
 
 /// Runs a function of a built-in module.
+/// Runs a program to its end with some text as its input, and gives what
+/// it wrote. A program that ends with a status other than 0 is an error
+/// that says the first line it wrote to the error output.
+pub fn run_program(program: &str, args: &[String], input: &str) -> std::io::Result<String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    // On its own thread, so that a program that writes before it has
+    // read everything does not wait for ever.
+    let stdin = child.stdin.take();
+    let text = input.to_string();
+    let writer = std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+    });
+    let done = child.wait_with_output()?;
+    let _ = writer.join();
+    if !done.status.success() {
+        let said = String::from_utf8_lossy(&done.stderr);
+        let why = match said.lines().find(|l| !l.trim().is_empty()) {
+            Some(line) => line.trim().to_string(),
+            None => format!("status {}", done.status.code().unwrap_or(-1)),
+        };
+        return Err(std::io::Error::other(format!("`{program}` failed: {why}")));
+    }
+    String::from_utf8(done.stdout).map_err(|_| std::io::Error::other("stream did not contain valid UTF-8"))
+}
+
 fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, String> {
     use std::io::BufRead;
     let text = |k: usize| match args.get(k) {
@@ -235,6 +263,18 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         }
         "io.read_file" => done(std::fs::read_to_string(&*text(0)?).map(|s| Value::Str(s.into()))),
         "io.write_file" => done(std::fs::write(&*text(0)?, text(1)?.as_bytes()).map(|()| Value::Unit)),
+        "io.env" => match std::env::var(&*text(0)?) {
+            Ok(v) => Value::Some(Box::new(Value::Str(v.into()))),
+            Err(_) => Value::None,
+        },
+        "io.run" => {
+            let _ = out.flush();
+            let given: Vec<String> = items(1)?.iter().map(|v| match v {
+                Value::Str(s) => s.to_string(),
+                _ => String::new(),
+            }).collect();
+            done(run_program(&text(0)?, &given, &text(2)?).map(|s| Value::Str(s.into())))
+        }
         "io.args" => Value::Array(Rc::new(ARGS.with(|a| a.borrow().iter().map(|s| Value::Str(s.as_str().into())).collect()))),
         "raw.concat" => {
             let mut s = String::new();

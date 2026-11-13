@@ -1,0 +1,22 @@
+import std.io
+
+// Running a program: what it writes comes back, and what goes wrong says why.
+
+fn show(program: str, args: [str], input: str) -> str {
+    let out = io.run(program, args, input) catch e { return "error: {e}" }
+    "ok: {out.len} <{out}>"
+}
+
+fn main() ! io.Error {
+    io.print(show("cat", [], "hola\nñandú\n"))?
+    io.print(show("tr", ["a-z", "A-Z"], "grita"))?
+    io.print(show("sh", ["-c", "echo uno; echo dos >&2; exit 3"], ""))?
+    io.print(show("sh", ["-c", "exit 4"], ""))?
+    io.print(show("no-such-program-of-mou", [], ""))?
+    io.print(show("true", [], ""))?
+    let big = io.run("sh", ["-c", "head -c 300000 /dev/zero | tr '\\0' x"], "")?
+    io.print("{big.len}")?
+    let home = io.env("HOME")
+    let none = io.env("MOU_NO_SUCH_VARIABLE")
+    io.print("{home != None} {none}")?
+}

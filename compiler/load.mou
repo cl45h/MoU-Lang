@@ -5,6 +5,7 @@
 
 import std.io
 import std.text
+import bind
 import lexer
 import parser
 
@@ -206,6 +207,23 @@ fn in_decl(d: parser.Decl, out: mut [parser.Decl]) {
 }
 
 impl Loader {
+    // The functions a header of C declares, as the declarations of an
+    // `import c` block.
+    fn header(mut self, path: str, alias: str, origin: int) -> [parser.Decl] {
+        let lines = bind.functions(path) catch e {
+            self.errors.push(lexer.Error(e.msg, origin, 1))
+            return []
+        }
+        let block = "import c \"{path}\" as {alias} {{\n{text.join(lines, "\n")}\n}}\n"
+        let read = parser.parse_from(block, origin, self.next_id) catch e {
+            self.errors.push(lexer.Error("the header `{path}` cannot be used: {e.msg}", origin, 1))
+            return []
+        }
+        self.next_id = read.exprs
+        if read.imports.len == 0 { return [] }
+        read.imports[0].decls
+    }
+
     // Parses a module and, first, the modules it imports. Returns its number.
     fn module(mut self, name: str, path: str, src: str) -> int {
         let id = self.names.len as int
@@ -250,7 +268,13 @@ impl Loader {
             }
             var target: int? = None
             if !foreign && !has(BUILTIN, imp.path) { target = self.import_module(imp.path, origin) }
-            imports.push(ModImport(alias, imp.path, target, imp.origin, imp.decls))
+            // A header of C without its functions written out is read:
+            // the C compiler says what it declares.
+            var decls = imp.decls
+            var from_c = false
+            if let Some(o) = imp.origin { from_c = o == "c" }
+            if from_c && decls.len == 0 { decls = self.header(imp.path, alias, origin) }
+            imports.push(ModImport(alias, imp.path, target, imp.origin, decls))
             kept.push(parser.Import(imp.origin, imp.path, imp.alias, []))
         }
         if id == 0 {

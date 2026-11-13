@@ -5160,6 +5160,8 @@ fn native(module: str, name: str) -> Native? {
         if name == "read_file" { return Some(Native("io.read_file", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Str)))) }
         if name == "write_file" { return Some(Native("io.write_file", types.Sig([param("path", types.Ty.Str), param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "args" { return Some(Native("io.args", types.Sig([], types.Ty.Slice(types.Ty.Str)))) }
+        if name == "env" { return Some(Native("io.env", types.Sig([param("name", types.Ty.Str)], types.Ty.Optional(types.Ty.Str)))) }
+        if name == "run" { return Some(Native("io.run", types.Sig([param("program", types.Ty.Str), param("args", types.Ty.Slice(types.Ty.Str)), param("input", types.Ty.Str)], fails_io(types.Ty.Str)))) }
     }
     if module == "std.task" {
         if name == "cancelled" { return Some(Native("task.cancelled", types.Sig([], types.Ty.Bool))) }

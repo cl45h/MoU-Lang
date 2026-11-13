@@ -1,0 +1,573 @@
+// The functions a header of C declares, as declarations of Mou.
+//
+// The header goes through the preprocessor of the C compiler, and what
+// comes out is read here: the functions it declares, and the names it
+// gives to types. A function whose types Mou can pass is written as a
+// declaration; the others are left out, with the reason. It follows
+// `src/bind.rs` step by step, and gives the same text.
+
+import std.hash
+import std.io
+import std.text
+import lexer
+
+// What a type of C is, as far as a declaration of Mou can say it.
+enum CType {
+    Void
+    // A number or a `bool`, by its name in Mou.
+    Scalar(str)
+    // A pointer: what it points to, and whether that is `const`.
+    Pointer(CType, bool)
+    // `char`, which is a number by value and text behind a pointer.
+    Char
+    // A struct, a union or anything else that is not passed as a number.
+    Other(str)
+}
+
+fn is_char_type(t: CType) -> bool {
+    match t {
+        CType.Char => true
+        _ => false
+    }
+}
+
+fn word_char(c: char) -> bool { text.is_alpha(c) || text.is_digit(c) || c == '_' }
+
+fn piece(cs: [char], from: int, to: int) -> str {
+    var out: [char] = []
+    for k in from..to { out.push(cs[k]) }
+    text.from_chars(out)
+}
+
+fn tokens(source: str) -> [str] {
+    var out: [str] = []
+    for row in text.split(source, '\n') {
+        let cs = text.chars(row)
+        let n = cs.len as int
+        // The preprocessor notes where each line comes from.
+        var first = 0
+        while first < n && (cs[first] == ' ' || cs[first] == '\t' || cs[first] == '\r') { first += 1 }
+        if first < n && cs[first] == '#' { continue }
+        var i = 0
+        while i < n {
+            let c = cs[i]
+            if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
+                i += 1
+            } else if word_char(c) {
+                let start = i
+                while i < n && (word_char(cs[i]) || cs[i] == '.') { i += 1 }
+                out.push(piece(cs, start, i))
+            } else if c == '"' || c == '\'' {
+                let start = i
+                i += 1
+                while i < n && cs[i] != c {
+                    if cs[i] == '\\' { i += 2 } else { i += 1 }
+                }
+                i += 1
+                if i > n { i = n }
+                out.push(piece(cs, start, i))
+            } else if i + 2 < n && c == '.' && cs[i + 1] == '.' && cs[i + 2] == '.' {
+                out.push("...")
+                i += 3
+            } else {
+                out.push(text.from_chars([c]))
+                i += 1
+            }
+        }
+    }
+    out
+}
+
+fn first_is(words: [str], w: str) -> bool { words.len > 0 && words[0] == w }
+
+fn last_is(words: [str], w: str) -> bool { words.len > 0 && words[words.len - 1] == w }
+
+fn has_word(words: [str], w: str) -> bool {
+    for x in words {
+        if x == w { return true }
+    }
+    false
+}
+
+// The declarations at the top: each one up to its `;`, without what is
+// between braces. A function with a body is not a declaration to keep.
+fn declarations(toks: [str]) -> [[str]] {
+    var out: [[str]] = []
+    var cur: [str] = []
+    var i = 0
+    let n = toks.len as int
+    while i < n {
+        let t = toks[i]
+        if t == ";" {
+            out.push(cur)
+            cur = []
+        } else if t == "{{" {
+            var depth = 0
+            while i < n {
+                if toks[i] == "{{" { depth += 1 }
+                if toks[i] == "}}" { depth -= 1 }
+                if depth == 0 { break }
+                i += 1
+            }
+            // After the body of a function nothing follows.
+            if last_is(cur, ")") && !first_is(cur, "typedef") {
+                cur = []
+            } else {
+                cur.push("{{}}")
+            }
+        } else {
+            cur.push(t)
+        }
+        i += 1
+    }
+    out
+}
+
+let GROUPS: [str] = ["__attribute__", "__attribute", "__asm__", "__asm", "asm", "__declspec", "_Alignas", "__nonnull", "__wur", "__THROW"]
+
+let SKIPPED: [str] = [
+    "extern", "static", "inline", "__inline", "__inline__", "__extension__", "_Noreturn", "register", "volatile", "__volatile__",
+    "restrict", "__restrict", "__restrict__", "__const", "_Nullable", "_Nonnull", "_Null_unspecified", "__signed__"
+]
+
+// Takes out what says nothing about the types: attributes, the name the
+// linker uses, and the words about storage and inlining.
+fn plain(decl: [str]) -> [str] {
+    var out: [str] = []
+    var i = 0
+    let n = decl.len as int
+    while i < n {
+        let t = decl[i]
+        if has_word(GROUPS, t) && i + 1 < n && decl[i + 1] == "(" {
+            var depth = 0
+            i += 1
+            while i < n {
+                if decl[i] == "(" { depth += 1 }
+                if decl[i] == ")" { depth -= 1 }
+                i += 1
+                if depth == 0 { break }
+            }
+            continue
+        }
+        if t == "__const" {
+            out.push("const")
+        } else if t == "__signed__" {
+            out.push("signed")
+        } else if !has_word(SKIPPED, t) {
+            out.push(t)
+        }
+        i += 1
+    }
+    out
+}
+
+struct Reader {
+    typedefs: hash.Table[str, CType]
+    // The size in bytes of `long` on this machine.
+    long: int
+}
+
+let BASIC: [str] = ["void", "char", "short", "int", "long", "signed", "unsigned", "float", "double", "_Bool", "bool"]
+
+// The words that are never the name of a parameter.
+let TYPE_WORDS: [str] = ["void", "char", "short", "int", "long", "signed", "unsigned", "float", "double", "_Bool"]
+
+fn part(words: [str], from: int, to: int) -> [str] {
+    var out: [str] = []
+    for k in from..to { out.push(words[k]) }
+    out
+}
+
+impl Reader {
+    // The type some words say, without a name among them.
+    fn ctype(self, words: [str]) -> CType {
+        var stars = 0
+        var first_star = words.len as int
+        for k in 0..(words.len as int) {
+            if words[k] == "*" {
+                stars += 1
+                if k < first_star { first_star = k }
+            }
+        }
+        var is_const = false
+        var base: [str] = []
+        for k in 0..first_star {
+            if words[k] == "const" { is_const = true } else { base.push(words[k]) }
+        }
+        var t = self.base(base)
+        for k in 0..stars { t = CType.Pointer(t, k == 0 && is_const) }
+        t
+    }
+
+    fn base(self, words: [str]) -> CType {
+        if words.len == 0 { return CType.Other("nothing") }
+        if words[0] == "struct" || words[0] == "union" { return CType.Other(text.join(words, " ")) }
+        if words[0] == "enum" { return CType.Scalar("i32") }
+        if words.len == 1 {
+            if let Some(t) = self.typedefs.get(words[0]) { return t }
+        }
+        var longs = 0
+        for w in words {
+            if !has_word(BASIC, w) { return CType.Other(text.join(words, " ")) }
+            if w == "long" { longs += 1 }
+        }
+        let unsigned = has_word(words, "unsigned")
+        if has_word(words, "void") { return CType.Void }
+        if has_word(words, "_Bool") || has_word(words, "bool") { return CType.Scalar("bool") }
+        if has_word(words, "float") { return CType.Scalar("f32") }
+        if has_word(words, "double") {
+            if longs > 0 { return CType.Other("long double") }
+            return CType.Scalar("f64")
+        }
+        if has_word(words, "char") {
+            if has_word(words, "signed") { return CType.Scalar("i8") }
+            if unsigned { return CType.Scalar("u8") }
+            return CType.Char
+        }
+        if has_word(words, "short") {
+            if unsigned { return CType.Scalar("u16") }
+            return CType.Scalar("i16")
+        }
+        if longs >= 2 || (longs == 1 && self.long == 8) {
+            if unsigned { return CType.Scalar("u64") }
+            return CType.Scalar("i64")
+        }
+        if unsigned { return CType.Scalar("u32") }
+        CType.Scalar("i32")
+    }
+
+    // `typedef` gives a name to a type: the ones that are a number or a
+    // pointer are followed, the rest are remembered as something else.
+    fn typedef(mut self, decl: [str]) {
+        if decl.len < 2 { return }
+        let words = part(decl, 1, decl.len as int)
+        let name = words[words.len - 1]
+        // A function or an array type has no simple reading.
+        if has_word(words, "(") || has_word(words, "[") {
+            let what = if has_word(words, "(") { "the function type" } else { "the array type" }
+            self.typedefs.set(name, CType.Other("{what} {name}"))
+            return
+        }
+        var t = self.ctype(part(words, 0, words.len as int - 1))
+        if has_word(words, "{{}}") {
+            t = CType.Other(name)
+            for w in words {
+                if w == "*" { t = CType.Pointer(t, false) }
+            }
+        }
+        // A name for a struct says more than the struct does.
+        match t {
+            CType.Other(what) => {
+                if text.starts_with(what, "struct ") || text.starts_with(what, "union ") { t = CType.Other(name) }
+            }
+            _ => {}
+        }
+        self.typedefs.set(name, t)
+    }
+}
+
+// A declaration that was written, or the reason there is none.
+struct Made { ok: bool, text: str }
+
+fn good(line: str) -> Made { Made(true, line) }
+
+fn bad(why: str) -> Made { Made(false, why) }
+
+// How a parameter is written in Mou, or why it cannot be.
+fn param_type(t: CType) -> Made {
+    match t {
+        CType.Scalar(s) => good(s)
+        CType.Char => good("i8")
+        CType.Pointer(inner, is_const) => {
+            match inner {
+                CType.Char => {
+                    if is_const { good("str") } else { good("mut [u8]") }
+                }
+                CType.Scalar(s) => {
+                    if s == "bool" { return good("ptr?") }
+                    if is_const { good("[{s}]") } else { good("mut [{s}]") }
+                }
+                _ => good("ptr?")
+            }
+        }
+        CType.Void => bad("a parameter of type `void`")
+        CType.Other(what) => bad("`{what}` passed by value")
+    }
+}
+
+fn result_type(t: CType) -> Made {
+    match t {
+        CType.Void => good("")
+        CType.Scalar(s) => good(" -> {s}")
+        CType.Char => good(" -> i8")
+        CType.Pointer(inner, _) => {
+            if is_char_type(inner) { good(" -> str?") } else { good(" -> ptr?") }
+        }
+        CType.Other(what) => bad("it gives `{what}` by value")
+    }
+}
+
+fn after(t: str, n: int) -> str {
+    let cs = text.chars(t)
+    piece(cs, n, cs.len as int)
+}
+
+// A name of C as a name of Mou.
+fn mou_name(name: str, k: int) -> str {
+    let cs = text.chars(name)
+    var from = 0
+    while from < (cs.len as int) && cs[from] == '_' { from += 1 }
+    let n = piece(cs, from, cs.len as int)
+    if from >= (cs.len as int) || !text.is_alpha(cs[from]) { return "a{k}" }
+    if has_word(lexer.KEYWORDS, n) || n == "self" || n == "str" || n == "int" || n == "bool" || n == "ptr" { return "{n}_" }
+    n
+}
+
+// A function a header declares: its name, and its declaration or the
+// reason it has none.
+struct Found { name: str, made: Made }
+
+struct ParamText { name: str, ty: str }
+
+// The declaration in Mou of a function of C, or why there is none.
+fn function(r: Reader, decl: [str]) -> Found? {
+    var open = -1
+    let n = decl.len as int
+    for k in 0..n {
+        if open < 0 && decl[k] == "(" { open = k }
+    }
+    if open < 2 { return None }
+    let name = decl[open - 1]
+    let head = text.chars(name)
+    if head.len == 0 || !(text.is_alpha(head[0]) || head[0] == '_') { return None }
+    // The parameters end where their parenthesis closes.
+    var depth = 0
+    var close = open
+    for k in open..n {
+        if decl[k] == "(" { depth += 1 }
+        if decl[k] == ")" { depth -= 1 }
+        if depth == 0 {
+            close = k
+            break
+        }
+    }
+    for k in 0..(open - 1) {
+        if decl[k] == "(" || decl[k] == "=" || decl[k] == "{{}}" { return None }
+    }
+    Some(Found(name, declaration(r, decl, name, open, close)))
+}
+
+fn declaration(r: Reader, decl: [str], name: str, open: int, close: int) -> Made {
+    if has_word(lexer.KEYWORDS, name) { return bad("its name is a word of the language") }
+    if close + 1 != (decl.len as int) { return bad("it gives a function or an array") }
+    let ret = result_type(r.ctype(part(decl, 0, open - 1)))
+    if !ret.ok { return ret }
+    let inner = part(decl, open + 1, close)
+    var params: [[str]] = []
+    var depth = 0
+    var start = 0
+    for i in 0..(inner.len as int) {
+        let t = inner[i]
+        if t == "(" || t == "[" { depth += 1 }
+        if t == ")" || t == "]" { depth -= 1 }
+        if t == "," && depth == 0 {
+            params.push(part(inner, start, i))
+            start = i + 1
+        }
+    }
+    if start < (inner.len as int) { params.push(part(inner, start, inner.len as int)) }
+    if params.len == 1 && params[0].len == 1 && params[0][0] == "void" { params = [] }
+    var out: [ParamText] = []
+    for k in 0..(params.len as int) {
+        let p = params[k]
+        if has_word(p, "...") { return bad("it takes any number of arguments") }
+        if has_word(p, "(") { return bad("it takes a function") }
+        // `int xs[4]` is a pointer when it is a parameter.
+        let array = has_word(p, "[")
+        var words: [str] = []
+        for t in p {
+            if t == "[" { break }
+            words.push(t)
+        }
+        // The last word is the name, when the words before it are a type.
+        var pname = "a{k}"
+        var named = false
+        if words.len > 1 {
+            let w = words[words.len - 1]
+            let before = words[words.len - 2]
+            named = w != "*" && w != "const" && !r.typedefs.has(w) && !has_word(TYPE_WORDS, w) && !(before == "struct" || before == "union" || before == "enum")
+        }
+        if named {
+            pname = mou_name(words[words.len - 1], k)
+            words = part(words, 0, words.len as int - 1)
+        }
+        if array { words.push("*") }
+        let ty = param_type(r.ctype(words))
+        if !ty.ok { return ty }
+        out.push(ParamText(pname, ty.text))
+    }
+    // Two parameters cannot share a name.
+    for k in 0..(out.len as int) {
+        var again = false
+        for j in 0..k {
+            if out[j].name == out[k].name { again = true }
+        }
+        if again { out[k].name = "{out[k].name}{k}" }
+    }
+    var shown: [str] = []
+    for p in out { shown.push("{p.name}: {p.ty}") }
+    good("fn {name}({text.join(shown, ", ")}){ret.text}")
+}
+
+// Whether `a` comes before `b`, byte by byte.
+fn before(a: str, b: str) -> bool {
+    let x = text.bytes(a)
+    let y = text.bytes(b)
+    var k: usize = 0
+    while k < x.len && k < y.len {
+        if x[k] != y[k] { return x[k] < y[k] }
+        k += 1
+    }
+    x.len < y.len
+}
+
+fn sorted(fns: [Found]) -> [Found] {
+    // A merge sort, which keeps the order of what is equal.
+    if fns.len < 2 { return fns }
+    let mid = fns.len as int / 2
+    var left: [Found] = []
+    var right: [Found] = []
+    for k in 0..(fns.len as int) {
+        if k < mid { left.push(fns[k]) } else { right.push(fns[k]) }
+    }
+    left = sorted(left)
+    right = sorted(right)
+    var out: [Found] = []
+    var i = 0
+    var j = 0
+    while i < (left.len as int) && j < (right.len as int) {
+        if before(right[j].name, left[i].name) {
+            out.push(right[j])
+            j += 1
+        } else {
+            out.push(left[i])
+            i += 1
+        }
+    }
+    while i < (left.len as int) {
+        out.push(left[i])
+        i += 1
+    }
+    while j < (right.len as int) {
+        out.push(right[j])
+        j += 1
+    }
+    out
+}
+
+// What a header declares: the declarations in Mou of the functions that
+// can be called, and the others with the reason they are left out.
+pub struct Declared { good: [str], left: [str] }
+
+fn declared(preprocessed: str) -> Declared {
+    var r = Reader(hash.Table[str, CType].new(), 8)
+    var fns: [Found] = []
+    var seen = hash.Table[str, bool].new()
+    for raw in declarations(tokens(preprocessed)) {
+        let decl = plain(raw)
+        // The line this module adds to ask for the size of `long`.
+        if decl.len == 2 && decl[0] == "mou_long_size" {
+            r.long = match text.parse_int(decl[1]) {
+                Some(size) => size
+                None => 8
+            }
+            continue
+        }
+        if first_is(decl, "typedef") {
+            r.typedef(decl)
+            continue
+        }
+        match function(r, decl) {
+            Some(f) => {
+                // Names that start with `_` belong to the library itself.
+                if text.starts_with(f.name, "_") || seen.has(f.name) { continue }
+                seen.set(f.name, true)
+                fns.push(f)
+            }
+            None => {}
+        }
+    }
+    var out = Declared([], [])
+    for f in sorted(fns) {
+        if f.made.ok { out.good.push(f.made.text) } else { out.left.push("{f.name}: {f.made.text}") }
+    }
+    out
+}
+
+fn header_char(c: char) -> bool { text.is_alpha(c) || text.is_digit(c) || c == '_' || c == '.' || c == '/' || c == '+' || c == '-' }
+
+pub struct Failed { msg: str }
+
+// What the preprocessor of the C compiler gives for a header.
+fn preprocessed(header: str) -> str ! Failed {
+    // The name goes into a line of C: only what a name of a header has.
+    var fine = header.len > 0
+    for c in text.chars(header) {
+        if !header_char(c) { fine = false }
+    }
+    if !fine { return Failed("`{header}` is not the name of a header") }
+    let cc = match io.env("CC") {
+        Some(named) => named
+        None => "cc"
+    }
+    let source = "#include <{header}>\nmou_long_size __SIZEOF_LONG__;\n"
+    let out = io.run(cc, ["-E", "-P", "-x", "c", "-"], source) catch e { return Failed("cannot read the header `{header}`: {e}") }
+    out
+}
+
+// The declarations of the functions of a header, as they are written
+// inside an `import c` block.
+pub fn functions(header: str) -> [str] ! Failed {
+    let source = preprocessed(header)?
+    declared(source).good
+}
+
+// What `mou bind <header> [name]` prints.
+pub fn bind(header: str, alias: str) -> [str] ! Failed {
+    var name = alias
+    if name == "" {
+        var stem: [char] = []
+        var from = 0
+        let cs = text.chars(header)
+        for k in 0..(cs.len as int) {
+            if cs[k] == '/' { from = k + 1 }
+        }
+        for k in from..(cs.len as int) {
+            if cs[k] == '.' { break }
+            if text.is_alpha(cs[k]) || text.is_digit(cs[k]) { stem.push(lower(cs[k])) } else { stem.push('_') }
+        }
+        name = mou_name(text.from_chars(stem), 0)
+    }
+    let source = preprocessed(header)?
+    let d = declared(source)
+    var out: [str] = []
+    out.push("// Written by `mou bind {header}`: {d.good.len} functions, {d.left.len} left out.")
+    out.push("// A pointer to numbers is written as an array (`[T]`, or `mut [T]` when C can")
+    out.push("// write through it), text as `str`, and any other pointer as `ptr?`. What a")
+    out.push("// pointer is for is not in the header: check the ones you use.")
+    out.push("@profile(system)")
+    out.push("")
+    out.push("import c \"{header}\" as {name} {{")
+    for g in d.good { out.push("    {g}") }
+    out.push("}}")
+    if d.left.len > 0 {
+        out.push("")
+        out.push("// Left out:")
+        for l in d.left { out.push("//   {l}") }
+    }
+    out
+}
+
+fn lower(c: char) -> char {
+    if c >= 'A' && c <= 'Z' { ((c as int) + 32) as char } else { c }
+}

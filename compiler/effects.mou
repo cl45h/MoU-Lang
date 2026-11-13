@@ -1535,6 +1535,7 @@ impl Walk {
                         if name == "task.wait" { notes.push(Note(BLOCK, "`wait` waits for a task")) }
                         if name == "task.close" { notes.push(Note(BLOCK, "a `scope` waits for its tasks where it ends")) }
                         if name == "io.read_line" { notes.push(Note(BLOCK, "`io.read_line` waits for input")) }
+                        if name == "io.run" { notes.push(Note(BLOCK, "`io.run` waits for the program it runs")) }
                         if name == "chan.new" {
                             notes.push(Note(ALLOC, "a channel is created on the heap"))
                             var cap = top_range()
@@ -1556,7 +1557,7 @@ impl Walk {
                         }
                         if name == "capture.close" { notes.push(Note(ALLOC, "the lines printed in a `with io` block are kept on the heap")) }
                         if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
-                        if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
+                        if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "io.env" || name == "io.run" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
                             let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }
                             notes.push(Note(ALLOC, "{shown} creates its result on the heap"))
                         }

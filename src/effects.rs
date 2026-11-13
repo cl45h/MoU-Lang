@@ -984,6 +984,7 @@ impl Walk<'_> {
                             "task.wait" => notes.push((BLOCK, "`wait` waits for a task".into())),
                             "task.close" => notes.push((BLOCK, "a `scope` waits for its tasks where it ends".into())),
                             "io.read_line" => notes.push((BLOCK, "`io.read_line` waits for input".into())),
+                            "io.run" => notes.push((BLOCK, "`io.run` waits for the program it runs".into())),
                             "chan.new" => {
                                 notes.push((ALLOC, "a channel is created on the heap".into()));
                                 let iv = args.first().map_or(TOP, |a| st.val(a).iv);
@@ -1012,7 +1013,7 @@ impl Walk<'_> {
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
                         }
-                        if matches!(*name, "io.read_line" | "io.read_file" | "io.args" | "raw.concat" | "raw.from_chars" | "path.join") {
+                        if matches!(*name, "io.read_line" | "io.read_file" | "io.args" | "io.env" | "io.run" | "raw.concat" | "raw.from_chars" | "path.join") {
                             let shown = if *name == "path.join" { "a call that returns `ref mut`".to_string() } else { format!("`{name}`") };
                             notes.push((ALLOC, format!("{shown} creates its result on the heap")));
                         }

@@ -135,6 +135,20 @@ impl Loader {
             } else {
                 self.import(&imp.path, origin)
             };
+            // A header of C without its functions written out is read:
+            // the C compiler says what it declares.
+            if imp.origin.as_deref() == Some("c") && imp.decls.is_empty() {
+                match crate::bind::functions(&imp.path) {
+                    Ok(lines) => {
+                        let block = format!("import c \"{}\" as {alias} {{\n{}\n}}\n", imp.path, lines.join("\n"));
+                        match parser::parse_file_at(&block, origin) {
+                            Ok(mut read) => imp.decls = read.imports.pop().map(|i| i.decls).unwrap_or_default(),
+                            Err(e) => self.errors.push(Error { msg: format!("the header `{}` cannot be used: {}", imp.path, e.msg), span: origin }),
+                        }
+                    }
+                    Err(msg) => self.errors.push(Error { msg, span: origin }),
+                }
+            }
             imports.push(ModImport { alias, path: imp.path.clone(), module, origin: imp.origin.clone(), decls: std::mem::take(&mut imp.decls) });
         }
         let profile = file.profile.clone();

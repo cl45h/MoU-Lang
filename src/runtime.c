@@ -11,6 +11,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__unix__) || defined(__APPLE__)
+#define KPOSIX 1
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char **environ;
+#endif
 
 /* A program that starts tasks is compiled with KTHREADS: the counts of
    references are then atomic, since a value can be shared between
@@ -1831,6 +1838,104 @@ static kv kio_write_file(kv path, kv text) {
     krelease(path);
     krelease(text);
     return r;
+}
+
+static kv kio_env(kv name) {
+    const char *v = getenv(kbytes(name));
+    krelease(name);
+    return v ? kbox(T_SOME, kstr(v, strlen(v))) : KNONE;
+}
+
+/* Runs a program to its end with some text as its input, and gives what
+   it wrote. Its input and its error output go through files of the
+   system, so that only one pipe is read here. */
+static kv kio_run(kv program, kv args, kv input) {
+#ifdef KPOSIX
+    fflush(stdout);
+    int64_t n = klen(args);
+    char **argv = (char **)calloc((size_t)n + 2, sizeof(char *));
+    FILE *in = tmpfile(), *err = tmpfile();
+    int out[2] = {-1, -1};
+    kv result;
+    if (!argv || !in || !err || pipe(out) != 0) {
+        result = kos_error();
+        goto done;
+    }
+    argv[0] = (char *)kbytes(program);
+    for (int64_t i = 0; i < n; i++) argv[i + 1] = (char *)kbytes(kelem(args.u.o, i));
+    fwrite(kbytes(input), 1, (size_t)klen(input), in);
+    fflush(in);
+    rewind(in);
+    posix_spawn_file_actions_t acts;
+    posix_spawn_file_actions_init(&acts);
+    posix_spawn_file_actions_adddup2(&acts, fileno(in), 0);
+    posix_spawn_file_actions_adddup2(&acts, out[1], 1);
+    posix_spawn_file_actions_adddup2(&acts, fileno(err), 2);
+    posix_spawn_file_actions_addclose(&acts, out[0]);
+    pid_t pid;
+    int failed = posix_spawnp(&pid, argv[0], &acts, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&acts);
+    close(out[1]);
+    out[1] = -1;
+    if (failed) {
+        errno = failed;
+        result = kos_error();
+        goto done;
+    }
+    ksb sb = {0};
+    char buf[4096];
+    ssize_t got;
+    while ((got = read(out[0], buf, sizeof buf)) > 0) ksb_put(&sb, buf, (size_t)got);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        /* The first line it wrote to the error output that says something. */
+        free(sb.p);
+        ksb why = {0};
+        ksb_str(&why, "`");
+        ksb_str(&why, argv[0]);
+        ksb_str(&why, "` failed: ");
+        rewind(err);
+        char line[1024];
+        bool said = false;
+        while (!said && fgets(line, sizeof line, err)) {
+            char *from = line;
+            while (*from == ' ' || *from == '\t') from++;
+            size_t len = strlen(from);
+            while (len > 0 && (from[len - 1] == '\n' || from[len - 1] == '\r' || from[len - 1] == ' ' || from[len - 1] == '\t')) len--;
+            if (len > 0) {
+                ksb_put(&why, from, len);
+                said = true;
+            }
+        }
+        if (!said) {
+            char num[40];
+            snprintf(num, sizeof num, "status %d", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+            ksb_str(&why, num);
+        }
+        result = kbox(T_ERR, ksb_done(&why));
+    } else if (!kutf8((const unsigned char *)sb.p, sb.len)) {
+        free(sb.p);
+        result = kfailed("stream did not contain valid UTF-8");
+    } else {
+        result = kbox(T_OK, ksb_done(&sb));
+    }
+done:
+    if (out[0] >= 0) close(out[0]);
+    if (out[1] >= 0) close(out[1]);
+    if (in) fclose(in);
+    if (err) fclose(err);
+    free(argv);
+    krelease(program);
+    krelease(args);
+    krelease(input);
+    return result;
+#else
+    krelease(program);
+    krelease(args);
+    krelease(input);
+    return kfailed("running a program is not supported on this system");
+#endif
 }
 
 static kv kio_args(void) {

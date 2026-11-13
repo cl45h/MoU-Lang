@@ -6,8 +6,6 @@
 //! declaration; the others are listed with the reason they are left out.
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 /// What a type of C is, as far as a declaration of Mou can say it.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,11 +32,11 @@ fn tokens(text: &str) -> Vec<String> {
         let mut i = 0;
         while i < cs.len() {
             let c = cs[i];
-            if c.is_whitespace() {
+            if c == ' ' || c == '\t' || c == '\r' || c == '\n' {
                 i += 1;
-            } else if c.is_alphanumeric() || c == '_' {
+            } else if c.is_ascii_alphanumeric() || c == '_' {
                 let start = i;
-                while i < cs.len() && (cs[i].is_alphanumeric() || cs[i] == '_' || cs[i] == '.') {
+                while i < cs.len() && (cs[i].is_ascii_alphanumeric() || cs[i] == '_' || cs[i] == '.') {
                     i += 1;
                 }
                 out.push(cs[start..i].iter().collect());
@@ -259,7 +257,7 @@ fn result_type(t: &CType) -> Result<String, String> {
 /// A name of C as a name of Mou.
 fn mou_name(name: &str, k: usize) -> String {
     let n = name.trim_start_matches('_');
-    if n.is_empty() || !n.chars().next().is_some_and(|c| c.is_alphabetic()) {
+    if n.is_empty() || !n.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
         return format!("a{k}");
     }
     if crate::lexer::KEYWORDS.contains(&n) || matches!(n, "self" | "str" | "int" | "bool" | "ptr") {
@@ -272,7 +270,7 @@ fn mou_name(name: &str, k: usize) -> String {
 fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, String>)> {
     let open = decl.iter().position(|t| t == "(")?;
     let name = decl.get(open.checked_sub(1)?)?.clone();
-    if !name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') || open < 2 {
+    if !name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') || open < 2 {
         return None;
     }
     // The parameters end where their parenthesis closes.
@@ -293,6 +291,9 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
         return None;
     }
     let made = (|| {
+        if crate::lexer::KEYWORDS.contains(&name.as_str()) {
+            return Err("its name is a word of the language".to_string());
+        }
         if close + 1 != decl.len() {
             return Err("it gives a function or an array".to_string());
         }
@@ -359,8 +360,10 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
     Some((name, made))
 }
 
-/// The text of the bindings of a header, from what the preprocessor gives.
-fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
+/// The functions a header declares, from what the preprocessor gives:
+/// the declarations in Mou of the ones that can be called, and the names
+/// of the others with the reason they are left out.
+fn declared(preprocessed: &str) -> (Vec<String>, Vec<(String, String)>) {
     let toks = tokens(preprocessed);
     let mut r = Reader { typedefs: HashMap::new(), long: 8 };
     let mut fns: Vec<(String, Result<String, String>)> = Vec::new();
@@ -385,8 +388,20 @@ fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
         fns.push((name, made));
     }
     fns.sort_by(|a, b| a.0.cmp(&b.0));
-    let good: Vec<&String> = fns.iter().filter_map(|(_, m)| m.as_ref().ok()).collect();
-    let left: Vec<(&String, &String)> = fns.iter().filter_map(|(n, m)| m.as_ref().err().map(|why| (n, why))).collect();
+    let mut good = Vec::new();
+    let mut left = Vec::new();
+    for (name, made) in fns {
+        match made {
+            Ok(line) => good.push(line),
+            Err(why) => left.push((name, why)),
+        }
+    }
+    (good, left)
+}
+
+/// The text of the bindings of a header, from what the preprocessor gives.
+fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
+    let (good, left) = declared(preprocessed);
     let mut out = String::new();
     out.push_str(&format!("// Written by `mou bind {header}`: {} functions, {} left out.\n", good.len(), left.len()));
     out.push_str("// A pointer to numbers is written as an array (`[T]`, or `mut [T]` when C can\n");
@@ -407,30 +422,31 @@ fn bindings(header: &str, alias: &str, preprocessed: &str) -> String {
     out
 }
 
-/// `mou bind <header> [name]`: prints the bindings, or says what failed.
-pub fn bind(header: &str, alias: Option<&str>) -> Result<String, String> {
+/// What the preprocessor of the C compiler gives for a header.
+fn preprocessed(header: &str) -> Result<String, String> {
+    // The name goes into a line of C: only what a name of a header has.
+    let fine = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '+' | '-');
+    if header.is_empty() || !header.chars().all(fine) {
+        return Err(format!("`{header}` is not the name of a header"));
+    }
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let stem = header.rsplit('/').next().unwrap_or(header).split('.').next().unwrap_or("c");
-    let stem: String = stem.chars().map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
-    let alias = alias.map(str::to_string).unwrap_or_else(|| mou_name(&stem, 0));
-    let mut child = Command::new(&cc)
-        .args(["-E", "-P", "-x", "c", "-"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot run the C compiler `{cc}`: {e}"))?;
+    let args: Vec<String> = ["-E", "-P", "-x", "c", "-"].iter().map(|s| s.to_string()).collect();
     let source = format!("#include <{header}>\nmou_long_size __SIZEOF_LONG__;\n");
-    // The compiler reads all of it before it writes, so this cannot block.
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(source.as_bytes()).map_err(|e| format!("cannot write to `{cc}`: {e}"))?;
-    }
-    let done = child.wait_with_output().map_err(|e| format!("cannot run `{cc}`: {e}"))?;
-    if !done.status.success() {
-        let why = String::from_utf8_lossy(&done.stderr);
-        return Err(format!("the C compiler cannot read `{header}`: {}", why.lines().next().unwrap_or("no reason given")));
-    }
-    Ok(bindings(header, &alias, &String::from_utf8_lossy(&done.stdout)))
+    crate::interp::run_program(&cc, &args, &source).map_err(|e| format!("cannot read the header `{header}`: {e}"))
+}
+
+/// The declarations of the functions of a header, as they are written
+/// inside an `import c` block.
+pub fn functions(header: &str) -> Result<Vec<String>, String> {
+    Ok(declared(&preprocessed(header)?).0)
+}
+
+/// `mou bind <header> [name]`: the bindings, or what failed.
+pub fn bind(header: &str, alias: Option<&str>) -> Result<String, String> {
+    let stem = header.rsplit('/').next().unwrap_or(header).split('.').next().unwrap_or("c");
+    let stem: String = stem.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect();
+    let alias = alias.map(str::to_string).unwrap_or_else(|| mou_name(&stem, 0));
+    Ok(bindings(header, &alias, &preprocessed(header)?))
 }
 
 #[cfg(test)]

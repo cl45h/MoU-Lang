@@ -1,0 +1,11 @@
+import std.io
+import cmath
+
+// The functions come from the headers themselves: nothing is declared here.
+
+fn main() ! io.Error {
+    io.print("{cmath.hyp(3.0, 4.0)} {cmath.larger(2.5, -7.0)} {cmath.span("aabbc", "ab")} {cmath.upper('q')} {cmath.number("-1234")}")?
+    var whole = [0.0]
+    let frac = cmath.parts(2.75, mut whole)
+    io.print("{whole[0]} {frac} {cmath.from("uno dos", ' ')} {cmath.from("uno", 'x')}")?
+}

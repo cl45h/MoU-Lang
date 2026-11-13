@@ -12,7 +12,7 @@ pub struct Token { tok: Tok, line: int, col: int }
 
 pub struct Error { msg: str, line: int, col: int }
 
-let KEYWORDS: [str] = [
+pub let KEYWORDS: [str] = [
     "as", "break", "catch", "comptime", "continue", "defer", "dyn", "else", "enum", "false", "fn",
     "for", "if", "impl", "import", "in", "let", "loop", "match", "mut", "own", "pub", "ref",
     "region", "return", "scope", "self", "Self", "soa", "struct", "trait", "true", "type",
