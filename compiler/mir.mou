@@ -148,7 +148,7 @@ pub struct Block { stmts: [Stmt], term: Term, at: check.Span, done: bool }
 // `Opt`: an optional boolean (1), whole number with sign of up to 64 bits
 // (2), `f64` (3) or whole number without sign of up to 64 bits (4): it is
 // kept as whether it is there and the value.
-pub enum Scalar { Int(str), Bool, F64, Rec(int), Opt(int) }
+pub enum Scalar { Int(str), Bool, F64, Char, Rec(int), Opt(int) }
 
 pub struct Func {
     name: str
@@ -270,6 +270,7 @@ fn field_kind(t: types.Ty) -> int {
     match t {
         types.Ty.Bool => 1
         types.Ty.Float(_) => 3
+        types.Ty.Char => 4
         types.Ty.Int(k) => {
             if k == "u64" || k == "usize" { 5 } else { 2 }
         }
@@ -281,6 +282,7 @@ fn field_kind(t: types.Ty) -> int {
 fn plain_field(t: types.Ty) -> bool {
     match t {
         types.Ty.Bool => true
+        types.Ty.Char => true
         types.Ty.Int(k) => k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" || k == "u64" || k == "usize"
         types.Ty.Float(k) => k == "f64"
         _ => false
@@ -327,9 +329,11 @@ fn scalar_of(c: check.Checker, t: types.Ty) -> Scalar? {
             if k == "f64" { return Some(Scalar.F64) }
             None
         }
+        types.Ty.Char => Some(Scalar.Char)
         types.Ty.Optional(inner) => {
             match inner {
                 types.Ty.Bool => Some(Scalar.Opt(1))
+                types.Ty.Char => Some(Scalar.Opt(5))
                 types.Ty.Float(k) => {
                     if k == "f64" { return Some(Scalar.Opt(3)) }
                     None
@@ -371,6 +375,7 @@ fn same_scalar(a: Scalar?, b: Scalar?) -> bool {
         (Some(Scalar.Int(x)), Some(Scalar.Int(y))) => x == y
         (Some(Scalar.Bool), Some(Scalar.Bool)) => true
         (Some(Scalar.F64), Some(Scalar.F64)) => true
+        (Some(Scalar.Char), Some(Scalar.Char)) => true
         (Some(Scalar.Rec(x)), Some(Scalar.Rec(y))) => x == y
         (Some(Scalar.Opt(x)), Some(Scalar.Opt(y))) => x == y
         (None, None) => true
@@ -3748,6 +3753,7 @@ fn scalar_text(s: Scalar?) -> str {
                 Scalar.Int(k) => k
                 Scalar.Bool => "bool"
                 Scalar.F64 => "f64"
+                Scalar.Char => "char"
                 Scalar.Rec(i) => "rec{i}"
                 Scalar.Opt(k) => "opt{k}"
             }

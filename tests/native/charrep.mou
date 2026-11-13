@@ -1,0 +1,112 @@
+import std.io
+import std.text
+
+// Characters kept as numbers: variables, parameters, results, optionals,
+// comparisons, conversions, arrays and closures.
+
+struct Cursor { chars: [char], i: int }
+
+impl Cursor {
+    fn peek(self) -> char? { self.chars.get(self.i as usize) }
+    fn next(mut self) -> char? {
+        let c = self.peek()
+        if let Some(x) = c { self.i += 1 }
+        c
+    }
+}
+
+fn upper(c: char) -> char {
+    if c >= 'a' && c <= 'z' { ((c as int) - 32) as char } else { c }
+}
+
+fn kind(c: char) -> str {
+    match c {
+        ' ' => "space"
+        '0'..='9' => "digit"
+        'ñ' => "eñe"
+        x if text.is_alpha(x) => "letter"
+        _ => "other"
+    }
+}
+
+fn pick(c: bool, a: char, b: char) -> char { if c { a } else { b } }
+
+fn last(cs: [char]) -> char? {
+    var out: char? = None
+    for c in cs { out = Some(c) }
+    out
+}
+
+fn count(cs: [char], wanted: char) -> int {
+    var n = 0
+    for c in cs {
+        if c == wanted { n += 1 }
+    }
+    n
+}
+
+fn main() ! io.Error {
+    var cur = Cursor(text.chars("añb 9€😀"), 0)
+    var seen: [char] = []
+    var kinds: [str] = []
+    while true {
+        match cur.next() {
+            Some(c) => {
+                seen.push(upper(c))
+                kinds.push(kind(c))
+            }
+            None => break
+        }
+    }
+    io.print("{text.from_chars(seen)} {kinds} {cur.peek()} {cur.i}")?
+    var c = 'a'
+    var o: char? = Some('z')
+    if c < 'b' { c = pick(o == Some('z'), 'q', 'r') }
+    o = last(seen)
+    let same = fn(x: char) -> bool { x == c }
+    io.print("{c} {o} {last([])} {same('q')} {same('x')} {count(seen, 'A')} {c as int} {(c as int + 1) as char}")?
+    var grid: [char] = ['.'; 5]
+    grid[2] = '#'
+    let mid = grid[2]
+    let pair = (mid, grid[0])
+    io.print("{text.from_chars(grid)} {mid} {pair.0 == '#'} {pair.1} {'a' < 'b'} {mid != '#'} {upper('é')} {'\n' == 10 as char}")?
+    for x in 'a'..='e' { grid.push(x) }
+    io.print("{text.from_chars(grid)} {grid.pop()} {grid.len}")?
+    io.print(fields())?
+}
+
+// Characters as fields: structs, tuples and enums without a block.
+
+struct Cell { glyph: char, weight: int, seen: bool }
+
+enum Mark { Blank, Letter(char), Pair(char, int) }
+
+fn widen(c: mut Cell, by: int) {
+    c.weight += by
+    if c.glyph == 'x' { c.glyph = 'X' }
+}
+
+fn swap(p: (char, char)) -> (char, char) { (p.1, p.0) }
+
+fn mark(c: char) -> Mark {
+    if c == ' ' { Mark.Blank } else { if c >= '0' && c <= '9' { Mark.Pair(c, (c as int) - 48) } else { Mark.Letter(c) } }
+}
+
+fn show(m: Mark) -> str {
+    match m {
+        Mark.Blank => "_"
+        Mark.Letter(c) => "<{c}>"
+        Mark.Pair(c, n) => "{c}={n}"
+    }
+}
+
+fn fields() -> str {
+    var cell = Cell('x', 2, false)
+    widen(mut cell, 5)
+    var cells: [Cell] = [cell, Cell('ñ', 1, true)]
+    cells[1].glyph = '€'
+    let (a, b) = swap(('p', 'q'))
+    var marks: [str] = []
+    for c in text.chars("a 7") { marks.push(show(mark(c))) }
+    "{cell.glyph}{cell.weight} {cells[0].glyph}{cells[1].glyph} {cells[1].seen} {a}{b} {marks}"
+}

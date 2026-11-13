@@ -233,7 +233,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, depth: usize) {
-        match self.rng.below(28) {
+        match self.rng.below(29) {
             0..=2 => {
                 let kind = KINDS[self.rng.below(KINDS.len())];
                 let name = self.fresh("v");
@@ -555,6 +555,23 @@ impl Gen {
                 self.line(&format!("let {v}: int = weight({lines}[0]) +% weight({lines}[1]) +% ({lines}.len as int)"));
                 self.vars.push((v, "int", false));
             }
+            27 => {
+                // Characters: in a variable, an optional, a tuple and a struct.
+                let (c, o, t, k, w, v) = (self.fresh("c"), self.fresh("o"), self.fresh("t"), self.fresh("k"), self.fresh("w"), self.fresh("v"));
+                let (b1, b2, n) = (self.boolean(2), self.boolean(2), self.int("int", 2));
+                let other = self.rng.pick(&["'z'", "'ñ'", "'0'", "'€'"]);
+                self.line(&format!("let {c} = pick({b1}, 'a', {other})"));
+                self.line(&format!("let {o}: char? = if {b2} {{ Some({c}) }} else {{ None }}"));
+                self.line(&format!("var {t} = ({c}, {n})"));
+                self.line(&format!("var {k} = K({c}, {t}.1, {c} < 'm')"));
+                self.line(&format!("if {k}.near {{ {k}.glyph = 'q' }}"));
+                self.line(&format!("let {w}: int = match {o} {{"));
+                self.line("    Some(q) => q as int");
+                self.line("    None => 7");
+                self.line("}");
+                self.line(&format!("let {v}: int = {w} +% ({t}.0 as int) +% {k}.weight +% ({k}.glyph as int)"));
+                self.vars.push((v, "int", false));
+            }
             19 => {
                 // A struct given to a function, to read and to change.
                 let name = self.fresh("p");
@@ -610,6 +627,7 @@ impl Gen {
         g.line("");
         g.line("struct S { a: int, b: u8, c: bool }");
         g.line("struct P { x: f64, y: f64 }");
+        g.line("struct K { glyph: char, weight: int, near: bool }");
         g.line("enum E { A, B(int), C(int, bool) }");
         g.line("enum Bad { Odd(int), Big }");
         g.line("");

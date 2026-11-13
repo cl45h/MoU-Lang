@@ -306,11 +306,13 @@ enum Rep {
     Int(&'static str),
     Bool,
     F64,
+    /// A character, kept as its number.
+    Char,
     /// A struct of plain fields, kept as a struct of C: its number.
     Rec(usize),
     /// An optional number or boolean, kept as whether it is there and the
     /// value: 1 a boolean, 2 an integer with sign, 3 an `f64`, 4 an
-    /// integer without sign.
+    /// integer without sign, 5 a character.
     Opt(u8),
     /// A tagged value, in `L`.
     Boxed,
@@ -320,7 +322,7 @@ enum Rep {
 fn agg(r: Rep) -> Option<String> {
     match r {
         Rep::Rec(i) => Some(format!("KS{i}")),
-        Rep::Opt(k) => Some(format!("KO{}", ['B', 'I', 'F', 'U'][(k as usize - 1).min(3)])),
+        Rep::Opt(k) => Some(format!("KO{}", ['B', 'I', 'F', 'U', 'C'][(k as usize - 1).min(4)])),
         _ => None,
     }
 }
@@ -331,6 +333,7 @@ fn opt_inner(k: u8) -> Rep {
         1 => Rep::Bool,
         3 => Rep::F64,
         4 => Rep::Int("u64"),
+        5 => Rep::Char,
         _ => Rep::Int("i64"),
     }
 }
@@ -340,6 +343,7 @@ fn opt_of(r: Rep) -> Option<u8> {
     match r {
         Rep::Bool => Some(1),
         Rep::F64 => Some(3),
+        Rep::Char => Some(5),
         Rep::Int(k) => Some(if k.starts_with('u') { 4 } else { 2 }),
         _ => None,
     }
@@ -371,6 +375,7 @@ fn field_rep(kind: u8) -> Rep {
     match kind {
         1 => Rep::Bool,
         3 => Rep::F64,
+        4 => Rep::Char,
         5 => Rep::Int("u64"),
         _ => Rep::Int("i64"),
     }
@@ -505,6 +510,7 @@ fn rep_type(r: Rep) -> String {
     match r {
         Rep::Int(k) => ctype(k).to_string(),
         Rep::F64 => "double".to_string(),
+        Rep::Char => "uint32_t".to_string(),
         Rep::Boxed => "kv".to_string(),
         Rep::Rec(_) | Rep::Opt(_) => format!("struct {}", agg(r).unwrap_or_default()),
         _ => "bool".to_string(),
@@ -516,6 +522,7 @@ fn tagged(r: Rep, value: &str) -> String {
     match r {
         Rep::Int(_) => format!("kint((i128)({value}))"),
         Rep::F64 => format!("kf64({value})"),
+        Rep::Char => format!("kchar({value})"),
         Rep::Boxed => value.to_string(),
         Rep::Rec(_) | Rep::Opt(_) => format!("{}_box({value})", agg(r).unwrap_or_default()),
         _ => format!("kbool({value})"),
@@ -590,6 +597,7 @@ fn scalar_rep(s: Option<Scalar>) -> Rep {
         Some(Scalar::Int(k)) if machine(k) => Rep::Int(k),
         Some(Scalar::Bool) => Rep::Bool,
         Some(Scalar::F64) => Rep::F64,
+        Some(Scalar::Char) => Rep::Char,
         Some(Scalar::Rec(i)) => Rep::Rec(i),
         Some(Scalar::Opt(k)) => Rep::Opt(k),
         _ => Rep::Boxed,
@@ -621,6 +629,7 @@ fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
         Rvalue::Use(Operand::Const(Value::Int(i))) if i64::try_from(*i).is_ok() => AnyInt,
         Rvalue::Use(Operand::Const(Value::Bool(_))) => Bool,
         Rvalue::Use(Operand::Const(Value::Float(_))) => F64,
+        Rvalue::Use(Operand::Const(Value::Char(_))) => Char,
         Rvalue::Binary(op, Num::F64, _, _) if !is_cmp(*op) => F64,
         Rvalue::Unary(UnOp::Neg, Num::F64, _) | Rvalue::CastFloat(_, false) | Rvalue::Convert(_, Conv::ToFloat(false)) => F64,
         Rvalue::Use(Operand::Place(p)) if p.proj.is_empty() => reps[p.local],
@@ -632,7 +641,7 @@ fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
             r => opt_of(r).map_or(Boxed, Opt),
         },
         // A struct of plain fields is made in place, without a block.
-        Rvalue::Struct(i, ops) if !recs[*i].is_empty() && !recs[*i].contains(&4) && recs[*i].len() == ops.len() => Rec(*i),
+        Rvalue::Struct(i, ops) if !recs[*i].is_empty() && recs[*i].len() == ops.len() => Rec(*i),
         Rvalue::Binary(op, _, _, _) if is_cmp(*op) => Bool,
         Rvalue::Binary(_, n, _, _) | Rvalue::Unary(UnOp::Neg | UnOp::BitNot, n, _) => int(n),
         Rvalue::Unary(UnOp::Not, _, _) | Rvalue::Is(..) | Rvalue::RangeHas(..) | Rvalue::RangeLast(..) => Bool,
@@ -886,6 +895,27 @@ impl Cx<'_> {
         }
     }
 
+    /// The operand as a C number, when it is a character that is written
+    /// out or one kept as its number.
+    fn known_char(&self, op: &Operand) -> Option<String> {
+        match op {
+            Operand::Const(Value::Char(c)) => Some(format!("{}u", *c as u32)),
+            Operand::Place(p) if self.rep(p) == Rep::Char => Some(self.name(p)),
+            _ => None,
+        }
+    }
+
+    /// The operand as the number of a character, where the types say it is one.
+    fn chr(&self, op: &Operand) -> Result<String, String> {
+        if let Some(known) = self.known_char(op) {
+            return Ok(known);
+        }
+        match op {
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.c", p.local)),
+            _ => Ok(format!("({}).u.c", operand(self, op)?)),
+        }
+    }
+
     /// The operand as a C double, where the types say it is an `f64`.
     fn float(&self, op: &Operand) -> Result<String, String> {
         if let Some(known) = self.known_f64(op) {
@@ -1056,6 +1086,18 @@ impl Cx<'_> {
                 let l = p.local;
                 format!("(L[{l}].tag == T_CHAR ? L[{l}].u.c {cmp} {}u : ktruth({}))", *c as u32, rvalue(self, rv)?)
             }
+            // Two characters kept as numbers.
+            Rvalue::Binary(op, _, a, b) if is_cmp(*op) && self.known_char(a).is_some() && self.known_char(b).is_some() => {
+                let c = match op {
+                    BinOp::Eq => "==",
+                    BinOp::Ne => "!=",
+                    BinOp::Lt => "<",
+                    BinOp::Le => "<=",
+                    BinOp::Gt => ">",
+                    _ => ">=",
+                };
+                format!("({} {c} {})", self.known_char(a).unwrap_or_default(), self.known_char(b).unwrap_or_default())
+            }
             Rvalue::Binary(op, _, a, b) if is_cmp(*op) => match (self.known_int(a), self.known_int(b)) {
                 (Some(x), Some(y)) => {
                     let c = match op {
@@ -1100,6 +1142,14 @@ impl Cx<'_> {
             Rep::Int(k) => Ok(format!("{} = {};", self.name(place), self.int_rvalue(rv, k)?)),
             Rep::Bool => Ok(format!("{} = {};", self.name(place), self.bool_rvalue(rv)?)),
             Rep::F64 => Ok(format!("{} = {};", self.name(place), self.f64_rvalue(rv)?)),
+            Rep::Char => {
+                let value = match rv {
+                    Rvalue::Use(a) => self.chr(a)?,
+                    Rvalue::Uninit | Rvalue::Moved => "0".to_string(),
+                    _ => format!("({}).u.c", rvalue(self, rv)?),
+                };
+                Ok(format!("{} = {value};", self.name(place)))
+            }
             Rep::Opt(k) => {
                 let l = place.local;
                 let name = agg(Rep::Opt(k)).unwrap_or_default();
@@ -1122,6 +1172,7 @@ impl Cx<'_> {
                             1 => "it_.u.t",
                             3 => "it_.u.f",
                             4 => "(uint64_t)it_.u.i",
+                            5 => "it_.u.c",
                             _ => "(int64_t)it_.u.i",
                         };
                         Ok(format!("{{ kv it_; if ({found}) s{l} = (struct {name}){{true, {item}}}; else s{l} = (struct {name}){{0}}; }}"))
@@ -1197,6 +1248,7 @@ impl Cx<'_> {
             Rep::Int(k) => Ok(format!("{} = ({})({value}).u.i;", self.name(place), ctype(k))),
             Rep::Bool => Ok(format!("{} = ktruth({value});", self.name(place))),
             Rep::F64 => Ok(format!("{} = ({value}).u.f;", self.name(place))),
+            Rep::Char => Ok(format!("{} = ({value}).u.c;", self.name(place))),
             r @ (Rep::Rec(_) | Rep::Opt(_)) => Ok(format!("s{} = {}_take({value});", place.local, agg(r).unwrap_or_default())),
             _ => store(self, place, value),
         }
@@ -1207,6 +1259,7 @@ impl Cx<'_> {
         match r {
             Rep::Int(k) => Ok(format!("({})({})", ctype(k), self.int(op)?)),
             Rep::F64 => self.float(op),
+            Rep::Char => self.chr(op),
             Rep::Rec(_) | Rep::Opt(_) => match op {
                 Operand::Place(p) if self.rep(p) == r => Ok(format!("s{}", p.local)),
                 Operand::Const(Value::None) => Ok(format!("(struct {}){{0}}", agg(r).unwrap_or_default())),
@@ -1220,7 +1273,7 @@ impl Cx<'_> {
     fn take_machine(&self, place: &Place, r: Rep, value: &str) -> Result<String, String> {
         match (self.rep(place), r) {
             (Rep::Int(k), Rep::Int(_)) => Ok(format!("{} = ({})({value});", self.name(place), ctype(k))),
-            (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) => Ok(format!("{} = {value};", self.name(place))),
+            (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) | (Rep::Char, Rep::Char) => Ok(format!("{} = {value};", self.name(place))),
             (Rep::Rec(_) | Rep::Opt(_), got) if got == self.rep(place) => Ok(format!("s{} = {value};", place.local)),
             _ => self.take(place, &tagged(r, value)),
         }
@@ -1232,6 +1285,7 @@ impl Cx<'_> {
             Rep::Int(_) => format!("kint((i128)s{l})"),
             Rep::Bool => format!("kbool(s{l})"),
             Rep::F64 => format!("kf64(s{l})"),
+            Rep::Char => format!("kchar(s{l})"),
             r @ (Rep::Rec(_) | Rep::Opt(_)) => format!("{}_box(s{l})", agg(r).unwrap_or_default()),
             _ => format!("L[{l}]"),
         }
@@ -1272,6 +1326,8 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
             Rep::Bool => writeln!(out, "    bool s{l} = false;").unwrap(),
             Rep::F64 if l < f.params => writeln!(out, "    double s{l} = a[{l}].u.f;").unwrap(),
             Rep::F64 => writeln!(out, "    double s{l} = 0;").unwrap(),
+            Rep::Char if l < f.params => writeln!(out, "    uint32_t s{l} = a[{l}].u.c;").unwrap(),
+            Rep::Char => writeln!(out, "    uint32_t s{l} = 0;").unwrap(),
             // The caller keeps the block the argument came in.
             r @ (Rep::Rec(_) | Rep::Opt(_)) => {
                 let name = agg(*r).unwrap_or_default();
@@ -1555,6 +1611,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                 .map(|(l, r)| match r {
                     Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
                     Rep::F64 => format!("a[{l}].u.f"),
+                    Rep::Char => format!("a[{l}].u.c"),
                     Rep::Boxed => format!("a[{l}]"),
                     Rep::Rec(_) | Rep::Opt(_) => format!("{}_get(a[{l}])", agg(*r).unwrap_or_default()),
                     _ => format!("a[{l}].u.t"),
@@ -1635,7 +1692,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     writeln!(out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}\n").unwrap();
     // The structs kept as structs of C: how each is read from a tagged
     // value and made into one.
-    let mut kept: Vec<(usize, Vec<u8>)> = p.records.iter().cloned().enumerate().filter(|(_, k)| !k.is_empty() && !k.contains(&4)).collect();
+    let mut kept: Vec<(usize, Vec<u8>)> = p.records.iter().cloned().enumerate().filter(|(_, k)| !k.is_empty()).collect();
     // And the tuples kept that way, by their number.
     let mut tuples: Vec<usize> = Vec::new();
     for f in &p.fns {
@@ -1661,6 +1718,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
             .map(|(f, k)| match k {
                 1 => format!("it[{f}].u.t"),
                 3 => format!("it[{f}].u.f"),
+                4 => format!("it[{f}].u.c"),
                 5 => format!("(uint64_t)it[{f}].u.i"),
                 _ => format!("(int64_t)it[{f}].u.i"),
             })
@@ -1687,6 +1745,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
             let read = match k {
                 1 => format!("it[{}].u.t", f - 1),
                 3 => format!("it[{}].u.f", f - 1),
+                4 => format!("it[{}].u.c", f - 1),
                 5 => format!("(uint64_t)it[{}].u.i", f - 1),
                 _ => format!("(int64_t)it[{}].u.i", f - 1),
             };

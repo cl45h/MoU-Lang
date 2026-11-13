@@ -406,6 +406,8 @@ enum Rep {
     Int(str)
     Bool
     F64
+    // A character, kept as its number.
+    Char
     // A struct of plain fields, kept as a struct of C: its number.
     Rec(int)
     // An optional number or boolean, kept as whether it is there and the
@@ -424,12 +426,14 @@ fn raw_item(l: int, made: str, k: int, found: str) -> str {
     if k == 1 { item = "it_.u.t" }
     if k == 3 { item = "it_.u.f" }
     if k == 4 { item = "(uint64_t)it_.u.i" }
+    if k == 5 { item = "it_.u.c" }
     "{{ kv it_; if ({found}) s{l} = (struct {made}){{true, {item}}}; else s{l} = (struct {made}){{0}}; }}"
 }
 
 fn field_rep(kind: int) -> Rep {
     if kind == 1 { return Rep.Bool }
     if kind == 3 { return Rep.F64 }
+    if kind == 4 { return Rep.Char }
     if kind == 5 { return Rep.Int("u64") }
     Rep.Int("i64")
 }
@@ -461,6 +465,7 @@ fn agg(r: Rep) -> str {
             if k == 1 { return "KOB" }
             if k == 2 { return "KOI" }
             if k == 3 { return "KOF" }
+            if k == 5 { return "KOC" }
             "KOU"
         }
         _ => ""
@@ -472,6 +477,7 @@ fn opt_inner(k: int) -> Rep {
     if k == 1 { return Rep.Bool }
     if k == 3 { return Rep.F64 }
     if k == 4 { return Rep.Int("u64") }
+    if k == 5 { return Rep.Char }
     Rep.Int("i64")
 }
 
@@ -480,6 +486,7 @@ fn opt_of(r: Rep) -> int {
     match r {
         Rep.Bool => 1
         Rep.F64 => 3
+        Rep.Char => 5
         Rep.Int(k) => {
             if text.starts_with(k, "u") { return 4 }
             2
@@ -524,11 +531,7 @@ fn part(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep {
 
 // Whether a struct can be kept as a struct of C.
 fn rec_ok(recs: [[int]], i: int) -> bool {
-    if recs[i].len == 0 { return false }
-    for k in recs[i] {
-        if k == 4 { return false }
-    }
-    true
+    recs[i].len > 0
 }
 
 fn same_rep(a: Rep, b: Rep) -> bool {
@@ -538,6 +541,7 @@ fn same_rep(a: Rep, b: Rep) -> bool {
         (Rep.Int(x), Rep.Int(y)) => x == y
         (Rep.Bool, Rep.Bool) => true
         (Rep.F64, Rep.F64) => true
+        (Rep.Char, Rep.Char) => true
         (Rep.Rec(x), Rep.Rec(y)) => x == y
         (Rep.Opt(x), Rep.Opt(y)) => x == y
         (Rep.Boxed, Rep.Boxed) => true
@@ -787,6 +791,7 @@ fn rep_type(r: Rep) -> str {
     match r {
         Rep.Int(k) => ctype(k)
         Rep.F64 => "double"
+        Rep.Char => "uint32_t"
         Rep.Boxed => "kv"
         Rep.Rec(_) => "struct {agg(r)}"
         Rep.Opt(_) => "struct {agg(r)}"
@@ -799,6 +804,7 @@ fn tagged(r: Rep, value: str) -> str {
     match r {
         Rep.Int(_) => "kint((i128)({value}))"
         Rep.F64 => "kf64({value})"
+        Rep.Char => "kchar({value})"
         Rep.Boxed => value
         Rep.Rec(_) => "{agg(r)}_box({value})"
         Rep.Opt(_) => "{agg(r)}_box({value})"
@@ -889,6 +895,7 @@ fn scalar_rep(s: mir.Scalar?) -> Rep {
                 }
                 mir.Scalar.Bool => Rep.Bool
                 mir.Scalar.F64 => Rep.F64
+                mir.Scalar.Char => Rep.Char
                 mir.Scalar.Rec(i) => Rep.Rec(i)
                 mir.Scalar.Opt(k) => Rep.Opt(k)
             }
@@ -942,6 +949,7 @@ fn rep_of(rv: mir.Rvalue, reps: [Rep], recs: [[int]]) -> Rep {
                         }
                         mir.Value.Bool(_) => Rep.Bool
                         mir.Value.Float(_) => Rep.F64
+                        mir.Value.Char(_) => Rep.Char
                         // `None` fits any optional.
                         mir.Value.None => Rep.Top
                         _ => Rep.Boxed
@@ -1393,6 +1401,37 @@ impl Cx {
     }
 
     // The operand as a C double, where the types say it is an `f64`.
+    // The operand as a C number, when it is a character that is written
+    // out or one kept as its number.
+    fn known_char(self, op: mir.Operand) -> str? {
+        match op {
+            mir.Operand.Const(v) => {
+                match v {
+                    mir.Value.Char(ch) => Some("{ch as int}u")
+                    _ => None
+                }
+            }
+            mir.Operand.At(p) => {
+                match self.rep(p) {
+                    Rep.Char => Some(self.name(p))
+                    _ => None
+                }
+            }
+        }
+    }
+
+    // The operand as the number of a character, where the types say it is one.
+    fn chr(self, op: mir.Operand) -> str ! Fail {
+        if let Some(known) = self.known_char(op) { return known }
+        match op {
+            mir.Operand.At(p) => {
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{p.local}].u.c" }
+            }
+            _ => {}
+        }
+        "({self.operand(op)?}).u.c"
+    }
+
     fn float(self, op: mir.Operand) -> str ! Fail {
         if let Some(known) = self.known_f64(op) { return known }
         self.untagged(op, "u.f", "kitem_f64", "kitem_field_f64")?
@@ -1745,6 +1784,11 @@ impl Cx {
                         }
                         _ => {}
                     }
+                    // Two characters kept as numbers.
+                    match (self.known_char(a), self.known_char(b)) {
+                        (Some(x), Some(y)) => return "({x} {op} {y})"
+                        _ => {}
+                    }
                     match (self.known_int(a), self.known_int(b)) {
                         (Some(x), Some(y)) => return "((i128)({x}) {op} (i128)({y}))"
                         _ => {}
@@ -1785,6 +1829,14 @@ impl Cx {
             Rep.Int(k) => return "{self.name(place)} = {self.int_rvalue(rv, k)?};"
             Rep.Bool => return "{self.name(place)} = {self.bool_rvalue(rv)?};"
             Rep.F64 => return "{self.name(place)} = {self.f64_rvalue(rv)?};"
+            Rep.Char => {
+                match rv {
+                    mir.Rvalue.Use(a) => return "{self.name(place)} = {self.chr(a)?};"
+                    mir.Rvalue.Uninit => return "{self.name(place)} = 0;"
+                    mir.Rvalue.Moved => return "{self.name(place)} = 0;"
+                    _ => return "{self.name(place)} = ({self.rvalue(rv)?}).u.c;"
+                }
+            }
             Rep.Opt(k) => {
                 let l = place.local
                 let made = agg(Rep.Opt(k))
@@ -1902,6 +1954,7 @@ impl Cx {
             Rep.Int(k) => "{self.name(place)} = ({ctype(k)})({value}).u.i;"
             Rep.Bool => "{self.name(place)} = ktruth({value});"
             Rep.F64 => "{self.name(place)} = ({value}).u.f;"
+            Rep.Char => "{self.name(place)} = ({value}).u.c;"
             Rep.Rec(i) => "s{place.local} = KS{i}_take({value});"
             Rep.Opt(k) => "s{place.local} = {agg(Rep.Opt(k))}_take({value});"
             _ => self.store(place, value)?
@@ -1913,6 +1966,7 @@ impl Cx {
         match r {
             Rep.Int(k) => "({ctype(k)})({self.int(op)?})"
             Rep.F64 => self.float(op)?
+            Rep.Char => self.chr(op)?
             Rep.Rec(_) => self.machine_agg(r, op)?
             Rep.Opt(_) => self.machine_agg(r, op)?
             _ => self.truth(op)?
@@ -1942,6 +1996,7 @@ impl Cx {
             (Rep.Int(k), Rep.Int(_)) => "{self.name(place)} = ({ctype(k)})({value});"
             (Rep.Bool, Rep.Bool) => "{self.name(place)} = {value};"
             (Rep.F64, Rep.F64) => "{self.name(place)} = {value};"
+            (Rep.Char, Rep.Char) => "{self.name(place)} = {value};"
             _ => self.take(place, tagged(r, value))?
         }
     }
@@ -1952,6 +2007,7 @@ impl Cx {
             Rep.Int(_) => "kint((i128)s{l})"
             Rep.Bool => "kbool(s{l})"
             Rep.F64 => "kf64(s{l})"
+            Rep.Char => "kchar(s{l})"
             Rep.Rec(i) => "KS{i}_box(s{l})"
             Rep.Opt(k) => "{agg(Rep.Opt(k))}_box(s{l})"
             _ => "L[{l}]"
@@ -2056,6 +2112,13 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                     line(mut out, "    double s{l} = a[{l}].u.f;")
                 } else {
                     line(mut out, "    double s{l} = 0;")
+                }
+            }
+            Rep.Char => {
+                if l < f.params {
+                    line(mut out, "    uint32_t s{l} = a[{l}].u.c;")
+                } else {
+                    line(mut out, "    uint32_t s{l} = 0;")
                 }
             }
             _ => {
@@ -2420,6 +2483,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
             match my_params[l] {
                 Rep.Int(k) => unboxed.push("({ctype(k)})a[{l}].u.i")
                 Rep.F64 => unboxed.push("a[{l}].u.f")
+                Rep.Char => unboxed.push("a[{l}].u.c")
                 Rep.Boxed => unboxed.push("a[{l}]")
                 Rep.Rec(r) => unboxed.push("KS{r}_get(a[{l}])")
                 Rep.Opt(k) => unboxed.push("{agg(Rep.Opt(k))}_get(a[{l}])")
@@ -2651,7 +2715,15 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
             if k == 1 {
                 read.push("it[{f}].u.t")
             } else {
-                if k == 3 { read.push("it[{f}].u.f") } else { if k == 5 { read.push("(uint64_t)it[{f}].u.i") } else { read.push("(int64_t)it[{f}].u.i") } }
+                if k == 3 {
+                    read.push("it[{f}].u.f")
+                } else {
+                    if k == 4 {
+                        read.push("it[{f}].u.c")
+                    } else {
+                        if k == 5 { read.push("(uint64_t)it[{f}].u.i") } else { read.push("(int64_t)it[{f}].u.i") }
+                    }
+                }
             }
             made.push(tagged(field_rep(k), "s.f{f}"))
         }
@@ -2684,6 +2756,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
             var read = "(int64_t)it[{f - 1}].u.i"
             if k == 1 { read = "it[{f - 1}].u.t" }
             if k == 3 { read = "it[{f - 1}].u.f" }
+            if k == 4 { read = "it[{f - 1}].u.c" }
             if k == 5 { read = "(uint64_t)it[{f - 1}].u.i" }
             line(mut out, "    if (n > {f - 1}) r.f{f} = {read};")
             made.push(tagged(field_rep(k), "s.f{f}"))

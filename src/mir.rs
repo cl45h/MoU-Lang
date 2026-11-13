@@ -342,12 +342,13 @@ pub enum Scalar {
     Int(&'static str),
     Bool,
     F64,
+    Char,
     /// A struct whose fields are all booleans, integers of up to 64 bits
     /// or `f64`: it is kept as a struct of C, by its number.
     Rec(usize),
     /// An optional boolean (1), integer with sign of up to 64 bits (2),
-    /// `f64` (3) or integer without sign of up to 64 bits (4): it is kept
-    /// as whether it is there and the value.
+    /// `f64` (3), integer without sign of up to 64 bits (4) or character
+    /// (5): it is kept as whether it is there and the value.
     Opt(u8),
 }
 
@@ -400,6 +401,7 @@ fn field_kind(t: &Ty) -> usize {
     match t {
         Ty::Bool => 1,
         Ty::Float(_) => 3,
+        Ty::Char => 4,
         Ty::Int("u64" | "usize") => 5,
         _ => 2,
     }
@@ -407,7 +409,7 @@ fn field_kind(t: &Ty) -> usize {
 
 /// Whether a field of that type can be a member of a struct of C.
 fn plain_field(t: &Ty) -> bool {
-    matches!(t, Ty::Bool | Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize") | Ty::Float("f64"))
+    matches!(t, Ty::Bool | Ty::Char | Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize") | Ty::Float("f64"))
 }
 
 fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
@@ -415,8 +417,10 @@ fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
         Ty::Int(k) => Some(Scalar::Int(k)),
         Ty::Bool => Some(Scalar::Bool),
         Ty::Float("f64") => Some(Scalar::F64),
+        Ty::Char => Some(Scalar::Char),
         Ty::Optional(inner) => match &**inner {
             Ty::Bool => Some(Scalar::Opt(1)),
+            Ty::Char => Some(Scalar::Opt(5)),
             Ty::Float("f64") => Some(Scalar::Opt(3)),
             Ty::Int(k) if !k.ends_with("128") => Some(Scalar::Opt(if k.starts_with('u') { 4 } else { 2 })),
             _ => None,
@@ -615,6 +619,7 @@ pub fn dump(p: &Program) -> String {
             Option::Some(Scalar::Int(k)) => k.to_string(),
             Option::Some(Scalar::Bool) => "bool".to_string(),
             Option::Some(Scalar::F64) => "f64".to_string(),
+            Option::Some(Scalar::Char) => "char".to_string(),
             Option::Some(Scalar::Rec(i)) => format!("rec{i}"),
             Option::Some(Scalar::Opt(k)) => format!("opt{k}"),
             Option::None => "_".to_string(),

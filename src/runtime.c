@@ -1892,6 +1892,10 @@ struct KOB { bool has; bool v; };
 struct KOI { bool has; int64_t v; };
 struct KOF { bool has; double v; };
 struct KOU { bool has; uint64_t v; };
+struct KOC { bool has; uint32_t v; };
+static struct KOC KOC_get(kv v) { return v.tag == T_SOME ? (struct KOC){true, ITEMS(v.u.o)[0].u.c} : (struct KOC){0}; }
+static struct KOC KOC_take(kv v) { struct KOC r = KOC_get(v); krelease(v); return r; }
+static kv KOC_box(struct KOC s) { return s.has ? kbox(T_SOME, kchar(s.v)) : KNONE; }
 static struct KOB KOB_get(kv v) { return v.tag == T_SOME ? (struct KOB){true, ITEMS(v.u.o)[0].u.t} : (struct KOB){0}; }
 static struct KOI KOI_get(kv v) { return v.tag == T_SOME ? (struct KOI){true, (int64_t)ITEMS(v.u.o)[0].u.i} : (struct KOI){0}; }
 static struct KOF KOF_get(kv v) { return v.tag == T_SOME ? (struct KOF){true, ITEMS(v.u.o)[0].u.f} : (struct KOF){0}; }
