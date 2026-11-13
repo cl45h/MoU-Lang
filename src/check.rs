@@ -53,6 +53,9 @@ pub enum Ty {
     Chan(Box<Ty>),
     /// A value shared between tasks, that one of them changes at a time.
     Mutex(Box<Ty>),
+    /// What a `comptime` parameter is in one copy of its function: the
+    /// number the call gave.
+    Value(i128),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -317,6 +320,7 @@ fn checker(file: &File) -> Checker<'_> {
         enums: Vec::new(),
         fns: Vec::new(),
         consts: Vec::new(),
+        const_exprs: Vec::new(),
         aliases: HashMap::new(),
         module: 0,
         module_of: Vec::new(),
@@ -762,6 +766,7 @@ fn plain_text(t: &Ty) -> String {
         Tuple(ts) => format!("({})", list(ts)),
         Slice(t) => format!("[{}]", text(t)),
         Array(t) => format!("[{}; _]", text(t)),
+        Value(v) => format!("={v}"),
         Range(t) => format!("range {}", text(t)),
         Task(t) => format!("task {}", text(t)),
         Chan(t) => format!("chan {}", text(t)),
@@ -1436,6 +1441,9 @@ struct Checker<'a> {
     enums: Vec<EnumInfo>,
     fns: Vec<FnInfo>,
     consts: Vec<Option<Ty>>,
+    /// What each constant is declared as, to compute the ones a
+    /// `comptime` parameter is given.
+    const_exprs: Vec<&'a Expr>,
     aliases: HashMap<(usize, String), Alias>,
     /// Module of the declaration being checked.
     module: usize,
@@ -1595,6 +1603,7 @@ impl<'a> Checker<'a> {
             Tuple(ts) => format!("({})", ts.iter().map(|t| self.show(t)).collect::<Vec<_>>().join(", ")),
             Slice(t) => format!("[{}]", self.show(t)),
             Array(t) => format!("[{}; _]", self.show(t)),
+            Value(v) => v.to_string(),
             Range(t) => format!("range of {}", self.show(t)),
             Task(t) => format!("Task[{}]", self.show(t)),
             Chan(t) => format!("Chan[{}]", self.show(t)),
@@ -1845,8 +1854,9 @@ impl<'a> Checker<'a> {
                     (&e.name, Global::Enum(self.enums.len() - 1))
                 }
                 DeclKind::Fn(f) => (&f.name, Global::Fn(usize::MAX)),
-                DeclKind::Const { name, .. } => {
+                DeclKind::Const { name, value, .. } => {
                     self.consts.push(None);
+                    self.const_exprs.push(value);
                     (name, Global::Const(self.consts.len() - 1))
                 }
                 DeclKind::TypeAlias { name, .. } => (name, Global::Alias),
@@ -2037,11 +2047,20 @@ impl<'a> Checker<'a> {
             match &d.kind {
                 DeclKind::Fn(f) => {
                     let Some(&idx) = self.fn_of_decl.get(&i) else { continue };
-                    if f.generics.is_empty() {
+                    let known: TParams = f.params.iter().filter(|p| p.comptime).map(|p| (p.name.clone(), Vec::new())).collect();
+                    if f.generics.is_empty() && known.is_empty() {
                         self.fns[idx].sig = self.signature(f, d.span).0;
-                    } else if let Some(tparams) = self.type_params(&f.generics, d.span) {
+                    } else if let Some(mut tparams) = self.type_params(&f.generics, d.span) {
+                        // A `comptime` parameter makes copies of the function
+                        // as a type parameter does: one for each value.
+                        tparams.extend(known);
                         self.enter_definition(&tparams);
                         self.fns[idx].sig = self.signature(f, d.span).0;
+                        for (p, q) in f.params.iter().zip(&self.fns[idx].sig.params.clone()) {
+                            if p.comptime && !matches!(q.ty, Ty::Int(_)) {
+                                self.err(d.span, format!("`{}` is a `comptime` parameter, and for now it has to be an integer", p.name));
+                            }
+                        }
                         self.fns[idx].tparams = tparams;
                         self.leave_generic();
                     } else {
@@ -2092,6 +2111,9 @@ impl<'a> Checker<'a> {
                         self.enter_definition(&own);
                         self.self_ty = Some(ty.clone());
                         let (sig, self_mode) = self.signature(f, m.span);
+                        if f.params.iter().any(|p| p.comptime) {
+                            self.err(m.span, "a method cannot have `comptime` parameters yet: only a function can");
+                        }
                         self.self_ty = None;
                         self.leave_generic();
                         self.enter_definition(&tparams);
@@ -2561,6 +2583,40 @@ impl<'a> Checker<'a> {
         (tys, logs)
     }
 
+    /// The number an expression is, when it is made of numbers, constants
+    /// and the `comptime` parameters of the function it is in.
+    fn const_int(&self, e: &Expr, depth: usize) -> Option<i128> {
+        if depth > 40 {
+            return None;
+        }
+        // Every step has to fit in 64 bits.
+        let fits = |v: i128| i64::try_from(v).ok().map(i128::from);
+        match &e.kind {
+            ExprKind::Int(s) => int_value(s).and_then(|v| i128::try_from(v).ok()).and_then(fits),
+            ExprKind::Unary { op: "-", expr } => fits(-self.const_int(expr, depth)?),
+            ExprKind::Binary { op, lhs, rhs } => {
+                let (a, b) = (self.const_int(lhs, depth)?, self.const_int(rhs, depth)?);
+                match *op {
+                    "+" => fits(a + b),
+                    "-" => fits(a - b),
+                    "*" => fits(a * b),
+                    "/" if b != 0 => fits(a / b),
+                    "%" if b != 0 => fits(a % b),
+                    _ => None,
+                }
+            }
+            ExprKind::Path(name) => match self.tenv.get(name) {
+                Some(Ty::Value(v)) => Some(*v),
+                Some(_) => None,
+                None => match self.global(name) {
+                    Some(Global::Const(i)) => self.const_int(self.const_exprs[i], depth + 1),
+                    _ => None,
+                },
+            },
+            _ => None,
+        }
+    }
+
     /// A call to a generic function or method: finds the type arguments,
     /// checks the bounds and records the instance to check and run.
     /// `env` holds what the receiver or an explicit type already decided.
@@ -2587,10 +2643,41 @@ impl<'a> Checker<'a> {
             Some(known) => known,
             None => self.arg_types(args),
         };
+        // What each `comptime` parameter is given has to be known here.
+        let known: Vec<(usize, String)> = match &target {
+            Target::Fn(i) => match &self.file.decls[self.decl_of_fn[*i]].kind {
+                DeclKind::Fn(f) => f.params.iter().enumerate().filter(|(_, p)| p.comptime).map(|(k, p)| (k, p.name.clone())).collect(),
+                _ => Vec::new(),
+            },
+            Target::Method(..) => Vec::new(),
+        };
+        for (k, name) in &known {
+            let Some(a) = args.get(*k) else { continue };
+            match self.const_int(&a.value, 0) {
+                Some(v) => {
+                    if let Some(Ty::Int(kind)) = sig.params.get(*k).map(|p| &p.ty) {
+                        let (lo, hi) = crate::mir::bounds(kind);
+                        if (v < lo || v > hi) && !matches!(a.value.kind, ExprKind::Int(_)) {
+                            self.err(a.value.span, format!("{v} does not fit in `{kind}`, the type of the `comptime` parameter `{name}`"));
+                        }
+                    }
+                    env.insert(name.clone(), Ty::Value(v));
+                }
+                // In the body of a function with parameters of its own,
+                // the copies of that function say whether it is known.
+                None if self.inst == DEFINITION => {
+                    env.insert(name.clone(), Ty::Unknown);
+                }
+                None => {
+                    self.err(a.value.span, format!("`{name}` is a `comptime` parameter: what it is given must be a number known when the program is compiled"));
+                    env.insert(name.clone(), Ty::Unknown);
+                }
+            }
+        }
         match explicit {
             Some(targs) => {
-                if targs.len() != tparams.len() {
-                    self.err(span, format!("expected {} type arguments, found {}", tparams.len(), targs.len()));
+                if targs.len() != tparams.len() - known.len() {
+                    self.err(span, format!("expected {} type arguments, found {}", tparams.len() - known.len(), targs.len()));
                 }
                 for ((name, _), t) in tparams.iter().zip(targs) {
                     let t = self.type_of_expr(t);
@@ -5123,6 +5210,19 @@ mod tests {
         bad(&f("fn f() { var b = mk()\n for p in b.ps { b.at(0).x = 1 } }"), "while a `for` iterates over it");
         bad(&f("impl Cells for B { fn cell(mut self, i: int) -> P { self.ps[i] } }"), "does not have the signature");
         bad(&f("impl Cells for B { fn cell(mut self, i: int) -> ref mut P { self.ps[i] } }\nfn g(d: mut dyn Cells) { d.cell(0).x = 1 }"), "cannot be assigned to");
+    }
+
+    #[test]
+    fn comptime_parameters() {
+        let head = "let SIDE = 4\nfn power(comptime n: int, x: int) -> int {\n var r = 1\n for i in 0..n { r = r * x }\n r\n}\nfn small(comptime k: u8) -> int { k as int }\n";
+        let f = |body: &str| format!("{head}fn f(k: int) -> int {{ {body} }}");
+        ok(&f("power(3, k) + power(SIDE * 2 - 1, k) + small(100 + 100)"));
+        ok(&format!("{head}fn twice(comptime n: int, x: int) -> int {{ power(n * 2, x) }}\nfn f() -> int {{ twice(2, 3) }}"));
+        bad(&f("power(k, 2)"), "`n` is a `comptime` parameter: what it is given must be a number known when the program is compiled");
+        bad(&f("power(f(1), 2)"), "must be a number known when the program is compiled");
+        bad(&f("small(100 * 4)"), "400 does not fit in `u8`, the type of the `comptime` parameter `k`");
+        bad("fn word(comptime s: str) -> str { s }", "`s` is a `comptime` parameter, and for now it has to be an integer");
+        bad("struct B { v: int }\nimpl B {\n fn up(self, comptime n: int) -> int { self.v + n }\n}", "a method cannot have `comptime` parameters yet");
     }
 
     #[test]

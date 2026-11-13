@@ -41,6 +41,9 @@ pub enum Ty {
     Chan(Ty)
     // A value shared between tasks, that one of them changes at a time.
     Mutex(Ty)
+    // What a `comptime` parameter is in one copy of its function: the
+    // number the call gave.
+    Value(int)
 }
 
 pub struct ParamSig { name: str, mode: parser.Mode, ty: Ty, optional: bool }
@@ -608,6 +611,7 @@ pub fn plain(t: Ty) -> str {
         Ty.Tuple(ts) => "({texts(ts)})"
         Ty.Slice(x) => "[{plain(x)}]"
         Ty.Array(x) => "[{plain(x)}; _]"
+        Ty.Value(v) => "={v}"
         Ty.Range(x) => "range {plain(x)}"
         Ty.Task(x) => "task {plain(x)}"
         Ty.Chan(x) => "chan {plain(x)}"

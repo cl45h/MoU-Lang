@@ -1,0 +1,47 @@
+import std.io
+
+let SIDE = 4
+
+fn power(comptime n: int, x: int) -> int {
+    var r = 1
+    for i in 0..n { r = r * x }
+    r
+}
+
+fn table(comptime n: int) -> [int] {
+    comptime squares(n)
+}
+
+fn squares(n: int) -> [int] {
+    var out: [int] = []
+    for i in 0..n { out.push(i * i) }
+    out
+}
+
+fn twice(comptime n: int, x: int) -> int { power(n * 2, x) + power(n, x) }
+
+fn scaled(comptime k: u8, xs: [int]) -> [int] {
+    var out: [int] = []
+    let f = fn(v: int) -> int { v * (k as int) }
+    for x in xs { out.push(f(x)) }
+    out
+}
+
+fn main() ! io.Error {
+    io.print("{power(3, 2)} {power(SIDE, 2)} {power(SIDE - 1, 3)} {power(0, 9)}")?
+    io.print("{table(5)} {table(SIDE)}")?
+    io.print("{twice(2, 3)} {scaled(3, [1, 2, 3])}")?
+    io.print(more())?
+}
+fn fill[T](comptime n: int, v: T) -> [T] {
+    var out: [T] = []
+    for i in 0..n { out.push(v) }
+    out
+}
+fn small(comptime k: u8) -> int { (k as int) + 1 }
+fn shadow(comptime n: int) -> int {
+    var t = n
+    for n in 0..3 { t = t + n }
+    t
+}
+fn more() -> str { "{fill(2, "a")} {fill[f64](1, 2.5)} {small(255)} {shadow(10)} {fill(SIDE / 2, SIDE)}" }

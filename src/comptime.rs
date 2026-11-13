@@ -45,6 +45,7 @@ pub fn eval(p: &mut Program) -> Vec<Error> {
     }
     let mut values: Vec<Value> = Vec::new();
     interp::FUEL.set(LIMIT);
+    interp::COMPILING.set(true);
     for &f in &p.consts {
         match interp::constant(p, &values, f) {
             Ok(v) => values.push(v),
@@ -56,6 +57,7 @@ pub fn eval(p: &mut Program) -> Vec<Error> {
         }
     }
     interp::FUEL.set(u64::MAX);
+    interp::COMPILING.set(false);
     if !errors.is_empty() {
         return errors;
     }

@@ -767,6 +767,9 @@ struct Lower<'a> {
     fn_ids: HashMap<usize, usize>,
     method_ids: HashMap<(String, String), usize>,
     const_ids: Vec<usize>,
+    /// The `comptime` parameters of the function being made, when it is
+    /// a copy for their values: the number, and the local of the parameter.
+    known: HashMap<String, (i128, Local)>,
     /// Function of each generic instance.
     instance_ids: Vec<usize>,
     /// Instance whose types are being read (see `Info::types`).
@@ -833,6 +836,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         fn_ids: HashMap::new(),
         method_ids: HashMap::new(),
         const_ids: Vec::new(),
+        known: HashMap::new(),
         instance_ids: Vec::new(),
         inst: 0,
         fn_decls: HashMap::new(),
@@ -1262,6 +1266,22 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// The number a name is, when it is a `comptime` parameter of the
+    /// function being made and nothing nearer has taken the name.
+    fn known_value(&self, name: &str) -> Option<i128> {
+        let &(v, param) = self.known.get(name)?;
+        let find = |scopes: &[Scope]| scopes.iter().rev().find_map(|s| s.vars.get(name)).copied();
+        // The parameter lives in the function that is furthest out.
+        let mut frames = std::iter::once(&self.scopes).chain(self.stack.iter().rev().map(|st| &st.scopes)).peekable();
+        while let Some(scopes) = frames.next() {
+            match find(scopes) {
+                Some(l) => return (frames.peek().is_none() && l == param).then_some(v),
+                None => continue,
+            }
+        }
+        None
+    }
+
     fn lookup(&mut self, name: &str) -> Option<Local> {
         if let Some(l) = self.scopes.iter().rev().find_map(|s| s.vars.get(name)).copied() {
             return Some(l);
@@ -1512,6 +1532,17 @@ impl<'a> Lower<'a> {
             let l = self.temp();
             self.declare(&p.name, l);
             scalars.push(scalar_of(self.info, &p.ty));
+        }
+        // In a copy made for the values of its `comptime` parameters,
+        // each of them is that number.
+        self.known.clear();
+        if let Some(i) = self.inst.checked_sub(1).and_then(|k| self.info.instances.get(k)) {
+            if let Target::Fn(fi) = &i.f {
+                for ((name, _), t) in self.info.fns[*fi].tparams.iter().zip(&i.targs) {
+                    let (Ty::Value(v), Some(l)) = (t, self.scopes.iter().rev().find_map(|s| s.vars.get(name)).copied()) else { continue };
+                    self.known.insert(name.clone(), (*v, l));
+                }
+            }
         }
         let params = self.locals;
         (self.ret, self.err) = match &sig.ret {
@@ -2044,6 +2075,7 @@ impl<'a> Lower<'a> {
                 }
             }
             ExprKind::Path(name) => match info.res.get(&(self.inst, id(e))) {
+                Some(Res::Local) if self.known_value(name).is_some() => Operand::Const(Value::Int(self.known_value(name).unwrap_or(0))),
                 Some(Res::Local) => match self.lookup(name) {
                     Some(l) => self.read(Place::local(l)),
                     None => self.unsupported(span, "this name"),

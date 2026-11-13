@@ -53,6 +53,8 @@ pub fn constant(p: &Program, consts: &[Value], f: usize) -> Result<Value, Panic>
 thread_local! {
     /// How many more blocks may run. Only what runs while compiling has a limit.
     pub static FUEL: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+    /// Whether what runs is a constant being computed, and not the program.
+    pub static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 thread_local! {
@@ -75,7 +77,7 @@ thread_local! {
 /// What a `Mutex` does. Nothing waits here: the only one that can be
 /// updating a value is whoever asks for it.
 fn shared(name: &str, args: &[Value]) -> Result<Value, String> {
-    if FUEL.get() != u64::MAX {
+    if COMPILING.get() {
         return Err("a `Mutex` cannot be used while the program is compiled".into());
     }
     let given = |k: usize| args.get(k).cloned().unwrap_or(Value::Unit);
@@ -110,7 +112,7 @@ fn shared(name: &str, args: &[Value]) -> Result<Value, String> {
 /// What a channel does. Here a task runs whole where it is started, so a
 /// channel holds whatever is sent and nothing can wait.
 fn channel(name: &str, args: &[Value]) -> Result<Value, String> {
-    if FUEL.get() != u64::MAX {
+    if COMPILING.get() {
         return Err("a channel cannot be used while the program is compiled".into());
     }
     if name == "chan.new" {

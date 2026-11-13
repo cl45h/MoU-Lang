@@ -187,6 +187,38 @@ impl Gen {
         }
     }
 
+    /// A string expression. Nothing in it has a quote or a brace inside
+    /// an interpolation.
+    fn text(&mut self, depth: usize) -> String {
+        let strs: Vec<String> = self.vars.iter().filter(|(_, k, _)| *k == "str").map(|(n, _, _)| n.clone()).collect();
+        if depth == 0 || self.rng.chance(30) {
+            if !strs.is_empty() && self.rng.chance(60) {
+                return strs[self.rng.below(strs.len())].clone();
+            }
+            return self.rng.pick(&["\"\"", "\"a\"", "\"odd\"", "\"ñandú\"", "\"x y\"", "\"{{}}\""]).to_string();
+        }
+        let d = depth - 1;
+        match self.rng.below(5) {
+            0 => format!("tag({})", self.int("int", d)),
+            1 => format!("pick({}, {}, {})", self.boolean(d), self.text(d), self.text(d)),
+            2 => format!("text.repeat({}, {})", self.text(d), self.rng.below(4)),
+            _ => {
+                // The values of some variables, of any kind, between pieces.
+                let mut out = String::from("\"");
+                for _ in 0..1 + self.rng.below(3) {
+                    if self.vars.is_empty() {
+                        break;
+                    }
+                    let v = self.vars[self.rng.below(self.vars.len())].0.clone();
+                    out.push_str(self.rng.pick(&["", "-", " ", "n="]));
+                    out.push_str(&format!("{{{v}}}"));
+                }
+                out.push('"');
+                out
+            }
+        }
+    }
+
     fn block(&mut self, depth: usize, count: usize) {
         let (vars, arrays) = (self.vars.len(), self.arrays.len());
         self.indent += 1;
@@ -199,7 +231,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, depth: usize) {
-        match self.rng.below(22) {
+        match self.rng.below(27) {
             0..=2 => {
                 let kind = KINDS[self.rng.below(KINDS.len())];
                 let name = self.fresh("v");
@@ -238,6 +270,10 @@ impl Gen {
                         let value = self.float(3);
                         let op = self.rng.pick(&["=", "+=", "*="]);
                         self.line(&format!("{name} {op} {value}"));
+                    }
+                    "str" => {
+                        let value = self.text(2);
+                        self.line(&format!("{name} = {value}"));
                     }
                     _ => {
                         let value = self.int(kind, 3);
@@ -398,6 +434,113 @@ impl Gen {
                 self.vars.push((q, "int", false));
                 self.vars.push((v, "int", false));
             }
+            21 => {
+                // An error: caught where it comes out, or passed up first.
+                let v = self.fresh("v");
+                let x = self.int("int", 2);
+                match self.rng.below(3) {
+                    0 => {
+                        let or = self.literal("int");
+                        self.line(&format!("let {v}: int = risky({x}) catch e {{ {or} }}"));
+                    }
+                    1 => {
+                        let or = self.literal("int");
+                        self.line(&format!("let {v}: int = twice({x}) catch e {{"));
+                        self.line("    match e {");
+                        self.line("        Bad.Odd(n) => n +% 1");
+                        self.line(&format!("        Bad.Big => {or}"));
+                        self.line("    }");
+                        self.line("}");
+                    }
+                    _ => {
+                        let xs = self.array_arg();
+                        self.line(&format!("let {v}: int = halves({xs}) catch e {{ 0 - 5 }}"));
+                    }
+                }
+                self.vars.push((v, "int", false));
+            }
+            22 => {
+                // A string: made, and then measured.
+                let name = self.fresh("s");
+                let value = self.text(2);
+                self.line(&format!("var {name}: str = {value}"));
+                self.vars.push((name.clone(), "str", true));
+                let v = self.fresh("v");
+                if self.rng.chance(60) {
+                    self.line(&format!("let {v}: int = weight({name}) +% ({name}.len as int)"));
+                } else {
+                    let other = self.text(1);
+                    self.line(&format!("let {v}: int = if {name} == {other} {{ 1 }} else {{ 2 }}"));
+                }
+                self.vars.push((v, "int", false));
+            }
+            23 => {
+                // Functions as values: one a function gives, and one
+                // written here that keeps what it sees.
+                let (f, g, v) = (self.fresh("f"), self.fresh("g"), self.fresh("v"));
+                let (n, seen, x, y) = (self.int("int", 2), self.int("int", 0), self.int("int", 2), self.int("int", 2));
+                self.line(&format!("let {f} = adder({n})"));
+                self.line(&format!("let {g} = fn(x: int) -> int {{ {f}(x) ^ {seen} }}"));
+                self.line(&format!("let {v}: int = apply({g}, {x}) +% {g}({y})"));
+                self.vars.push((v, "int", false));
+            }
+            24 => {
+                // A generic function, with each kind of value.
+                let c = self.boolean(2);
+                match self.rng.below(5) {
+                    0 => {
+                        let name = self.fresh("x");
+                        let (a, b) = (self.float(2), self.float(2));
+                        self.line(&format!("var {name}: f64 = pick({c}, {a}, {b})"));
+                        self.vars.push((name, "f64", true));
+                        return;
+                    }
+                    1 => {
+                        let v = self.fresh("v");
+                        let (a, b, d) = (self.int("int", 2), self.int("u8", 2), self.int("int", 2));
+                        self.line(&format!("let {v}: int = pick({c}, S({a}, {b}, true), S({d}, 1, false)).a"));
+                        self.vars.push((v, "int", false));
+                    }
+                    2 => {
+                        let v = self.fresh("v");
+                        let (a, b) = (self.int("int", 2), self.int("int", 2));
+                        self.line(&format!("let {v}: int = weigh(pick({c}, mk({a}), mk({b})))"));
+                        self.vars.push((v, "int", false));
+                    }
+                    3 => {
+                        let v = self.fresh("v");
+                        let (xs, d) = (self.array_arg(), self.int("int", 2));
+                        self.line(&format!("let {v}: int = first({xs}, {d})"));
+                        self.vars.push((v, "int", false));
+                    }
+                    _ => {
+                        let kind = KINDS[self.rng.below(KINDS.len())];
+                        let v = self.fresh("v");
+                        let (a, b) = (self.int(kind, 2), self.int(kind, 2));
+                        self.line(&format!("let {v}: {kind} = pick({c}, {a}, {b})"));
+                        self.vars.push((v, kind, false));
+                    }
+                }
+            }
+            25 => {
+                // Tasks that share a counter and a channel. What they
+                // give does not depend on the order they run in.
+                let (m, ch, v) = (self.fresh("m"), self.fresh("ch"), self.fresh("v"));
+                let start = self.int("int", 2);
+                let (times, sent) = (self.rng.below(6), self.rng.below(12));
+                self.line(&format!("let {m} = Mutex[int]({start})"));
+                let room = 1 + self.rng.below(4);
+                self.line(&format!("let {ch} = Chan[int]({room})"));
+                self.line(&format!("var {v} = 0"));
+                self.line("scope s {");
+                self.line(&format!("    let t1 = s.spawn(bump({m}, {times}))"));
+                self.line(&format!("    let t2 = s.spawn(bump({m}, {times}))"));
+                self.line(&format!("    let t3 = s.spawn(feed({ch}, {sent}))"));
+                self.line(&format!("    {v} = drain({ch}) +% t1.wait() +% t2.wait() +% t3.wait()"));
+                self.line("}");
+                self.line(&format!("{v} = {v} +% {m}.get()"));
+                self.vars.push((v, "int", true));
+            }
             19 => {
                 // A struct given to a function, to read and to change.
                 let name = self.fresh("p");
@@ -449,10 +592,12 @@ impl Gen {
             g.rng.next();
         }
         g.line("import std.io");
+        g.line("import std.text");
         g.line("");
         g.line("struct S { a: int, b: u8, c: bool }");
         g.line("struct P { x: f64, y: f64 }");
         g.line("enum E { A, B(int), C(int, bool) }");
+        g.line("enum Bad { Odd(int), Big }");
         g.line("");
         g.line("fn half(n: int) -> int? { if n % 2 == 0 { Some(n / 2) } else { None } }");
         g.line("fn mk(n: int) -> E { if n % 3 == 0 { E.A } else { if n % 3 == 1 { E.B(n) } else { E.C(n, n > 10) } } }");
@@ -472,6 +617,49 @@ impl Gen {
         g.line("fn regrow(s: mut S, n: int) { grow(mut s, n +% 1) }");
         g.line("fn pair(a: int, b: int) -> (int, int) { (a +% b, a ^ b) }");
         g.line("fn turned(p: (int, int)) -> (int, int) { (p.1, p.0 +% 1) }");
+        g.line("fn risky(n: int) -> int ! Bad {");
+        g.line("    if n % 2 != 0 { return Bad.Odd(n) }");
+        g.line("    if n > 500 { return Bad.Big }");
+        g.line("    n / 2");
+        g.line("}");
+        g.line("fn twice(n: int) -> int ! Bad {");
+        g.line("    let a = risky(n)?");
+        g.line("    risky(a)? +% 1");
+        g.line("}");
+        g.line("fn halves(xs: [int]) -> int ! Bad {");
+        g.line("    var t = 0");
+        g.line("    for x in xs { t = t +% risky(x)? }");
+        g.line("    t");
+        g.line("}");
+        g.line("fn apply(f: fn(int) -> int, x: int) -> int { f(x) }");
+        g.line("fn adder(n: int) -> fn(int) -> int { fn(x: int) -> int { x +% n } }");
+        g.line("fn pick[T](c: bool, a: T, b: T) -> T { if c { a } else { b } }");
+        g.line("fn first[T](xs: [T], d: T) -> T { if xs.len > 0 { xs[0] } else { d } }");
+        g.line("fn tag(n: int) -> str { if n % 2 == 0 { \"even{n}\" } else { \"odd\" } }");
+        g.line("fn weight(s: str) -> int {");
+        g.line("    var t = 0");
+        g.line("    for c in text.chars(s) { t = t *% 31 +% (c as int) }");
+        g.line("    t");
+        g.line("}");
+        g.line("fn bump(m: Mutex[int], times: int) -> int {");
+        g.line("    for i in 0..times { m.update(fn(n: int) -> int { n +% 1 }) }");
+        g.line("    times");
+        g.line("}");
+        g.line("fn feed(c: Chan[int], n: int) -> int {");
+        g.line("    for i in 0..n { c.send(i *% i) }");
+        g.line("    c.close()");
+        g.line("    n");
+        g.line("}");
+        g.line("fn drain(c: Chan[int]) -> int {");
+        g.line("    var sum = 0");
+        g.line("    while true {");
+        g.line("        match c.recv() {");
+        g.line("            Some(x) => { sum = sum +% x }");
+        g.line("            None => { break }");
+        g.line("        }");
+        g.line("    }");
+        g.line("    sum");
+        g.line("}");
         g.line("");
         let fns = 2 + g.rng.below(5);
         for _ in 0..fns {
@@ -567,7 +755,7 @@ pub fn fuzz(count: u64, seed: u64, sanitize: bool) -> bool {
             return false;
         }
         let mut build = Command::new(&cc);
-        build.arg("-O1").arg("-o").arg(&exe).arg(&c_path).arg("-lm");
+        build.arg("-O1").arg("-pthread").arg("-o").arg(&exe).arg(&c_path).arg("-lm");
         if sanitize {
             build.args(["-g", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined"]);
         }

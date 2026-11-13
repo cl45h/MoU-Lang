@@ -29,7 +29,7 @@ fn main() ! io.Error {
 - Verificador de tipos con genéricos, traits y `dyn`.
 - Ownership sin lifetimes: las referencias no se guardan, así que no hace falta anotarlas.
 - Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`, `block`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
-- Constantes y expresiones `comptime` calculadas al compilar.
+- Constantes y expresiones `comptime` calculadas al compilar, y parámetros `comptime` de enteros: `fn power(comptime n: int, x: int)` da una copia de la función por cada valor de `n`.
 - Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
 - Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
@@ -44,10 +44,9 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida sin bloquear (tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
 - El resto del contexto (`io` inyectable; `with alloc = arena` ya está) y los efectos en los tipos de función.
-- Parámetros `comptime` y tipos como valores (la reflexión con `meta.info(T)` ya está).
+- Tipos como valores (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y la reflexión con `meta.info(T)` ya están.
 - Leer los headers de C en vez de declarar las funciones a mano (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
-- Los bloques `with`, que son parte del contexto: se leen, pero el compilador avisa que no los soporta.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).
 

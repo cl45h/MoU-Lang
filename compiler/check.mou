@@ -222,6 +222,9 @@ pub struct Checker {
     enums: [EnumInfo]
     fns: [FnInfo]
     consts: [types.Ty?]
+    // What each constant is declared as, to work out the ones a
+    // `comptime` parameter is given.
+    const_exprs: [parser.Expr]
     aliases: [AliasEntry]
     // The module of the declaration being checked.
     module: int
@@ -629,6 +632,7 @@ impl Checker {
             types.Ty.Tuple(ts) => "({self.show_all(ts)})"
             types.Ty.Slice(x) => "[{self.show(x)}]"
             types.Ty.Array(x) => "[{self.show(x)}; _]"
+            types.Ty.Value(v) => "{v}"
             types.Ty.Range(x) => "range of {self.show(x)}"
             types.Ty.Task(x) => "Task[{self.show(x)}]"
             types.Ty.Chan(x) => "Chan[{self.show(x)}]"
@@ -1345,8 +1349,9 @@ impl Checker {
                     name = f.name
                     what = Global.Fn(-1)
                 }
-                parser.DeclKind.Const(n, _, _) => {
+                parser.DeclKind.Const(n, _, value) => {
                     self.consts.push(None)
+                    self.const_exprs.push(value)
                     name = n
                     what = Global.Const(self.consts.len as int - 1)
                 }
@@ -1608,16 +1613,29 @@ impl Checker {
                 parser.DeclKind.Fn(f) => {
                     let idx = self.fn_of_decl[di]
                     if idx < 0 { continue }
-                    if f.generics.len == 0 {
+                    var known: [TParam] = []
+                    for p in f.params {
+                        if p.ct { known.push(TParam(p.name, [])) }
+                    }
+                    if f.generics.len == 0 && known.len == 0 {
                         let signed = self.signature(f, at)
                         self.fns[idx].sig = signed.sig
                         continue
                     }
                     match self.type_params(f.generics, at) {
-                        Some(tparams) => {
+                        Some(found) => {
+                            // A `comptime` parameter makes copies of the function
+                            // as a type parameter does: one for each value.
+                            var tparams = found
+                            for p in known { tparams.push(p) }
                             self.enter_definition(tparams)
                             let signed = self.signature(f, at)
                             self.fns[idx].sig = signed.sig
+                            for k in 0..f.params.len {
+                                if k < signed.sig.params.len && f.params[k].ct && !is_int(signed.sig.params[k].ty) {
+                                    self.err(at, "`{f.params[k].name}` is a `comptime` parameter, and for now it has to be an integer")
+                                }
+                            }
                             self.fns[idx].tparams = tparams
                             self.leave_generic()
                         }
@@ -1718,6 +1736,12 @@ impl Checker {
                     self.enter_definition(extra)
                     self.self_ty = Some(ty)
                     let signed = self.signature(f, mat)
+                    for p in f.params {
+                        if p.ct {
+                            self.err(mat, "a method cannot have `comptime` parameters yet: only a function can")
+                            break
+                        }
+                    }
                     self.self_ty = None
                     self.leave_generic()
                     self.enter_definition(tparams)
@@ -1918,6 +1942,7 @@ fn start(p: load.Program, decls_only: bool) -> Checker {
         enums: [],
         fns: [],
         consts: [],
+        const_exprs: [],
         aliases: [],
         module: 0,
         module_of: module_of,
@@ -2286,6 +2311,74 @@ impl Checker {
     // A call of a generic function or method: finds the type arguments,
     // checks the bounds and notes the instance to check and run. `known`
     // holds what the receiver or a written type already decided.
+    // The number an expression is, when it is made of numbers, constants
+    // and the `comptime` parameters of the function it is in.
+    fn const_int(self, e: parser.Expr, depth: int) -> int? {
+        if depth > 40 { return None }
+        match e.kind {
+            parser.Kind.Int(s) => {
+                match int_value(s) {
+                    Some(limbs) => {
+                        if limbs[2] != 0 || limbs[3] != 0 || limbs[1] >= 2147483648 { return None }
+                        Some(limbs[1] * 4294967296 + limbs[0])
+                    }
+                    None => None
+                }
+            }
+            parser.Kind.Unary(op, inner) => {
+                if op != "-" { return None }
+                match self.const_int(inner, depth) {
+                    Some(v) => in_64(0 - (v as i128))
+                    None => None
+                }
+            }
+            parser.Kind.Binary(op, lhs, rhs) => {
+                var a: i128 = 0
+                var b: i128 = 0
+                match self.const_int(lhs, depth) {
+                    Some(v) => {
+                        a = v as i128
+                    }
+                    None => return None
+                }
+                match self.const_int(rhs, depth) {
+                    Some(v) => {
+                        b = v as i128
+                    }
+                    None => return None
+                }
+                if op == "+" { return in_64(a + b) }
+                if op == "-" { return in_64(a - b) }
+                if op == "*" { return in_64(a * b) }
+                if op == "/" && b != 0 { return in_64(a / b) }
+                if op == "%" && b != 0 { return in_64(a % b) }
+                None
+            }
+            parser.Kind.Name(name) => {
+                match types.lookup(self.tenv, name) {
+                    Some(t) => {
+                        match t {
+                            types.Ty.Value(v) => Some(v)
+                            _ => None
+                        }
+                    }
+                    None => {
+                        match self.global(name) {
+                            Some(g) => {
+                                match g {
+                                    Global.Const(i) => self.const_int(self.const_exprs[i], depth + 1)
+                                    _ => None
+                                }
+                            }
+                            None => None
+                        }
+                    }
+                }
+            }
+            _ => None
+        }
+    }
+
     fn generic_call(mut self, e: parser.Expr, target: Target, known: [types.Binding], explicit: [parser.Expr]?, hint: types.Ty?, receiver: Recv?, args: [parser.Arg], at: Span) -> types.Ty {
         var env = known
         var tparams: [TParam] = []
@@ -2313,9 +2406,52 @@ impl Checker {
             }
         }
         let tys = pre.tys
+        // What each `comptime` parameter is given has to be known here.
+        var given = 0
+        match target {
+            Target.Fn(i) => {
+                match self.decls[self.decl_of_fn[i]].kind {
+                    parser.DeclKind.Fn(f) => {
+                        for k in 0..f.params.len {
+                            if !f.params[k].ct { continue }
+                            given += 1
+                            if k >= args.len { continue }
+                            let name = f.params[k].name
+                            let a = args[k].value
+                            match self.const_int(a, 0) {
+                                Some(v) => {
+                                    if k < sig.params.len {
+                                        match sig.params[k].ty {
+                                            types.Ty.Int(kind) => {
+                                                if !fits_kind(v, kind) && !is_literal(a) {
+                                                    self.err(at_expr(a), "{v} does not fit in `{kind}`, the type of the `comptime` parameter `{name}`")
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    types.define(mut env, name, types.Ty.Value(v))
+                                }
+                                None => {
+                                    // In the body of a function with parameters of its own,
+                                    // the copies of that function say whether it is known.
+                                    if self.inst != DEFINITION {
+                                        self.err(at_expr(a), "`{name}` is a `comptime` parameter: what it is given must be a number known when the program is compiled")
+                                    }
+                                    types.define(mut env, name, types.Ty.Unknown)
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
         match explicit {
             Some(targs) => {
-                if targs.len != tparams.len { self.err(at, "expected {tparams.len} type arguments, found {targs.len}") }
+                let asked = tparams.len as int - given
+                if targs.len as int != asked { self.err(at, "expected {asked} type arguments, found {targs.len}") }
                 for k in 0..tparams.len {
                     if k < targs.len {
                         let t = self.type_of_expr(targs[k])
@@ -3781,6 +3917,39 @@ fn digit_of(c: char) -> int {
 // The value of a whole number as it is written, in four parts of 32 bits
 // from the lowest, or nothing when it is not a number or does not fit
 // in 128 bits.
+// A number, when it fits in 64 bits.
+fn in_64(v: i128) -> int? {
+    let top: i128 = 9223372036854775807
+    if v > top || v < 0 - top - 1 { return None }
+    Some(v as int)
+}
+
+fn is_int(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Int(_) => true
+        _ => false
+    }
+}
+
+fn is_literal(e: parser.Expr) -> bool {
+    match e.kind {
+        parser.Kind.Int(_) => true
+        _ => false
+    }
+}
+
+// Whether a number is one of the values of a kind of integer.
+fn fits_kind(v: int, kind: str) -> bool {
+    if kind == "i8" { return v >= 0 - 128 && v <= 127 }
+    if kind == "u8" { return v >= 0 && v <= 255 }
+    if kind == "i16" { return v >= 0 - 32768 && v <= 32767 }
+    if kind == "u16" { return v >= 0 && v <= 65535 }
+    if kind == "i32" { return v >= 0 - 2147483648 && v <= 2147483647 }
+    if kind == "u32" { return v >= 0 && v <= 4294967295 }
+    if text.starts_with(kind, "u") { return v >= 0 }
+    true
+}
+
 pub fn int_value(written: str) -> [int]? {
     var cs: [char] = []
     for c in text.chars(written) {
