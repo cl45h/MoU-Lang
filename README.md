@@ -44,7 +44,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Rendimiento parejo con C: hoy iguala en bucles, cálculo numérico, y structs, tuplas, opcionales y enums de números y `bool`, que ya van sin bloque de memoria. Sigue siendo varias veces más lento con strings y con structs y enums que guardan otros valores, porque esos todavía van en bloques de memoria con etiqueta.
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida con un bucle de eventos: hoy `std.net` da TCP con funciones que esperan, y varias conexiones a la vez se atienden con una tarea (un hilo) por conexión; solo Linux e IPv4. Tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden.
-- El resto del contexto (`io` inyectable; `with alloc = arena` ya está) y los efectos escritos en los tipos de función (hoy una llamada a un valor función toma los efectos de las funciones que el programa usa como valor).
+- El resto del contexto (un `io` reemplazable entero; `with alloc = arena` y `with io = lineas`, que captura lo que se imprime, ya están) y los efectos escritos en los tipos de función (hoy una llamada a un valor función toma los efectos de las funciones que el programa usa como valor).
 - Tipos como valores (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y la reflexión con `meta.info(T)` ya están.
 - Que el compilador lea los headers de C al compilar: hoy `mou bind header.h` escribe las declaraciones de las funciones y se guardan en un módulo (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.

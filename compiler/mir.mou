@@ -543,7 +543,9 @@ struct VarSlot { name: str, local: int }
 // tasks are waited for on the way out; -1 otherwise.
 struct SelfHint { job: int, ty: types.Ty }
 
-struct Scope { vars: [VarSlot], defers: [parser.Expr], tasks: int, arena: int }
+// `capture` is the place of a `with io = lines` block, when it is one:
+// where the lines it prints are left on the way out.
+struct Scope { vars: [VarSlot], defers: [parser.Expr], tasks: int, arena: int, capture: [Place] }
 
 struct LoopCtx {
     brk: int
@@ -1557,6 +1559,13 @@ impl Lower {
                 let here = self.at
                 let _ = self.finish_call(Callee.Native("arena.close"), [local_op(arena)], [], here)
             }
+            let capture = self.scopes[k].capture
+            if capture.len > 0 {
+                // The lines go after the ones the variable already has.
+                let here = self.at
+                let all = self.finish_call(Callee.Native("capture.close"), [Operand.At(capture[0])], [], here)
+                self.emit(capture[0], Rvalue.Use(all))
+            }
             let defers = self.scopes[k].defers
             if defers.len > 0 {
                 // What is deferred only sees the names of its own scope.
@@ -1585,7 +1594,7 @@ impl Lower {
         self.blocks = []
         self.locals = 0
         self.scopes = []
-        self.scopes.push(Scope([], [], -1, -1))
+        self.scopes.push(Scope([], [], -1, -1, []))
         self.loops = []
         self.at = at
         self.decl_at = at
@@ -1740,7 +1749,7 @@ impl Lower {
     // ---- statements ----
 
     fn block(mut self, b: parser.Block) -> Operand {
-        self.scopes.push(Scope([], [], -1, -1))
+        self.scopes.push(Scope([], [], -1, -1, []))
         for s in b.stmts { self.stmt(s) }
         var v = unit()
         if let Some(e) = b.tail { v = self.expr(e) }
@@ -1952,7 +1961,7 @@ impl Lower {
                     let else_bb = self.new_block()
                     let end = self.new_block()
                     let res = self.temp()
-                    self.scopes.push(Scope([], [], -1, -1))
+                    self.scopes.push(Scope([], [], -1, -1, []))
                     self.cond(cond, else_bb)
                     let tv = self.path_block(then)
                     let _ = self.scopes.pop()
@@ -2027,7 +2036,7 @@ impl Lower {
     }
 
     fn path_block(mut self, b: parser.Block) -> Operand {
-        self.scopes.push(Scope([], [], -1, -1))
+        self.scopes.push(Scope([], [], -1, -1, []))
         for s in b.stmts { self.stmt(s) }
         var v = unit()
         match b.tail {
@@ -2442,7 +2451,7 @@ impl Lower {
                 let end = self.new_block()
                 let res = self.temp()
                 self.kept(res, j)
-                self.scopes.push(Scope([], [], -1, -1))
+                self.scopes.push(Scope([], [], -1, -1, []))
                 self.cond(cond, else_bb)
                 let tv = self.block(then)
                 let _ = self.scopes.pop()
@@ -2480,7 +2489,7 @@ impl Lower {
                 let end = self.new_block()
                 for arm in arms {
                     let next = self.new_block()
-                    self.scopes.push(Scope([], [], -1, -1))
+                    self.scopes.push(Scope([], [], -1, -1, []))
                     self.pattern(arm.pat, place, st, next)
                     if let Some(g) = arm.guard {
                         let c = self.expr(g)
@@ -2507,7 +2516,7 @@ impl Lower {
                 let exit = self.new_block()
                 self.terminate(Term.Goto(head))
                 self.switch_to(head)
-                self.scopes.push(Scope([], [], -1, -1))
+                self.scopes.push(Scope([], [], -1, -1, []))
                 self.cond(cond, exit)
                 self.loops.push(plain_loop(exit, head, self.scopes.len as int))
                 let _ = self.block(body)
@@ -2565,7 +2574,7 @@ impl Lower {
             parser.Kind.Closure(params, _, _, body) => self.closure(e, params, body)
             parser.Kind.Scope(name, body) => {
                 // Its tasks are waited for wherever the block is left.
-                self.scopes.push(Scope([], [], -1, -1))
+                self.scopes.push(Scope([], [], -1, -1, []))
                 let opened = self.finish_call(Callee.Native("task.open"), [], [], at)
                 let l = self.temp()
                 self.set(l, opened)
@@ -2578,9 +2587,24 @@ impl Lower {
                 let _ = self.scopes.pop()
                 v
             }
-            parser.Kind.With(_, body) => {
+            parser.Kind.With(bindings, body) => {
+                if bindings.len > 0 && bindings[0].name == "io" {
+                    // What is printed is kept until the block is left.
+                    let lines = self.place(bindings[0].value)
+                    self.at = at
+                    self.scopes.push(Scope([], [], -1, -1, []))
+                    let _ = self.finish_call(Callee.Native("capture.open"), [], [], at)
+                    let top = self.scopes.len - 1
+                    self.scopes[top].capture = [lines]
+                    let v = self.block(body)
+                    let kept = self.stash(v)
+                    self.at = at
+                    self.run_defers(self.scopes.len as int - 1)
+                    let _ = self.scopes.pop()
+                    return Operand.At(kept)
+                }
                 // Memory is asked from an arena until the block is left.
-                self.scopes.push(Scope([], [], -1, -1))
+                self.scopes.push(Scope([], [], -1, -1, []))
                 let opened = self.finish_call(Callee.Native("arena.open"), [], [], at)
                 let l = self.temp()
                 self.set(l, opened)
@@ -2666,7 +2690,7 @@ impl Lower {
                     let more = self.tmp(Rvalue.Binary(op, Num.Dyn, cursor, stop))
                     self.terminate(Term.Branch(more, body_bb, exit))
                     self.switch_to(body_bb)
-                    self.scopes.push(Scope([], [], -1, -1))
+                    self.scopes.push(Scope([], [], -1, -1, []))
                     self.pattern(pat, at_local(i), t, -1)
                     self.loops.push(plain_loop(exit, step, self.scopes.len as int))
                     let _ = self.block(body)
@@ -2754,7 +2778,7 @@ impl Lower {
         }
         self.terminate(Term.Branch(more, body_bb, exit))
         self.switch_to(body_bb)
-        self.scopes.push(Scope([], [], -1, -1))
+        self.scopes.push(Scope([], [], -1, -1, []))
         self.pattern(pat, item, elem, -1)
         self.loops.push(plain_loop(exit, step, self.scopes.len as int))
         let _ = self.block(body)
@@ -3047,7 +3071,7 @@ impl Lower {
         let failed = self.tmp(Rvalue.Is(Operand.At(place), 1))
         self.terminate(Term.Branch(failed, bad, good))
         self.switch_to(bad)
-        self.scopes.push(Scope([], [], -1, -1))
+        self.scopes.push(Scope([], [], -1, -1, []))
         if let Some(b) = binding {
             let l = self.temp()
             self.set(l, Operand.At(with_field(place, 0)))
@@ -3416,7 +3440,7 @@ impl Lower {
                 let caller = self.inst
                 self.inst = inst
                 self.scopes = []
-                self.scopes.push(Scope([], [], -1, -1))
+                self.scopes.push(Scope([], [], -1, -1, []))
                 let v = self.expr(d)
                 self.scopes = saved
                 self.inst = caller

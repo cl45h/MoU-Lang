@@ -1,0 +1,61 @@
+import std.io
+
+// `with io = lines { }`: what the block prints is kept in the array.
+
+fn greet(name: str) ! io.Error {
+    io.print("hola, {name}")?
+    io.print("")?
+}
+
+fn count(n: int) -> int ! io.Error {
+    for i in 0..n { io.print("{i}")? }
+    n
+}
+
+fn early(n: int, log: mut [str]) -> int ! io.Error {
+    with io = log {
+        io.print("antes")?
+        if n > 2 { return n }
+        io.print("después")?
+    }
+    0
+}
+
+struct Book { title: str, notes: [str] }
+
+fn shout() -> int {
+    io.print("desde una tarea") catch e {}
+    1
+}
+
+fn main() ! io.Error {
+    var lines: [str] = ["ya estaba"]
+    with io = lines {
+        greet("mundo")?
+        io.print("{1 + 2}")?
+    }
+    io.print("{lines.len} {lines}")?
+    // The block gives a value, and one inside another keeps its own lines.
+    var outer: [str] = []
+    var inner: [str] = []
+    let n = with io = outer {
+        io.print("uno")?
+        with io = inner { count(3)? }
+        io.print("dos")?
+        7
+    }
+    io.print("{n} {outer} {inner}")?
+    // Leaving the block early still leaves the lines.
+    var log: [str] = []
+    io.print("{early(5, mut log)?} {early(1, mut log)?} {log}")?
+    // A field is a place too, and so is what a task prints meanwhile.
+    var book = Book("notas", [])
+    with io = book.notes {
+        scope s {
+            let t = s.spawn(shout())
+            io.print("{t.wait()}")?
+        }
+    }
+    io.print("{book.notes}")?
+    io.print("fin")?
+}

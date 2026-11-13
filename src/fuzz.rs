@@ -233,7 +233,7 @@ impl Gen {
     }
 
     fn stmt(&mut self, depth: usize) {
-        match self.rng.below(27) {
+        match self.rng.below(28) {
             0..=2 => {
                 let kind = KINDS[self.rng.below(KINDS.len())];
                 let name = self.fresh("v");
@@ -542,6 +542,18 @@ impl Gen {
                 self.line("}");
                 self.line(&format!("{v} = {v} +% {m}.get()"));
                 self.vars.push((v, "int", true));
+            }
+            26 => {
+                // What is printed inside the block is kept, not written.
+                let (lines, v) = (self.fresh("ls"), self.fresh("v"));
+                let (a, b) = (self.int("int", 2), self.text(1));
+                self.line(&format!("var {lines}: [str] = []"));
+                self.line(&format!("with io = {lines} {{"));
+                self.line(&format!("    io.print(\"{{{a}}}\") catch e {{}}"));
+                self.line(&format!("    io.print({b}) catch e {{}}"));
+                self.line("}");
+                self.line(&format!("let {v}: int = weight({lines}[0]) +% weight({lines}[1]) +% ({lines}.len as int)"));
+                self.vars.push((v, "int", false));
             }
             19 => {
                 // A struct given to a function, to read and to change.

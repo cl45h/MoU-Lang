@@ -1,0 +1,15 @@
+import std.io
+
+// What a `with` block cannot be given.
+
+fn main() ! io.Error {
+    let fixed: [str] = []
+    var numbers: [int] = []
+    var lines: [str] = []
+    with io = fixed { io.print("a")? }
+    with io = numbers { io.print("b")? }
+    with io = "text" { io.print("c")? }
+    with net = lines { io.print("d")? }
+    with io = lines, alloc = arena { io.print("e")? }
+    with io = lines { io.print("f")? }
+}

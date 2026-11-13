@@ -748,6 +748,9 @@ struct Scope<'a> {
     tasks: Option<Local>,
     /// The scope of a `with alloc = arena` block: the arena, closed on the way out.
     arena: Option<Local>,
+    /// The scope of a `with io = lines` block: where the lines it prints
+    /// are left on the way out.
+    capture: Option<Place>,
 }
 
 struct LoopCtx {
@@ -1461,6 +1464,12 @@ impl<'a> Lower<'a> {
             if let Some(l) = self.scopes[k].arena {
                 let span = self.span;
                 self.finish_call(Callee::Native("arena.close"), vec![Operand::Place(Place::local(l))], Vec::new(), span);
+            }
+            if let Some(lines) = self.scopes[k].capture.clone() {
+                // The lines go after the ones the variable already has.
+                let span = self.span;
+                let all = self.finish_call(Callee::Native("capture.close"), vec![Operand::Place(lines.clone())], Vec::new(), span);
+                self.emit(lines, Rvalue::Use(all));
             }
             let defers = self.scopes[k].defers.clone();
             if defers.is_empty() {
@@ -2359,6 +2368,22 @@ impl<'a> Lower<'a> {
                 self.run_defers(self.scopes.len() - 1);
                 self.scopes.pop();
                 v
+            }
+            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io") => {
+                // What is printed is kept until the block is left.
+                let lines = self.place(&bindings[0].1);
+                self.span = span;
+                self.scopes.push(Scope::default());
+                self.finish_call(Callee::Native("capture.open"), Vec::new(), Vec::new(), span);
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.capture = Some(lines);
+                }
+                let v = self.block(body);
+                let kept = self.stash(v);
+                self.span = span;
+                self.run_defers(self.scopes.len() - 1);
+                self.scopes.pop();
+                Operand::Place(kept)
             }
             ExprKind::With { body, .. } => {
                 // Memory is asked from an arena until the block is left.

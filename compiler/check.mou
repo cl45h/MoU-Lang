@@ -4308,7 +4308,8 @@ impl Checker {
                 t
             }
             parser.Kind.With(bindings, body) => {
-                // The one context there is: where memory is asked from.
+                // The contexts there are: where memory is asked from, and
+                // where what is printed goes.
                 var arena = false
                 if bindings.len == 1 {
                     if bindings[0].name == "alloc" {
@@ -4320,7 +4321,17 @@ impl Checker {
                         }
                     }
                 }
-                if !arena { self.err(at, "the only context there is for now is `with alloc = arena {{ }}`") }
+                if bindings.len == 1 && bindings[0].name == "io" {
+                    let value = bindings[0].value
+                    let t = self.expr(value)
+                    if !types.assignable(types.Ty.Slice(types.Ty.Str), t) {
+                        let shown = self.show(t)
+                        self.err(at_expr(value), "`with io = ...` takes a variable of type `[str]`, where the lines the block prints are kept, and this is `{shown}`")
+                    }
+                    self.require_mut_place(value)
+                } else {
+                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}` and `with io = lines {{ }}`") }
+                }
                 self.scopes.push([])
                 let t = self.block(body)
                 let _ = self.scopes.pop()

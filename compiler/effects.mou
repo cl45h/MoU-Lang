@@ -1554,6 +1554,7 @@ impl Walk {
                             notes.push(Note(BLOCK, "`recv` waits while the channel is empty"))
                             notes.push(Note(ALLOC, "`recv` creates its result on the heap"))
                         }
+                        if name == "capture.close" { notes.push(Note(ALLOC, "the lines printed in a `with io` block are kept on the heap")) }
                         if text.starts_with(name, "io.") { notes.push(Note(IO, "`{name}` reaches outside the program")) }
                         if name == "io.read_line" || name == "io.read_file" || name == "io.args" || name == "raw.concat" || name == "raw.from_chars" || name == "path.join" {
                             let shown = if name == "path.join" { "a call that returns `ref mut`" } else { "`{name}`" }

@@ -33,6 +33,8 @@ const MAX_DEPTH: usize = 100_000;
 
 /// Runs the constants and then `main`. Returns what `main` returned.
 pub fn run(p: &Program, main: usize, out: &mut dyn Write) -> Result<Value, Panic> {
+    // A run that stopped inside a `with io` block left it open.
+    CAPTURE.with(|c| *c.borrow_mut() = (Vec::new(), Vec::new()));
     let mut consts = Vec::new();
     for (k, &f) in p.consts.iter().enumerate() {
         // A constant computed while compiling is not computed again.
@@ -53,6 +55,9 @@ pub fn constant(p: &Program, consts: &[Value], f: usize) -> Result<Value, Panic>
 thread_local! {
     /// How many more blocks may run. Only what runs while compiling has a limit.
     pub static FUEL: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+    /// What is printed inside the `with io = lines` blocks that are open:
+    /// the lines, and where the lines of each block start.
+    static CAPTURE: std::cell::RefCell<(Vec<String>, Vec<usize>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
     /// Whether what runs is a constant being computed, and not the program.
     pub static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -184,6 +189,22 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         _ if name.starts_with("mutex.") => shared(name, args)?,
         "task.open" => Value::Int(0),
         "task.close" | "task.cancel" | "arena.close" => Value::Unit,
+        "capture.open" => CAPTURE.with(|c| {
+            let mut c = c.borrow_mut();
+            let from = c.0.len();
+            c.1.push(from);
+            Value::Unit
+        }),
+        "capture.close" => {
+            let Some(Value::Array(old)) = args.first() else { return Err(internal("`with io` without an array")) };
+            let mut all: Vec<Value> = old.iter().cloned().collect();
+            CAPTURE.with(|c| {
+                let mut c = c.borrow_mut();
+                let from = c.1.pop().unwrap_or(0).min(c.0.len());
+                all.extend(c.0.drain(from..).map(|line| Value::Str(line.into())));
+            });
+            Value::Array(Rc::new(all))
+        }
         // Here memory is asked for the same way inside an arena and outside.
         "arena.open" => Value::Int(0),
         // Here a task is done before anything can ask it to stop.
@@ -422,9 +443,15 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
                     }
                     None => {
                         let text = vals.first().map_or(String::new(), |v| show(p, v, true));
-                        let result = match writeln!(out, "{text}") {
-                            Ok(()) => Value::Ok(Box::new(Value::Unit)),
-                            Err(e) => Value::Err(Box::new(Value::Str(e.to_string().into()))),
+                        let capturing = CAPTURE.with(|c| !c.borrow().1.is_empty());
+                        let result = if capturing {
+                            CAPTURE.with(|c| c.borrow_mut().0.push(text));
+                            Value::Ok(Box::new(Value::Unit))
+                        } else {
+                            match writeln!(out, "{text}") {
+                                Ok(()) => Value::Ok(Box::new(Value::Unit)),
+                                Err(e) => Value::Err(Box::new(Value::Str(e.to_string().into()))),
+                            }
                         };
                         tri!(write(&mut stack[top], dest, result));
                         stack[top].block = *next;

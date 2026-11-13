@@ -4152,13 +4152,23 @@ impl<'a> Checker<'a> {
                 t
             }
             ExprKind::With { bindings, body } => {
-                // The one context there is: where memory is asked from.
+                // The contexts there are: where memory is asked from, and
+                // where what is printed goes.
                 let arena = match bindings.as_slice() {
                     [(name, value)] => name == "alloc" && matches!(&value.kind, ExprKind::Path(n) if n == "arena" && self.lookup(n).is_none()),
                     _ => false,
                 };
-                if !arena {
-                    self.err(e.span, "the only context there is for now is `with alloc = arena { }`");
+                match bindings.as_slice() {
+                    [(name, value)] if name == "io" => {
+                        let t = self.expr(value);
+                        if !assignable(&Ty::Slice(Box::new(Ty::Str)), &t) {
+                            let shown = self.show(&t);
+                            self.err(value.span, format!("`with io = ...` takes a variable of type `[str]`, where the lines the block prints are kept, and this is `{shown}`"));
+                        }
+                        self.require_mut_place(value);
+                    }
+                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }` and `with io = lines { }`"),
+                    _ => {}
                 }
                 self.scopes.push(HashMap::new());
                 let t = self.block(body);

@@ -1608,9 +1608,90 @@ static kv kpanic_with(kv v) {
     return v;
 }
 
+/* ---- `with io = lines` ----
+ *
+ * While such a block is open, what `io.print` writes is kept here instead
+ * of going out, one entry for each call. The blocks nest: each remembers
+ * where its lines start. It is one list for the whole program, so what a
+ * task prints while the block is open is kept too. */
+enum { KCAPTURE_MAX = 32 };
+static struct {
+    char **lines;
+    size_t *lens;
+    size_t n, cap;
+    size_t marks[KCAPTURE_MAX];
+    int depth;
+} kcap;
+#ifdef KTHREADS
+static pthread_mutex_t kcap_lock = PTHREAD_MUTEX_INITIALIZER;
+#define KCAP_LOCK() pthread_mutex_lock(&kcap_lock)
+#define KCAP_UNLOCK() pthread_mutex_unlock(&kcap_lock)
+#else
+#define KCAP_LOCK() ((void)0)
+#define KCAP_UNLOCK() ((void)0)
+#endif
+
+static kv kcapture_open(void) {
+    KCAP_LOCK();
+    if (kcap.depth == KCAPTURE_MAX) kpanic("too many `with io` blocks, one inside another");
+    kcap.marks[kcap.depth++] = kcap.n;
+    KCAP_UNLOCK();
+    return KUNIT;
+}
+
+/* Keeps a line when a block is open. Takes the text when it does. */
+static bool kcapture_line(char *text, size_t len) {
+    if (!kcap.depth) return false;
+    KCAP_LOCK();
+    if (!kcap.depth) {
+        KCAP_UNLOCK();
+        return false;
+    }
+    if (kcap.n == kcap.cap) {
+        kcap.cap = kcap.cap ? kcap.cap * 2 : 16;
+        kcap.lines = (char **)realloc(kcap.lines, kcap.cap * sizeof(char *));
+        kcap.lens = (size_t *)realloc(kcap.lens, kcap.cap * sizeof(size_t));
+        if (!kcap.lines || !kcap.lens) kpanic("out of memory");
+    }
+    kcap.lines[kcap.n] = text;
+    kcap.lens[kcap.n++] = len;
+    KCAP_UNLOCK();
+    return true;
+}
+
+/* Ends the innermost block: its lines go after the ones `old` has. */
+static kv kcapture_close(kv old) {
+    KCAP_LOCK();
+    size_t from = kcap.depth ? kcap.marks[--kcap.depth] : kcap.n;
+    size_t to = kcap.n;
+    kcap.n = from;
+    char **lines = NULL;
+    size_t *lens = NULL;
+    if (to > from) {
+        /* A copy of the entries, so that the list can go on being used. */
+        lines = (char **)malloc((to - from) * sizeof(char *));
+        lens = (size_t *)malloc((to - from) * sizeof(size_t));
+        if (!lines || !lens) kpanic("out of memory");
+        memcpy(lines, kcap.lines + from, (to - from) * sizeof(char *));
+        memcpy(lens, kcap.lens + from, (to - from) * sizeof(size_t));
+    }
+    KCAP_UNLOCK();
+    for (size_t i = 0; i < to - from; i++) {
+        kpush(&old, 0, NULL, kstr(lines[i] ? lines[i] : "", lens[i]));
+        free(lines[i]);
+    }
+    free(lines);
+    free(lens);
+    return old;
+}
+
 static kv kprint(kv v) {
     ksb sb = {0};
     kshow(&sb, v, true);
+    if (kcapture_line(sb.p, sb.len)) {
+        krelease(v);
+        return kbox(T_OK, KUNIT);
+    }
     ksb_str(&sb, "\n");
     bool ok = fwrite(sb.p, 1, sb.len, stdout) == sb.len;
     free(sb.p);
