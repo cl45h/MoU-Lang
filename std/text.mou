@@ -191,3 +191,67 @@ pub fn parse_int(s: str) -> int? {
 /// The number a decimal text holds: a sign, digits, a fraction and an
 /// exponent, as in `-12.5e3`. `None` when it is anything else.
 pub fn parse_float(s: str) -> f64? { raw.parse_float(s) }
+
+/// The bytes of a string: its characters in UTF-8.
+pub fn bytes(s: str) -> [u8] {
+    var out: [u8] = []
+    for ch in chars(s) {
+        let c = ch as int
+        if c < 128 {
+            out.push(c as u8)
+        } else if c < 2048 {
+            out.push((192 + c / 64) as u8)
+            out.push((128 + c % 64) as u8)
+        } else if c < 65536 {
+            out.push((224 + c / 4096) as u8)
+            out.push((128 + c / 64 % 64) as u8)
+            out.push((128 + c % 64) as u8)
+        } else {
+            out.push((240 + c / 262144) as u8)
+            out.push((128 + c / 4096 % 64) as u8)
+            out.push((128 + c / 64 % 64) as u8)
+            out.push((128 + c % 64) as u8)
+        }
+    }
+    out
+}
+
+/// The string some bytes are, or nothing when they are not UTF-8.
+pub fn from_bytes(data: [u8]) -> str? {
+    var out: [char] = []
+    var i: usize = 0
+    while i < data.len {
+        let b = data[i] as int
+        var more = 0
+        var c = b
+        var least = 0
+        if b >= 240 {
+            more = 3
+            c = b - 240
+            least = 65536
+        } else if b >= 224 {
+            more = 2
+            c = b - 224
+            least = 2048
+        } else if b >= 192 {
+            more = 1
+            c = b - 192
+            least = 128
+        } else if b >= 128 {
+            return None
+        }
+        if b >= 248 { return None }
+        for k in 0..more {
+            i += 1
+            if i >= data.len { return None }
+            let next = data[i] as int
+            if next < 128 || next >= 192 { return None }
+            c = c * 64 + (next - 128)
+        }
+        // The shortest form only, and no half of a pair of UTF-16.
+        if c < least || c > 1114111 || (c >= 55296 && c <= 57343) { return None }
+        out.push(c as char)
+        i += 1
+    }
+    Some(from_chars(out))
+}

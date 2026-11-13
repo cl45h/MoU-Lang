@@ -2180,13 +2180,15 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                 let taken = text.starts_with(t, "buf ")
                                 let kind = if taken { rest(t, 4) } else { rest(t, 7) }
                                 let code = buf_code(kind)
+                                // Bytes are memory of any kind: a `struct sockaddr *` takes them too.
+                                let ctype = if kind == "u8" || kind == "i8" { "void" } else { buf_type(kind) }
                                 line(mut out, "        kv e{k} = {v};")
                                 line(mut out, "        void *b{k} = kbuf_make(e{k}, {code});")
                                 if taken {
-                                    parts.push("(const {buf_type(kind)} *)b{k}")
+                                    parts.push("(const {ctype} *)b{k}")
                                     lent.push(Changed(k, ""))
                                 } else {
-                                    parts.push("({buf_type(kind)} *)b{k}")
+                                    parts.push("({ctype} *)b{k}")
                                     lent.push(Changed(k, code))
                                 }
                                 held.push(k)

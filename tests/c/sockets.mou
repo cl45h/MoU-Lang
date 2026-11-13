@@ -1,0 +1,84 @@
+import std.io
+import std.net
+import std.text
+
+// A server that answers each connection in its own task, and three
+// clients that talk to it at once.
+
+fn shout(conn: net.Conn) -> int ! net.Error {
+    let asked = conn.read_all()?
+    let said = match text.from_bytes(asked) {
+        Some(t) => t
+        None => "?"
+    }
+    conn.send("eco: {said}!")?
+    conn.close()
+    asked.len as int
+}
+
+fn answer(conn: net.Conn) -> int { shout(conn) catch e { 0 - 1 } }
+
+fn serve(server: net.Listener, clients: int) -> int ! net.Error {
+    var total = 0
+    scope s {
+        var tasks: [Task[int]] = []
+        for k in 0..clients {
+            let conn = server.accept()?
+            tasks.push(s.spawn(answer(conn)))
+        }
+        for t in tasks { total += t.wait() }
+    }
+    total
+}
+
+fn ask(port: int, message: str) -> str ! net.Error {
+    let conn = net.connect("127.0.0.1", port)?
+    conn.send(message)?
+    conn.finish()
+    let answer = conn.read_all()?
+    conn.close()
+    match text.from_bytes(answer) {
+        Some(t) => t
+        None => "?"
+    }
+}
+
+fn show(e: net.Error) -> str {
+    match e {
+        net.Error.BadAddress(a) => "bad address {a}"
+        net.Error.Failed(what) => "cannot {what}"
+        net.Error.Closed => "closed"
+    }
+}
+
+fn reach(host: str, port: int) -> str {
+    let conn = net.connect(host, port) catch e { return show(e) }
+    conn.close()
+    "connected"
+}
+
+fn run() -> [str] ! net.Error {
+    let server = net.listen("127.0.0.1", 0)?
+    let port = server.port()?
+    var lines: [str] = []
+    scope s {
+        let served = s.spawn(serve(server, 3))
+        let a = s.spawn(ask(port, "uno"))
+        let b = s.spawn(ask(port, "ñandú"))
+        let c = s.spawn(ask(port, text.repeat("x", 20000)))
+        lines.push(a.wait()?)
+        lines.push(b.wait()?)
+        lines.push("{c.wait()?.len}")
+        lines.push("{served.wait()?}")
+    }
+    server.close()
+    lines
+}
+
+fn main() ! io.Error {
+    let lines = run() catch e { [show(e)] }
+    for line in lines { io.print(line)? }
+    // What cannot work says why.
+    io.print("{reach("localhost", 80)}; {reach("1.2.3", 80)}; {reach("127.0.0.1", 70000)}; {reach("127.0.0.1", 1)}")?
+    io.print("{text.bytes("aé€😀")} {text.from_bytes(text.bytes("aé€😀"))} {text.from_bytes([255])} {text.from_bytes([192, 128])} {text.from_bytes([226, 130])}")?
+}

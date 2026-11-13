@@ -1,0 +1,132 @@
+// TCP connections over IPv4.
+//
+// Every function here waits until it is done. To serve several
+// connections at once, each one goes in a task: a task that waits does
+// not stop the others.
+//
+// It is made of functions of C, so a program that uses it runs compiled
+// (`mou build`), not with `mou run`. For now it only works on Linux.
+
+import std.socket
+import std.text
+
+pub enum Error {
+    /// The address is not four numbers from 0 to 255 with dots between.
+    BadAddress(str)
+    /// The system said no: what was being done.
+    Failed(str)
+    /// The other side closed the connection.
+    Closed
+}
+
+/// A port of this machine that waits for connections.
+pub struct Listener { fd: int }
+
+/// A connection: bytes go in both directions.
+pub struct Conn { fd: int }
+
+/// The address as the system takes it: 16 bytes.
+fn address(host: str, port: int) -> [u8] ! Error {
+    if port < 0 || port > 65535 { return Error.BadAddress("{host}:{port}") }
+    var out: [u8] = [2, 0, (port / 256) as u8, (port % 256) as u8]
+    let parts = text.split(host, '.')
+    if parts.len != 4 { return Error.BadAddress(host) }
+    for part in parts {
+        match text.parse_int(part) {
+            Some(n) => {
+                if n < 0 || n > 255 { return Error.BadAddress(host) }
+                out.push(n as u8)
+            }
+            None => return Error.BadAddress(host)
+        }
+    }
+    for k in 0..8 { out.push(0) }
+    out
+}
+
+/// Starts to wait for connections on a port of an address of this
+/// machine: `"127.0.0.1"` for programs of this machine only, `"0.0.0.0"`
+/// for anyone. With port 0 the system picks a free one.
+pub fn listen(host: str, port: int) -> Listener ! Error {
+    let addr = address(host, port)?
+    let fd = socket.open()
+    if fd < 0 { return Error.Failed("open a socket") }
+    let one: [i32] = [1]
+    if !socket.reuse(fd, one) || !socket.bind(fd, addr) || !socket.listen(fd) {
+        socket.close(fd)
+        return Error.Failed("listen on {host}:{port}")
+    }
+    Listener(fd)
+}
+
+/// Connects to a port of an address.
+pub fn connect(host: str, port: int) -> Conn ! Error {
+    let addr = address(host, port)?
+    let fd = socket.open()
+    if fd < 0 { return Error.Failed("open a socket") }
+    if !socket.connect(fd, addr) {
+        socket.close(fd)
+        return Error.Failed("connect to {host}:{port}")
+    }
+    Conn(fd)
+}
+
+impl Listener {
+    /// The port it waits on: the one the system picked when it was 0.
+    pub fn port(self) -> int ! Error {
+        var addr: [u8] = [0; 16]
+        var len: [u32] = [16]
+        if !socket.name(self.fd, mut addr, mut len) { return Error.Failed("ask for the port") }
+        (addr[2] as int) * 256 + (addr[3] as int)
+    }
+
+    /// Waits until someone connects.
+    pub fn accept(self) -> Conn ! Error {
+        let fd = socket.accept(self.fd)
+        if fd < 0 { return Error.Failed("accept a connection") }
+        Conn(fd)
+    }
+
+    pub fn close(self) { socket.close(self.fd) }
+}
+
+impl Conn {
+    /// Sends all the bytes.
+    pub fn write(self, data: [u8]) ! Error {
+        var left = data
+        while left.len > 0 {
+            let n = socket.send(self.fd, left, left.len)
+            if n <= 0 { return Error.Closed }
+            left = left[(n as usize)..]
+        }
+    }
+
+    /// Sends a text, as UTF-8.
+    pub fn send(self, message: str) ! Error { self.write(text.bytes(message))? }
+
+    /// Waits for bytes: up to `max` of the ones that came. An empty array
+    /// means the other side will send nothing more.
+    pub fn read(self, max: int) -> [u8] ! Error where max > 0 {
+        var data: [u8] = [0; max as usize]
+        let n = socket.recv(self.fd, mut data)
+        if n < 0 { return Error.Failed("read from the connection") }
+        data[..(n as usize)]
+    }
+
+    /// Reads until the other side sends nothing more.
+    pub fn read_all(self) -> [u8] ! Error {
+        var all: [u8] = []
+        while true {
+            let piece = self.read(4096)?
+            if piece.len == 0 { break }
+            for b in piece { all.push(b) }
+        }
+        all
+    }
+
+    /// Says that nothing more will be sent; what the other side sends can
+    /// still be read.
+    pub fn finish(self) { socket.finish(self.fd) }
+
+    pub fn close(self) { socket.close(self.fd) }
+}

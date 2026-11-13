@@ -1,0 +1,6 @@
+eco: uno!
+eco: ñandú!
+20006
+20010
+bad address localhost; bad address 1.2.3; bad address 127.0.0.1:70000; cannot connect to 127.0.0.1:1
+[97, 195, 169, 226, 130, 172, 240, 159, 152, 128] Some("aé€😀") None None None

@@ -1372,7 +1372,9 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     for (k, (a, t)) in args.iter().zip(&x.params).enumerate() {
                         let v = operand(cx, a)?;
                         if let Some((how, kind)) = t.split_once(' ').filter(|(how, _)| matches!(*how, "buf" | "mutbuf")) {
-                            let (code, ctype) = (format!("KB_{}", kind.to_uppercase()), buf_type(kind));
+                            // Bytes are memory of any kind: a `struct sockaddr *` takes them too.
+                            let ctype = if matches!(kind, "u8" | "i8") { "void".to_string() } else { buf_type(kind) };
+                            let code = format!("KB_{}", kind.to_uppercase());
                             writeln!(out, "        kv e{k} = {v};").unwrap();
                             writeln!(out, "        void *b{k} = kbuf_make(e{k}, {code});").unwrap();
                             parts.push(format!("({}{ctype} *)b{k}", if how == "buf" { "const " } else { "" }));

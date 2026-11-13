@@ -1,0 +1,51 @@
+// The functions of the system that `std.net` is made of. Nothing here
+// creates a value: whoever calls brings the arrays that are filled.
+//
+// The numbers are the ones of Linux.
+@profile(system)
+
+import c "sys/socket.h" as sys {
+    fn socket(domain: i32, kind: i32, protocol: i32) -> i32
+    fn bind(fd: i32, addr: [u8], len: u32) -> i32
+    fn listen(fd: i32, backlog: i32) -> i32
+    fn accept(fd: i32, addr: ptr?, len: ptr?) -> i32
+    fn connect(fd: i32, addr: [u8], len: u32) -> i32
+    fn send(fd: i32, data: [u8], n: usize, flags: i32) -> isize
+    fn recv(fd: i32, data: mut [u8], n: usize, flags: i32) -> isize
+    fn setsockopt(fd: i32, level: i32, name: i32, value: [i32], len: u32) -> i32
+    fn getsockname(fd: i32, addr: mut [u8], len: mut [u32]) -> i32
+    fn shutdown(fd: i32, how: i32) -> i32
+}
+import c "unistd.h" as unix { fn close(fd: i32) -> i32 }
+
+/// A socket for TCP over IPv4, or a negative number.
+pub fn open() -> int { unsafe { sys.socket(2, 1, 0) as int } }
+
+/// Lets the port be taken again right after the program that had it ends.
+pub fn reuse(fd: int, one: [i32]) -> bool { unsafe { sys.setsockopt(fd as i32, 1, 2, one, 4) == 0 } }
+
+pub fn bind(fd: int, addr: [u8]) -> bool { unsafe { sys.bind(fd as i32, addr, 16) == 0 } }
+
+pub fn listen(fd: int) -> bool { unsafe { sys.listen(fd as i32, 64) == 0 } }
+
+/// Waits for someone to connect: the socket of that connection, or a
+/// negative number.
+pub fn accept(fd: int) -> int { unsafe { sys.accept(fd as i32, None, None) as int } }
+
+pub fn connect(fd: int, addr: [u8]) -> bool { unsafe { sys.connect(fd as i32, addr, 16) == 0 } }
+
+/// Sends the first `n` bytes: how many went out, or a negative number.
+/// Writing to a connection the other side closed is an error, not a signal.
+pub fn send(fd: int, data: [u8], n: usize) -> int { unsafe { sys.send(fd as i32, data, n, 16384) as int } }
+
+/// Waits for bytes and leaves them in `data`: how many came, 0 when the
+/// other side closed, or a negative number.
+pub fn recv(fd: int, data: mut [u8]) -> int { unsafe { sys.recv(fd as i32, mut data, data.len, 0) as int } }
+
+/// Fills `addr` with the address the socket is bound to.
+pub fn name(fd: int, addr: mut [u8], len: mut [u32]) -> bool { unsafe { sys.getsockname(fd as i32, mut addr, mut len) == 0 } }
+
+/// Says that nothing more will be sent.
+pub fn finish(fd: int) { unsafe { sys.shutdown(fd as i32, 1) } }
+
+pub fn close(fd: int) { unsafe { unix.close(fd as i32) } }

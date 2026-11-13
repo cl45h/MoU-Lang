@@ -20,6 +20,8 @@ const STD: &[(&str, &str)] = &[
     ("std.map", include_str!("../std/map.mou")),
     ("std.math", include_str!("../std/math.mou")),
     ("std.meta", include_str!("../std/meta.mou")),
+    ("std.net", include_str!("../std/net.mou")),
+    ("std.socket", include_str!("../std/socket.mou")),
     ("std.text", include_str!("../std/text.mou")),
 ];
 
