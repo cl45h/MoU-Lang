@@ -420,7 +420,7 @@ pub fn spent(f: &Func) -> Vec<bool> {
         }
         match &b.term {
             Term::Call { callee, args, writeback, dest, .. } => {
-                if let Callee::Indirect(op) = callee {
+                if let Callee::Indirect(op, _) = callee {
                     read(op, &mut uses);
                 }
                 for a in args {
@@ -743,7 +743,7 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
 }
 
 /// Calls `visit` with every operand an rvalue reads.
-fn each_operand(rv: &Rvalue, visit: &mut dyn FnMut(&Operand)) {
+pub fn each_operand(rv: &Rvalue, visit: &mut dyn FnMut(&Operand)) {
     use Rvalue::*;
     match rv {
         Use(a) | Unary(_, _, a) | CastInt(a, _) | CastFloat(a, _) | Convert(a, _) | Some(a) | Ok(a) | Err(a) | Is(a, _)
@@ -1476,7 +1476,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     writeln!(out, "        kv A[{}] = {{{init}}};", parts.len().max(1)).unwrap();
                     match callee {
                         Callee::Fn(f) => writeln!(out, "        kv r = f{f}(A, KUNIT);").unwrap(),
-                        Callee::Indirect(op) => writeln!(out, "        kv r = kcall({}, A);", operand(cx, op)?).unwrap(),
+                        Callee::Indirect(op, _) => writeln!(out, "        kv r = kcall({}, A);", operand(cx, op)?).unwrap(),
                         Callee::Print | Callee::Panic | Callee::Native(_) | Callee::Extern(_) => {}
                     }
                     // The callee left the final values of its parameters in `A`.

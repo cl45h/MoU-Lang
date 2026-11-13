@@ -188,7 +188,7 @@ fn run(f: mir.Func, moved: [MovedAt], b: int, state: mut [int], report: bool, er
         }
         mir.Term.Call(callee, args, writeback, dest, after) => {
             match callee {
-                mir.Callee.Indirect(op) => read_operand(op, mut ls)
+                mir.Callee.Indirect(op, _, _) => read_operand(op, mut ls)
                 _ => {}
             }
             read_all(args, mut ls)

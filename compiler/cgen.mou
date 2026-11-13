@@ -582,7 +582,7 @@ fn has_path(proj: [mir.Proj]) -> bool {
 }
 
 // Every operand an rvalue reads.
-fn operands_of(rv: mir.Rvalue) -> [mir.Operand] {
+pub fn operands_of(rv: mir.Rvalue) -> [mir.Operand] {
     match rv {
         mir.Rvalue.Use(a) => [a]
         mir.Rvalue.Unary(_, _, a) => [a]
@@ -692,7 +692,7 @@ fn spent(f: mir.Func) -> [bool] {
         match b.term {
             mir.Term.Call(callee, args, writeback, dest, _) => {
                 match callee {
-                    mir.Callee.Indirect(op) => count_read(mut c, op)
+                    mir.Callee.Indirect(op, _, _) => count_read(mut c, op)
                     _ => {}
                 }
                 for a in args {
@@ -2334,7 +2334,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         line(mut out, "        kv A[{size}] = {{{init}}};")
                         match callee {
                             mir.Callee.Fn(g) => line(mut out, "        kv r = f{g}(A, KUNIT);")
-                            mir.Callee.Indirect(op) => line(mut out, "        kv r = kcall({cx.operand(op)?}, A);")
+                            mir.Callee.Indirect(op, _, _) => line(mut out, "        kv r = kcall({cx.operand(op)?}, A);")
                             _ => {}
                         }
                         // What was called left the last values of its parameters in `A`.

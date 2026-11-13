@@ -116,7 +116,10 @@ pub enum Rvalue {
 
 pub enum Callee {
     Fn(int)
-    Indirect(Operand)
+    // A function value, or a method of a `dyn` value: then also the
+    // struct that stands for the `dyn` and which of its methods it is
+    // (both -1 for a function value).
+    Indirect(Operand, int, int)
     Print
     Native(str)
     Panic
@@ -3237,7 +3240,7 @@ impl Lower {
                         } else {
                             receiver = Receiver(self.read(inner), false, Place(0, []))
                         }
-                        self.invoke(Callee.Indirect(f), Some(receiver), slots[k].sig, None, 0, args, at)
+                        self.invoke(Callee.Indirect(f, self.c.structs.len as int + t, k), Some(receiver), slots[k].sig, None, 0, args, at)
                     }
                     _ => self.unsupported(at, "this call")
                 }
@@ -3341,7 +3344,7 @@ impl Lower {
                             self.set(m, shared)
                             let change = self.expr(args[0].value)
                             let old = self.finish_call(Callee.Native("mutex.take"), [local_op(m)], [], at)
-                            let fresh = self.finish_call(Callee.Indirect(change), [old], [], at)
+                            let fresh = self.finish_call(Callee.Indirect(change, -1, -1), [old], [], at)
                             return self.finish_call(Callee.Native("mutex.put"), [local_op(m), fresh], [], at)
                         }
                         _ => return self.unsupported(at, "this call")
@@ -3387,7 +3390,7 @@ impl Lower {
                 match self.ty(callee) {
                     types.Ty.Fn(sig) => {
                         let f = self.expr(callee)
-                        self.invoke(Callee.Indirect(f), None, sig, None, 0, args, at)
+                        self.invoke(Callee.Indirect(f, -1, -1), None, sig, None, 0, args, at)
                     }
                     _ => self.unsupported(at, "generic functions, imported modules and methods of built-in types")
                 }
@@ -3720,7 +3723,7 @@ fn term_text(t: Term) -> str {
         Term.Call(callee, args, writeback, dest, next) => {
             let who = match callee {
                 Callee.Fn(f) => "fn {f}"
-                Callee.Indirect(op) => "indirect {operand_text(op)}"
+                Callee.Indirect(op, _, _) => "indirect {operand_text(op)}"
                 Callee.Print => "print"
                 Callee.Native(n) => "native {n}"
                 Callee.Panic => "panic"

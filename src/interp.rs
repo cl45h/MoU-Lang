@@ -387,7 +387,7 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
                 }
                 let target = match callee {
                     Callee::Fn(f) => Some((*f, Rc::default())),
-                    Callee::Indirect(op) => match tri!(operand(&stack[top], op)) {
+                    Callee::Indirect(op, _) => match tri!(operand(&stack[top], op)) {
                         Value::Fn(f) => Some((f, Rc::default())),
                         Value::Closure(f, env) => Some((f, env)),
                         _ => tri!(Err(internal("a call to a value that is not a function"))),

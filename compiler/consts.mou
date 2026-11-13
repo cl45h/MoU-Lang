@@ -1139,7 +1139,7 @@ fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
                     mir.Callee.Fn(f) => {
                         target = f
                     }
-                    mir.Callee.Indirect(op) => {
+                    mir.Callee.Indirect(op, _, _) => {
                         let v = operand(fr, op) catch e { return stopped(e, line, col) }
                         match v {
                             mir.Value.Fn(f) => {

@@ -1,0 +1,50 @@
+import std.io
+
+// What a call to a function value does is what the functions the
+// program uses as values do, and the same for the methods of a `dyn`.
+
+trait Shape { fn area(self) -> int }
+struct Sq { s: int }
+struct Wide { w: int, h: int }
+impl Shape for Sq { fn area(self) -> int { self.s *% self.s } }
+impl Shape for Wide { fn area(self) -> int { self.w * self.h } }
+
+@noalloc @noio
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+
+@noalloc @noio @nopanic
+fn both(f: fn(int, int) -> int, x: int) -> int { f(x, x) }
+
+@noalloc @noio @nopanic
+fn measure(s: dyn Shape) -> int { s.area() }
+
+@nopanic @noio
+fn total(xs: [int]) -> int {
+    var t = 0
+    for x in xs { t = t +% double(x) }
+    for i in 0..xs.len { t = t +% double(xs[i]) }
+    t
+}
+
+@nopanic
+fn run(f: fn() -> int) -> int { f() }
+
+fn double(n: int) -> int { n *% 2 }
+fn square(n: int) -> int { n * n }
+fn add(a: int, b: int) -> int { a +% b }
+fn shout() -> int {
+    io.print("hola") catch e {}
+    1
+}
+
+fn main() ! io.Error {
+    let shape = Sq(3) as dyn Shape
+    let wide = Wide(2, 5) as dyn Shape
+    let grow = fn(n: int) -> int { n +% 1 }
+    scope s {
+        let t = s.spawn(shout())
+        io.print("{t.wait()}")?
+    }
+    io.print("{apply(double, 4)} {apply(square, 4)} {apply(grow, 4)} {both(add, 2)}")?
+    io.print("{measure(shape)} {measure(wide)} {total([1, 2])} {run(fn() -> int { 7 })}")?
+}

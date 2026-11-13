@@ -78,7 +78,9 @@ impl Gen {
         let n = n.clamp(lo, hi);
         // Arithmetic between untyped numbers is made as `int`: one that
         // does not fit there says its type.
-        if n > i64::MAX as i128 {
+        // Most of the time it says its kind too, so that what is computed
+        // with it is computed in that kind.
+        if n > i64::MAX as i128 || (kind != "int" && self.rng.chance(85)) {
             format!("({n} as {kind})")
         } else if n < 0 {
             format!("({n})")
@@ -106,7 +108,7 @@ impl Gen {
         match self.rng.below(12) {
             0..=4 => {
                 // Mostly the ones that cannot stop the program, so that it goes on.
-                let ops: &[&str] = if self.rng.chance(6) { &["+", "-", "*", "/", "%"] } else { &["+%", "-%", "*%", "+|", "-|", "*|", "&", "|", "^"] };
+                let ops: &[&str] = if self.rng.chance(2) { &["+", "-", "*", "/", "%"] } else { &["+%", "-%", "*%", "+|", "-|", "*|", "&", "|", "^"] };
                 let op = self.rng.pick(ops);
                 format!("({} {op} {})", self.int(kind, d), self.int(kind, d))
             }
@@ -119,10 +121,10 @@ impl Gen {
                 // A cast stops the program when the value does not fit:
                 // mostly from a kind that always does.
                 let from = KINDS[self.rng.below(KINDS.len())];
-                let from = if check::widens(kind_name(from), kind_name(kind)) || self.rng.chance(15) { from } else { kind };
+                let from = if check::widens(kind_name(from), kind_name(kind)) || self.rng.chance(4) { from } else { kind };
                 format!("({} as {kind})", self.int(from, d))
             }
-            7 if !kind.starts_with('u') && self.rng.chance(30) => format!("(-{})", self.int(kind, d)),
+            7 if !kind.starts_with('u') && self.rng.chance(5) => format!("(-{})", self.int(kind, d)),
             7 => format!("(0 -% {})", self.int(kind, d)),
             8 if kind == "int" && self.fns > 0 => {
                 let f = self.rng.below(self.fns);
@@ -132,8 +134,8 @@ impl Gen {
             9 if kind == "int" && !self.arrays.is_empty() => {
                 let (xs, _) = self.arrays[self.rng.below(self.arrays.len())].clone();
                 match self.rng.below(3) {
-                    0 => format!("{xs}[({} as usize) % {xs}.len]", self.int("u8", d)),
-                    1 if self.rng.chance(15) => format!("{xs}[{}]", self.rng.below(4)),
+                    0 => format!("(if {xs}.len > 0 {{ {xs}[({} as usize) % {xs}.len] }} else {{ 0 }})", self.int("u8", d)),
+                    1 if self.rng.chance(4) => format!("{xs}[{}]", self.rng.below(4)),
                     _ => format!("({xs}.len as int)"),
                 }
             }
@@ -277,7 +279,7 @@ impl Gen {
                     }
                     _ => {
                         let value = self.int(kind, 3);
-                        let op = self.rng.pick(&["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="]);
+                        let op = if self.rng.chance(8) { self.rng.pick(&["+=", "-=", "*=", "/=", "%="]) } else { self.rng.pick(&["=", "&=", "|=", "^="]) };
                         self.line(&format!("{name} {op} {value}"));
                     }
                 }
@@ -406,7 +408,7 @@ impl Gen {
                     self.line(&format!("let {v}: int = match {e} {{"));
                     self.line(&format!("    E.A => {or}"));
                     self.line("    E.B(n) => n +% 1");
-                    self.line("    E.C(n, f) => if f { n } else { 0 - n }");
+                    self.line("    E.C(n, f) => if f { n } else { 0 -% n }");
                     self.line("}");
                 }
                 self.vars.push((v, "int", false));
@@ -684,6 +686,11 @@ impl Gen {
 /// How a run ended: what it printed and its exit status.
 type Outcome = (String, i32);
 
+thread_local! {
+    /// Why the programs that stop do: each reason, and how many times.
+    static REASONS: std::cell::RefCell<Vec<(String, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn interpret(p: &mir::Program) -> Option<Outcome> {
     let mut out = Vec::new();
     interp::FUEL.set(20_000_000);
@@ -694,7 +701,18 @@ fn interpret(p: &mir::Program) -> Option<Outcome> {
         Ok(_) => 0,
         // Too long for a test: not a result to compare.
         Err(e) if e.msg.contains("runs for too long") => return None,
-        Err(_) => 101,
+        Err(e) => {
+            // Without the numbers, so that the same mistake counts as one.
+            let why: String = e.msg.chars().filter(|c| !c.is_ascii_digit()).collect();
+            REASONS.with(|r| {
+                let mut r = r.borrow_mut();
+                match r.iter_mut().find(|(w, _)| *w == why) {
+                    Some(found) => found.1 += 1,
+                    None => r.push((why, 1)),
+                }
+            });
+            101
+        }
     };
     Some((String::from_utf8_lossy(&out).into_owned(), status))
 }
@@ -795,6 +813,14 @@ pub fn fuzz(count: u64, seed: u64, sanitize: bool) -> bool {
     }
     println!("{count} programs: {same} agree, {bad} problems, {skipped} too long to compare");
     println!("of the ones that agree, {panics} end in a panic; they print {lines} results in all");
+    REASONS.with(|r| {
+        let mut r = r.borrow_mut();
+        r.sort_by(|a, b| b.1.cmp(&a.1));
+        for (why, n) in r.iter().take(6) {
+            println!("  {n} stop with: {why}");
+        }
+        r.clear();
+    });
     if bad == 0 {
         let _ = std::fs::remove_dir_all(&dir);
     }

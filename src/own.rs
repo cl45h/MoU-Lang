@@ -144,7 +144,7 @@ fn function(f: &Func, errors: &mut Vec<Error>) {
                 vec![*a, *b]
             }
             Term::Call { callee, args, writeback, dest, next } => {
-                if let Callee::Indirect(op) = callee {
+                if let Callee::Indirect(op, _) = callee {
                     operand(op, &mut ls);
                 }
                 args.iter().for_each(|a| operand(a, &mut ls));

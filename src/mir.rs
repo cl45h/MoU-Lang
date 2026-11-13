@@ -246,7 +246,9 @@ pub enum Rvalue {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
     Fn(usize),
-    Indirect(Operand),
+    /// A function value, or a method of a `dyn` value: then also the
+    /// struct that stands for the `dyn` and which of its methods it is.
+    Indirect(Operand, Option<(usize, usize)>),
     /// `io.print`.
     Print,
     /// Another function of a built-in module, by its name: `io.read_line`.
@@ -642,7 +644,7 @@ pub fn dump(p: &Program) -> String {
                 Term::Call { callee, args, writeback, dest, next } => {
                     let callee = match callee {
                         Callee::Fn(f) => format!("fn {f}"),
-                        Callee::Indirect(op) => format!("indirect {}", operand(op)),
+                        Callee::Indirect(op, _) => format!("indirect {}", operand(op)),
                         Callee::Print => "print".to_string(),
                         Callee::Native(n) => format!("native {n}"),
                         Callee::Panic => "panic".to_string(),
@@ -2653,7 +2655,7 @@ impl<'a> Lower<'a> {
                 let f = self.read(p.field(k + 1));
                 let inner = p.field(0);
                 let receiver = if *is_mut { (Operand::Place(inner.clone()), Some(inner)) } else { (self.read(inner), None) };
-                self.invoke(Callee::Indirect(f), Some(receiver), &sig, None, 0, args, span)
+                self.invoke(Callee::Indirect(f, Some((info.structs.len() + t, *k))), Some(receiver), &sig, None, 0, args, span)
             }
             Some(Res::Builtin("panic")) => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();
@@ -2721,7 +2723,7 @@ impl<'a> Lower<'a> {
                 let change = self.expr(&a.value);
                 let cell = || Operand::Place(Place::local(m));
                 let old = self.finish_call(Callee::Native("mutex.take"), vec![cell()], Vec::new(), span);
-                let new = self.finish_call(Callee::Indirect(change), vec![old], Vec::new(), span);
+                let new = self.finish_call(Callee::Indirect(change, None), vec![old], Vec::new(), span);
                 self.finish_call(Callee::Native("mutex.put"), vec![cell(), new], Vec::new(), span)
             }
             Some(Res::Builtin(name @ ("chan.send" | "chan.recv" | "chan.close" | "mutex.get" | "mutex.set"))) => {
@@ -2764,7 +2766,7 @@ impl<'a> Lower<'a> {
             _ => match self.ty(callee) {
                 Ty::Fn(sig) => {
                     let f = self.expr(callee);
-                    self.invoke(Callee::Indirect(f), None, &sig, None, 0, args, span)
+                    self.invoke(Callee::Indirect(f, None), None, &sig, None, 0, args, span)
                 }
                 _ => self.unsupported(span, "generic functions, imported modules and methods of built-in types"),
             },

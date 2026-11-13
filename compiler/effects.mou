@@ -21,6 +21,7 @@
 import std.text
 import lexer
 import mir
+import cgen
 
 pub let ALLOC: int = 1
 pub let PANIC: int = 2
@@ -819,8 +820,189 @@ struct Found {
     sites: [Site]
     // The functions it calls, and where.
     calls: [CallSite]
+    // Where it calls a function value: the calls from there are the
+    // functions that value can be.
+    values: [Where]
     // Whether one of its `where` conditions can fail.
     unproved: bool
+}
+
+// A function the program uses as a value. As a method of a `dyn` value
+// it says which method of which `dyn`; otherwise both are -1.
+struct Taken { f: int, of: int, slot: int }
+
+fn note_fn(o: mir.Operand, seen: mut [bool]) {
+    match o {
+        mir.Operand.Const(v) => {
+            match v {
+                mir.Value.Fn(f) => {
+                    seen[f] = true
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn fn_of(o: mir.Operand) -> int {
+    match o {
+        mir.Operand.Const(v) => {
+            match v {
+                mir.Value.Fn(f) => f
+                _ => -1
+            }
+        }
+        _ => -1
+    }
+}
+
+// Whether the block ends in a `spawn` of the closure kept in that place.
+fn spawns(term: mir.Term, place: mir.Place) -> bool {
+    match term {
+        mir.Term.Call(callee, args, _, _, _) => {
+            match callee {
+                mir.Callee.Native(name) => {
+                    if name != "task.spawn" || args.len == 0 { return false }
+                    match args[0] {
+                        mir.Operand.At(q) => q.local == place.local && q.proj.len == 0 && place.proj.len == 0
+                        _ => false
+                    }
+                }
+                _ => false
+            }
+        }
+        _ => false
+    }
+}
+
+// The functions that are used as a value somewhere in the program: by
+// their name, as a closure, or in the table of a `dyn` value. A call to
+// a function value can only reach one of these.
+fn taken(p: mir.Program) -> [Taken] {
+    var seen: [bool] = []
+    for f in p.fns { seen.push(false) }
+    var closures: [int] = []
+    var methods: [Taken] = []
+    for f in p.fns {
+        for b in f.blocks {
+            for s in b.stmts {
+                match s.rv {
+                    mir.Rvalue.Struct(i, ops) => {
+                        if i < p.dyn_from {
+                            for o in ops { note_fn(o, mut seen) }
+                        } else {
+                            for k in 1..(ops.len as int) {
+                                let g = fn_of(ops[k])
+                                if g < 0 {
+                                    note_fn(ops[k], mut seen)
+                                    continue
+                                }
+                                var known = false
+                                for m in methods {
+                                    if m.f == g && m.of == i && m.slot == k - 1 { known = true }
+                                }
+                                if !known { methods.push(Taken(g, i, k - 1)) }
+                            }
+                            if ops.len > 0 { note_fn(ops[0], mut seen) }
+                        }
+                    }
+                    mir.Rvalue.Closure(g, ops) => {
+                        // The closure of a task is run by `spawn`, which
+                        // counts it there: nothing else can call it.
+                        if !spawns(b.term, s.place) { closures.push(g) }
+                        for o in ops { note_fn(o, mut seen) }
+                    }
+                    _ => {
+                        for o in cgen.operands_of(s.rv) { note_fn(o, mut seen) }
+                    }
+                }
+            }
+            match b.term {
+                mir.Term.Branch(o, _, _) => note_fn(o, mut seen)
+                mir.Term.Return(o) => note_fn(o, mut seen)
+                mir.Term.Call(callee, args, _, _, _) => {
+                    for a in args { note_fn(a, mut seen) }
+                    match callee {
+                        mir.Callee.Indirect(o, _, _) => note_fn(o, mut seen)
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for g in closures { seen[g] = true }
+    var out: [Taken] = []
+    for f in 0..(seen.len as int) {
+        if seen[f] { out.push(Taken(f, -1, -1)) }
+    }
+    // The methods in order: by function, then by `dyn`, then by method.
+    var left = methods
+    while left.len > 0 {
+        var best = 0
+        for k in 1..(left.len as int) {
+            let a = left[k]
+            let b = left[best]
+            if a.f < b.f || (a.f == b.f && (a.of < b.of || (a.of == b.of && a.slot < b.slot))) { best = k }
+        }
+        out.push(left[best])
+        var rest: [Taken] = []
+        for k in 0..(left.len as int) {
+            if k != best { rest.push(left[k]) }
+        }
+        left = rest
+    }
+    out
+}
+
+// The blocks a loop jumps back to: the ones reached again while what
+// follows from them is still being walked.
+fn loop_heads(f: mir.Func) -> [bool] {
+    let n = f.blocks.len as int
+    // 0 not seen, 1 being walked, 2 done.
+    var state: [int] = []
+    var heads: [bool] = []
+    for b in 0..n {
+        state.push(0)
+        heads.push(false)
+    }
+    var stack: [int] = []
+    var left: [[int]] = []
+    if n > 0 {
+        state[0] = 1
+        stack.push(0)
+        left.push(next_blocks(f, 0))
+    }
+    while stack.len > 0 {
+        let top = stack.len as int - 1
+        match left[top].pop() {
+            Some(t) => {
+                if state[t] == 0 {
+                    state[t] = 1
+                    stack.push(t)
+                    left.push(next_blocks(f, t))
+                } else {
+                    if state[t] == 1 { heads[t] = true }
+                }
+            }
+            None => {
+                state[stack[top]] = 2
+                let done = stack.pop()
+                let spent = left.pop()
+            }
+        }
+    }
+    heads
+}
+
+fn next_blocks(f: mir.Func, b: int) -> [int] {
+    match f.blocks[b].term {
+        mir.Term.Goto(t) => [t]
+        mir.Term.Branch(_, t, e) => [t, e]
+        mir.Term.Call(_, _, _, _, after) => [after]
+        _ => []
+    }
 }
 
 struct Note { effect: int, what: str }
@@ -862,7 +1044,7 @@ fn reads(st: State, op: mir.Operand, notes: mut [Note]) {
 
 // ---- what each operation does ----
 
-struct Walk { p: mir.Program, f: mir.Func, wheres: [bool] }
+struct Walk { p: mir.Program, f: mir.Func, wheres: [bool], taken: [Taken] }
 
 fn int_range(n: mir.Num) -> Range {
     match n {
@@ -1285,9 +1467,16 @@ impl Walk {
                             }
                         }
                     }
-                    mir.Callee.Indirect(op) => {
+                    mir.Callee.Indirect(op, of, slot) => {
                         reads(st, op, mut notes)
-                        notes.push(Note(ALLOC | PANIC | IO | UNSAFE | BLOCK, "a function value or a method of a `dyn` value is called here, and what it does is not known"))
+                        // What is called is one of the functions the program
+                        // uses as a value, that takes this many arguments.
+                        if report {
+                            found.values.push(here)
+                            for t in self.taken {
+                                if t.of == of && t.slot == slot && self.p.fns[t.f].params == (args.len as int) { found.calls.push(CallSite(here, t.f)) }
+                            }
+                        }
                     }
                     mir.Callee.Extern(x) => {
                         // What it does is up to who wrote the `unsafe` around it.
@@ -1411,9 +1600,10 @@ impl Walk {
         }
         at[0] = entry
         reached[0] = true
+        let heads = loop_heads(self.f)
         var work: [int] = []
         work.push(0)
-        var quiet = Found([], [], false)
+        var quiet = Found([], [], [], false)
         while work.len > 0 {
             var b = 0
             if let Some(x) = work.pop() { b = x }
@@ -1423,8 +1613,8 @@ impl Walk {
                 var merged = nx.state
                 if reached[t] {
                     merged = at[t].join(nx.state)
-                    // Every loop has a jump back to an earlier block.
-                    if t <= b && visits[t] > 3 { merged.widen(at[t]) }
+                    // Every loop goes through the block it jumps back to.
+                    if heads[t] && visits[t] > 3 { merged.widen(at[t]) }
                 }
                 if !reached[t] || !same_state(at[t], merged) {
                     visits[t] += 1
@@ -1434,7 +1624,7 @@ impl Walk {
                 }
             }
         }
-        var found = Found([], [], false)
+        var found = Found([], [], [], false)
         for b in 0..n {
             if reached[b] && b != stop { let _ = self.step(b, at[b], true, mut found) }
         }
@@ -1472,7 +1662,7 @@ impl Walk {
                 }
             }
         }
-        let walk = Walk(self.p, g, self.wheres)
+        let walk = Walk(self.p, g, self.wheres, self.taken)
         !walk.run(entry, g.body).unproved
     }
 }
@@ -1530,10 +1720,11 @@ pub fn infer(p: mir.Program) -> Effects {
         }
         wheres.push(has)
     }
+    let taken = taken(p)
     var found: [Found] = []
     var callees: [[int]] = []
     for f in p.fns {
-        var one = Walk(p, f, wheres).run(start(f), -1)
+        var one = Walk(p, f, wheres, taken).run(start(f), -1)
         for s in f.copies { one.sites.push(Site(Where(s.line, s.col), ALLOC, "a value that holds an array is copied here")) }
         var called: [int] = []
         for c in one.calls { called.push(c.f) }
@@ -1595,11 +1786,12 @@ pub fn infer_from(p: mir.Program, roots: [int]) -> Effects {
         }
         wheres.push(has)
     }
+    let taken = taken(p)
     var found: [Found] = []
     var callees: [[int]] = []
     var done: [bool] = []
     for f in p.fns {
-        found.push(Found([], [], false))
+        found.push(Found([], [], [], false))
         callees.push([])
         done.push(false)
     }
@@ -1609,7 +1801,7 @@ pub fn infer_from(p: mir.Program, roots: [int]) -> Effects {
         if let Some(x) = work.pop() { f = x }
         if done[f] { continue }
         done[f] = true
-        var one = Walk(p, p.fns[f], wheres).run(start(p.fns[f]), -1)
+        var one = Walk(p, p.fns[f], wheres, taken).run(start(p.fns[f]), -1)
         for s in p.fns[f].copies { one.sites.push(Site(Where(s.line, s.col), ALLOC, "a value that holds an array is copied here")) }
         var called: [int] = []
         for c in one.calls {
@@ -1711,7 +1903,20 @@ pub fn check(p: mir.Program) -> [lexer.Error] {
                     var seen: [int] = []
                     seen.push(i)
                     let why = fx.cause(p, c.f, effect, mut seen)
-                    errors.push(Told(c.at, head, "it calls `{without_place(p.fns[c.f].name)}`, which {does[r]}: {why}"))
+                    var by_value = false
+                    for v in fx.found[i].values {
+                        if v.line == c.at.line && v.col == c.at.col { by_value = true }
+                    }
+                    if !by_value {
+                        errors.push(Told(c.at, head, "it calls `{without_place(p.fns[c.f].name)}`, which {does[r]}: {why}"))
+                    } else {
+                        // Of all it can be, the first one is enough to say why.
+                        var said = false
+                        for e in errors {
+                            if e.at.line == c.at.line && e.at.col == c.at.col && e.head == head && text.starts_with(e.what, "the function value") { said = true }
+                        }
+                        if !said { errors.push(Told(c.at, head, "the function value or `dyn` method called here can be `{without_place(p.fns[c.f].name)}`, which {does[r]}: {why}")) }
+                    }
                 }
             }
         }

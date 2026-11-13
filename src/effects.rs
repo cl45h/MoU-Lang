@@ -534,6 +534,9 @@ struct Found {
     sites: Vec<Site>,
     /// The functions it calls, and where.
     calls: Vec<(Span, usize)>,
+    /// Where it calls a function value: the calls from there are the
+    /// functions that value can be.
+    values: Vec<Span>,
     /// Whether one of its `where` conditions can fail.
     unproved: bool,
 }
@@ -571,6 +574,69 @@ struct Walk<'a> {
     p: &'a Program,
     f: &'a Func,
     wheres: &'a [bool],
+    /// The functions the program uses as values, in order.
+    taken: &'a [(usize, Option<(usize, usize)>)],
+}
+
+/// The functions that are used as a value somewhere in the program: by
+/// their name, as a closure, or in the table of a `dyn` value. A call to
+/// a function value can only reach one of these.
+fn taken(p: &Program) -> Vec<(usize, Option<(usize, usize)>)> {
+    let mut seen = vec![false; p.fns.len()];
+    let mut note = |o: &Operand| {
+        if let Operand::Const(Value::Fn(f)) = o {
+            seen[*f] = true;
+        }
+    };
+    let mut closures = Vec::new();
+    // The methods a `dyn` value carries: the function, and which method
+    // of which `dyn` it is there.
+    let mut methods: Vec<(usize, Option<(usize, usize)>)> = Vec::new();
+    for f in &p.fns {
+        for b in &f.blocks {
+            for s in &b.stmts {
+                match &s.rv {
+                    Rvalue::Struct(i, ops) if *i >= p.dyn_from => {
+                        for (k, o) in ops.iter().enumerate().skip(1) {
+                            match o {
+                                Operand::Const(Value::Fn(g)) if !methods.contains(&(*g, Some((*i, k - 1)))) => methods.push((*g, Some((*i, k - 1)))),
+                                Operand::Const(Value::Fn(_)) => {}
+                                other => note(other),
+                            }
+                        }
+                        note(&ops[0]);
+                    }
+                    Rvalue::Closure(g, ops) => {
+                        // The closure of a task is run by `spawn`, which
+                        // counts it there: nothing else can call it.
+                        let spawned = matches!(&b.term, Term::Call { callee: Callee::Native("task.spawn"), args, .. } if args.first() == Some(&Operand::Place(s.place.clone())));
+                        if !spawned {
+                            closures.push(*g);
+                        }
+                        ops.iter().for_each(&mut note);
+                    }
+                    rv => crate::cgen::each_operand(rv, &mut note),
+                }
+            }
+            match &b.term {
+                Term::Branch(o, _, _) | Term::Return(o) => note(o),
+                Term::Call { callee, args, .. } => {
+                    args.iter().for_each(&mut note);
+                    if let Callee::Indirect(o, _) = callee {
+                        note(o);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for g in closures {
+        seen[g] = true;
+    }
+    let mut out: Vec<(usize, Option<(usize, usize)>)> = (0..p.fns.len()).filter(|f| seen[*f]).map(|f| (f, None)).collect();
+    methods.sort();
+    out.extend(methods);
+    out
 }
 
 impl Walk<'_> {
@@ -864,9 +930,16 @@ impl Walk<'_> {
                             }
                         }
                     }
-                    Callee::Indirect(op) => {
+                    Callee::Indirect(op, slot) => {
                         reads(&st, op, &mut notes);
-                        notes.push((ALLOC | PANIC | IO | UNSAFE | BLOCK, "a function value or a method of a `dyn` value is called here, and what it does is not known".into()));
+                        // What is called is one of the functions the program
+                        // uses as a value, that takes this many arguments.
+                        if let Some(found) = &mut found {
+                            found.values.push(block.span);
+                            for (g, _) in self.taken.iter().filter(|(g, of)| of == slot && self.p.fns[*g].params == args.len()) {
+                                found.calls.push((block.span, *g));
+                            }
+                        }
                     }
                     Callee::Extern(x) => {
                         let name = &self.p.externs[*x].name;
@@ -983,6 +1056,7 @@ impl Walk<'_> {
         let mut at: Vec<Option<State>> = vec![None; n];
         let mut visits = vec![0u32; n];
         at[0] = Some(entry);
+        let heads = loop_heads(self.f);
         let mut work = vec![0];
         while let Some(b) = work.pop() {
             if Some(b) == stop {
@@ -994,8 +1068,8 @@ impl Walk<'_> {
                     None => s,
                     Some(old) => {
                         let mut j = old.join(&s);
-                        // Every loop has a jump back to an earlier block.
-                        if t <= b && visits[t] > 3 {
+                        // Every loop goes through the block it jumps back to.
+                        if heads[t] && visits[t] > 3 {
                             j.widen(old);
                         }
                         j
@@ -1049,9 +1123,49 @@ impl Walk<'_> {
                 }
             }
         }
-        let walk = Walk { p: self.p, f: g, wheres: self.wheres };
+        let walk = Walk { p: self.p, f: g, wheres: self.wheres, taken: self.taken };
         !walk.run(entry, Some(g.body)).unproved
     }
+}
+
+/// The blocks a loop jumps back to: the ones reached again while what
+/// follows from them is still being walked.
+fn loop_heads(f: &Func) -> Vec<bool> {
+    let n = f.blocks.len();
+    let next = |b: BlockId| -> Vec<BlockId> {
+        match &f.blocks[b].term {
+            Term::Goto(t) => vec![*t],
+            Term::Branch(_, t, e) => vec![*t, *e],
+            Term::Call { next, .. } => vec![*next],
+            _ => Vec::new(),
+        }
+    };
+    // 0 not seen, 1 being walked, 2 done.
+    let mut state = vec![0u8; n];
+    let mut heads = vec![false; n];
+    let mut stack: Vec<(BlockId, Vec<BlockId>)> = Vec::new();
+    if n > 0 {
+        state[0] = 1;
+        stack.push((0, next(0)));
+    }
+    while let Some((b, left)) = stack.last_mut() {
+        match left.pop() {
+            Some(t) if state[t] == 0 => {
+                state[t] = 1;
+                stack.push((t, next(t)));
+            }
+            Some(t) => {
+                if state[t] == 1 {
+                    heads[t] = true;
+                }
+            }
+            None => {
+                state[*b] = 2;
+                stack.pop();
+            }
+        }
+    }
+    heads
 }
 
 /// What is known when a function starts: the ranges of its parameters.
@@ -1074,11 +1188,12 @@ pub struct Effects {
 pub fn infer(p: &Program) -> Effects {
     let wheres: Vec<bool> =
         p.fns.iter().map(|f| f.blocks.iter().any(|b| matches!(&b.term, Term::Panic(m) if m.starts_with(WHERE)))).collect();
+    let taken = taken(p);
     let mut found: Vec<Found> = p
         .fns
         .iter()
         .map(|f| {
-            let mut found = Walk { p, f, wheres: &wheres }.run(start(f), None);
+            let mut found = Walk { p, f, wheres: &wheres, taken: &taken }.run(start(f), None);
             let copy = "a value that holds an array is copied here";
             found.sites.extend(f.copies.iter().map(|span| Site { span: *span, effect: ALLOC, what: copy.into() }));
             found
@@ -1204,7 +1319,13 @@ pub fn check(p: &Program) -> Vec<Error> {
                 let told = fx.found[i].sites.iter().any(|s| s.span == *span && s.effect & effect != 0);
                 if fx.of[*g] & effect != 0 && !told {
                     let why = fx.cause(p, *g, effect, &mut vec![i]);
-                    errors.push((*span, head.clone(), format!("it calls `{}`, which {does}: {why}", shown(&p.fns[*g].name))));
+                    if !fx.found[i].values.contains(span) {
+                        errors.push((*span, head.clone(), format!("it calls `{}`, which {does}: {why}", shown(&p.fns[*g].name))));
+                    } else if !errors.iter().any(|e| e.0 == *span && e.1 == head && e.2.starts_with("the function value")) {
+                        // Of all it can be, the first one is enough to say why.
+                        let name = shown(&p.fns[*g].name);
+                        errors.push((*span, head.clone(), format!("the function value or `dyn` method called here can be `{name}`, which {does}: {why}")));
+                    }
                 }
             }
         }
@@ -1292,7 +1413,15 @@ fn say() ! io.Error { io.print(\"x\")? }
         bad(r, "first(xs)", "a `where` condition of `first` is not proved to hold here");
         bad(r, "item(xs, 0)", "a `where` condition of `item` is not proved to hold here");
         bad(r, "twice(n)", "it calls `twice`, which can panic: `*` on `i64` can overflow here");
-        bad(r, "g(n)", "what it does is not known");
+        // A function value can only be one the program uses as a value.
+        ok(r, "g(n)");
+        ok(r, "let h = fn(k: int) -> int { k +% 1 }\n g(n)");
+        bad(r, "let h = twice\n g(n)", "the function value or `dyn` method called here can be `twice`, which can panic");
+        bad(r, "let h = fn(k: int) -> int { k + 1 }\n g(n)", "called here can be `closure`, which can panic");
+        // One that takes another number of arguments is not it.
+        ok(r, "let h = fn(a: int, b: int) -> int { a + b }\n g(n)");
+        // A call inside a loop does not lose what is known of the loop.
+        ok(r, "var t = 0\n for x in xs { t = t +% g(x) }\n for k in 0..xs.len { t = t +% g(xs[k]) }\n t");
         bad(r, "if n <= 0 { 0 } else { f(xs, i, n - 1, p, g) }", "this call is recursive");
     }
 
@@ -1312,7 +1441,8 @@ fn say() ! io.Error { io.print(\"x\")? }
         bad(r, "let ys = xs[0..1]\n n", "a part of an array is copied here");
         bad(r, "let t = Tree.Node(None, 1)\n n", "a value of a recursive enum is created here");
         bad(r, "let h = fn(k: int) -> int { k + n }\n n", "a closure that captures values is created here");
-        bad(r, "g(n)", "what it does is not known");
+        ok(r, "g(n)");
+        bad(r, "let h = fn(k: int) -> int {\n let ys = [k]\n k\n }\n g(n)", "called here can be `closure`, which allocates");
     }
 
     #[test]
