@@ -33,7 +33,7 @@ fn main() ! io.Error {
 - Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
 - Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
-- Herramientas: `mou test`, `mou fmt`, `mou repl`, `mou effects` y `mou fuzz`.
+- Herramientas: `mou test`, `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` y `mou bind` (escribe las declaraciones de un header de C).
 - El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
 
 ## Qué le falta
@@ -45,7 +45,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Entrada y salida sin bloquear (tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden).
 - El resto del contexto (`io` inyectable; `with alloc = arena` ya está) y los efectos en los tipos de función.
 - Tipos como valores (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y la reflexión con `meta.info(T)` ya están.
-- Leer los headers de C en vez de declarar las funciones a mano (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
+- Que el compilador lea los headers de C al compilar: hoy `mou bind header.h` escribe las declaraciones de las funciones y se guardan en un módulo (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).

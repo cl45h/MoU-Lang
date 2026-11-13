@@ -1,4 +1,5 @@
 mod ast;
+mod bind;
 mod cgen;
 mod check;
 mod comptime;
@@ -29,6 +30,7 @@ commands:
   c        print the C source `build` compiles
   check    type-check the file
   effects  print the effects of each function of the file: alloc, panic, io
+  bind     print the `import c` block of a header of C: `mou bind math.h [name]`
   mir      print the control-flow graph the interpreter runs
   parse    check that the file parses and list its declarations
   ast      print the syntax tree
@@ -58,6 +60,23 @@ fn main() -> ExitCode {
         let numbers: Vec<u64> = args[2..].iter().filter_map(|a| a.parse().ok()).collect();
         let (count, seed) = (numbers.first().copied().unwrap_or(100), numbers.get(1).copied().unwrap_or(1));
         return if fuzz::fuzz(count, seed, sanitize) { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if args.get(1).is_some_and(|c| c == "bind") {
+        // `mou bind <header> [name]`
+        let Some(header) = args.get(2) else {
+            eprintln!("mou: `bind` takes the header to read, as in `mou bind math.h`");
+            return ExitCode::from(2);
+        };
+        return match bind::bind(header, args.get(3).map(|s| s.as_str())) {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err(why) => {
+                eprintln!("mou: {why}");
+                ExitCode::FAILURE
+            }
+        };
     }
     let (Some(cmd), Some(path)) = (args.get(1), args.get(2)) else {
         eprintln!("{USAGE}");

@@ -1806,7 +1806,12 @@ mod tests {
     /// Builds a program with the C backend and runs it. `None` when there is
     /// no C compiler to test with.
     fn native(name: &str, src: &str) -> Option<(String, i32)> {
-        let file = crate::load::load("test.mou", src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
+        native_at(name, "test.mou", src)
+    }
+
+    /// The same, for a program that sits in a file: its modules are next to it.
+    fn native_at(name: &str, path: &str, src: &str) -> Option<(String, i32)> {
+        let file = crate::load::load(path, src).1.unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         let (_, info) = check::analyze(&file).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         let mut program = mir::lower(&file, &info).unwrap_or_else(|es| panic!("{:?}", es.iter().map(|e| &e.msg).collect::<Vec<_>>()));
         assert!(own::check(&program).is_empty());
@@ -1840,6 +1845,27 @@ mod tests {
             Err(_) => 101,
         };
         (String::from_utf8(out).unwrap(), status)
+    }
+
+    /// The programs of `tests/c` that have a `main` call real functions of
+    /// C. Only the native program can run them, so what each one prints
+    /// is compared with what is written next to it.
+    #[test]
+    fn c_programs_run() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/c");
+        let mut paths: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "out")).collect();
+        paths.sort();
+        assert!(paths.len() >= 5, "the expected results are missing");
+        for expected in paths {
+            let name = expected.file_stem().unwrap().to_string_lossy().to_string();
+            let path = expected.with_extension("mou");
+            let src = std::fs::read_to_string(&path).unwrap();
+            let Some(got) = native_at(&format!("c-{name}"), &path.to_string_lossy(), &src) else {
+                eprintln!("no C compiler: the programs that call C were not run");
+                return;
+            };
+            assert_eq!(got, (std::fs::read_to_string(&expected).unwrap(), 0), "{name}");
+        }
     }
 
     #[test]

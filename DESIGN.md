@@ -270,7 +270,7 @@ scope s {
   import py  "numpy" as np     // solo perfiles script/app
   ```
 - ABI estable opt-in con `pub @abi`.
-- Una sola herramienta: `mou run | build | test | fmt | pkg | repl` (hoy existen `run`, `build`, `test`, `fmt`, `repl`, `effects` y `fuzz`; `build` acepta `-l nombre` para enlazar una librería de C).
+- Una sola herramienta: `mou run | build | test | fmt | pkg | repl` (hoy existen `run`, `build`, `test`, `fmt`, `repl`, `effects`, `fuzz` y `bind`; `build` acepta `-l nombre` para enlazar una librería de C).
 - Cross-compilación: `mou build --target=aarch64-linux`.
 
 ---
@@ -303,7 +303,7 @@ fuente -> lexer/parser -> AST
 | M4 | Emisor de C: binarios nativos con `mou build` (hecho, en `src/cgen.rs` y `src/runtime.c`). Los enteros de hasta 64 bits, los booleanos y los `f64` ya son variables de máquina, y los arrays de escalares y de structs de escalares guardan sus datos sin etiqueta. Pendiente: structs sueltos, enums y strings con layout propio, y structs con campos que no son escalares |
 | M5 | Efectos y perfiles (hechos en `src/effects.rs`: `alloc`, `panic`, `io`, `unsafe` y `block` inferidos, `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`, prueba de rangos, y `system` sin alocador). `with alloc = arena` (hecho). Pendiente: el resto del contexto (`io` inyectable) y el resto de las reglas de los perfiles |
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Parámetros `comptime` de enteros y `meta.info(T)` (hechos). Pendiente: tipos como valores |
-| M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números, `bool` y strings. Structs con layout de C, arrays de números como buffers y callbacks por nombre (hechos). Pendiente: leer el header (vía libclang) y punteros sueltos |
+| M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números, `bool` y strings. Structs con layout de C, arrays de números como buffers y callbacks por nombre (hechos). `mou bind header.h` escribe las declaraciones a partir del header (hecho). Pendiente: leer el header durante la compilación y punteros sueltos |
 | M8 | Backend LLVM, SIMD, `soa` |
 | M9 | Autoalojamiento del compilador: hecho. El compilador entero está escrito en Mou (`compiler/`), da el mismo C que el de Rust y se compila a sí mismo; `./bootstrap.sh` lo construye solo con un compilador de C, a partir de `seed/mouc.c.gz`. Pendiente: `import cpp`, `import py` |
 
@@ -452,8 +452,13 @@ pub fn root(x: f64) -> f64 { unsafe { m.sqrt(x) } }
 - El binario incluye el header y llama a la función directamente. `mou build archivo.mou -l sqlite3` enlaza una librería.
 - Una función que llega a una de C tiene el efecto `unsafe`, que `mou effects` muestra. De lo que hace la función de C (alocar, entrada y salida) responde quien escribió el `unsafe`.
 - El intérprete no puede llamar a C: `mou run`, `mou test`, el `repl` y `comptime` se detienen con un panic que lo dice cuando llegan a una. Un programa que usa C se prueba compilado.
+- La suite compila y ejecuta los cinco programas de `tests/c` que tienen `main` (`buffers`, `callbacks`, `pointers`, `strings` y `structs`) y compara lo que imprimen con el archivo `.out` de al lado. Los otros archivos de `tests/c` son módulos sin `main`: de esos solo se compara el C que generan los dos compiladores.
 
-Faltan: leer el header en vez de declarar a mano, leer y escribir a través de un puntero (buffers), structs con layout de C, funciones de mou como callbacks, y `import cpp` e `import py`.
+Declaraciones escritas por la herramienta: `mou bind math.h [nombre]` pasa el header por el preprocesador del compilador de C (`cc -E`, o el de `CC`), lee las funciones que declara y escribe por la salida el bloque `import c` completo, listo para guardar como un módulo `system` al que se le agregan las funciones seguras que lo envuelven. Cómo traduce: los números por su tamaño en esa máquina (`long` según `__SIZEOF_LONG__`), `const char *` como `str`, `char *` como `mut [u8]`, un puntero a números como `[T]` o `mut [T]` según tenga `const`, un resultado `char *` como `str?`, y cualquier otro puntero (`void *`, `FILE *`, un struct) como `ptr?`. Sigue los `typedef` de números y punteros (`size_t`, `time_t`). Deja afuera, con el motivo al final del archivo, las funciones que reciben cualquier cantidad de argumentos (`printf`), las que reciben o devuelven una función (`qsort`, `signal`), las que pasan un struct por valor (`div`) y las de `long double`; tampoco escribe las que empiezan con `_` ni las que tienen cuerpo en el header. Probado con `math.h`, `string.h`, `stdlib.h`, `stdio.h`, `time.h`, `ctype.h`, `unistd.h`, `zlib.h` y `sqlite3.h`: lo que escribe (entre 30 y 243 declaraciones por header) pasa el verificador, y un programa que llama a once de esas funciones a través de siete de los headers compila y da los resultados correctos (el `crc32` de zlib coincide con el de Python).
+
+Límites de `mou bind`: es una herramienta aparte, no parte de la compilación, así que el compilador sigue confiando en el bloque declarado y no lo compara con el header (un error ahí lo detecta recién el compilador de C, y solo en las funciones que el programa llama). El header no dice para qué es cada puntero: `mut [i32]` puede ser un solo número de salida o un buffer, y un `void *` que en realidad son bytes queda como `ptr?` hasta que se lo cambia a mano por `[u8]`. No escribe structs (`@c`), constantes ni macros. Solo está en el compilador de Rust.
+
+Faltan: que el compilador lea el header durante la compilación (`import c "x.h"` sin bloque), leer y escribir a través de un puntero suelto, y `import cpp` e `import py`.
 
 ### Tareas: qué hay
 
