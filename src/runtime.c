@@ -223,9 +223,8 @@ static void ksb_float(ksb *sb, double f, bool single) {
 
 /* ---- values ---- */
 
-static kv kmk(int tag) {
-    kv v;
-    memset(&v, 0, sizeof v);
+static inline kv kmk(int tag) {
+    kv v = {0};
     v.tag = (uint8_t)tag;
     return v;
 }
@@ -1451,14 +1450,20 @@ static kv kconv(kv v, const char *code) { return kconv_at(&code, v); }
 
 /* ---- the rest of the rvalues ---- */
 
-static kv kis(kv v, uint32_t tag) {
+/* Whether the value where it is holds the given variant. */
+static kv kisb(const kv *v, uint32_t tag) {
     bool r = false;
-    if (v.tag == T_ENUM) r = v.b == tag;
-    else if (v.tag == T_NONE || v.tag == T_OK) r = tag == 0;
-    else if (v.tag == T_SOME || v.tag == T_ERR) r = tag == 1;
+    if (v->tag == T_ENUM) r = v->b == tag;
+    else if (v->tag == T_NONE || v->tag == T_OK) r = tag == 0;
+    else if (v->tag == T_SOME || v->tag == T_ERR) r = tag == 1;
     else kinternal("a variant test on a value without variants");
-    krelease(v);
     return kbool(r);
+}
+
+static kv kis(kv v, uint32_t tag) {
+    kv r = kisb(&v, tag);
+    krelease(v);
+    return r;
 }
 
 static kv klength(kv v) {

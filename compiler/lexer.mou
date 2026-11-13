@@ -72,18 +72,16 @@ struct Lexer { chars: [char], i: int, line: int, col: int, puncts: [[char]] }
 impl Lexer {
     fn peek(self, n: int) -> char? { self.chars.get(self.i + n) }
 
+    // These two run for every character, several times: they read it
+    // where it is, without an optional in between.
     fn at(self, n: int, c: char) -> bool {
-        match self.peek(n) {
-            Some(x) => x == c
-            None => false
-        }
+        let k = self.i + n
+        k >= 0 && k < (self.chars.len as int) && self.chars[k] == c
     }
 
     fn digit_at(self, n: int) -> bool {
-        match self.peek(n) {
-            Some(x) => text.is_digit(x)
-            None => false
-        }
+        let k = self.i + n
+        k >= 0 && k < (self.chars.len as int) && text.is_digit(self.chars[k])
     }
 
     fn advance(mut self) -> char? {

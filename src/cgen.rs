@@ -251,7 +251,17 @@ fn rvalue(cx: &Cx, rv: &Rvalue) -> Result<String, String> {
         Rvalue::Some(a) => format!("kbox(T_SOME, {})", o(a)?),
         Rvalue::Ok(a) => format!("kbox(T_OK, {})", o(a)?),
         Rvalue::Err(a) => format!("kbox(T_ERR, {})", o(a)?),
-        Rvalue::Is(a, tag) => format!("kis({}, {tag})", o(a)?),
+        Rvalue::Is(a, tag) => {
+            // A value that is only looked at is not taken and let go of.
+            let v = o(a)?;
+            match v.strip_prefix("kretain(").and_then(|r| r.strip_suffix(')')) {
+                Some(inner) => match inner.strip_prefix('*') {
+                    Some(ptr) => format!("kisb({ptr}, {tag})"),
+                    None => format!("kisb(&{inner}, {tag})"),
+                },
+                None => format!("kis({v}, {tag})"),
+            }
+        }
         Rvalue::Len(a) => format!("klength({})", o(a)?),
         Rvalue::Push(p, a) => match (cx.ptr(p.local, &p.proj, true), cx.known_bool(a), cx.known_int(a)) {
             (Some(ptr), Some(t), _) => format!("kpush_bool({ptr}, {t})"),

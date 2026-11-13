@@ -217,6 +217,13 @@ fn buf_code(kind: str) -> str {
 }
 
 // A text without its first `n` characters.
+// A text without its last character.
+fn without_last(t: str) -> str {
+    let cs = text.chars(t)
+    if cs.len == 0 { return t }
+    text.from_chars(cs[..(cs.len - 1)])
+}
+
 fn rest(t: str, n: int) -> str {
     let cs = text.chars(t)
     var out: [char] = []
@@ -1535,7 +1542,16 @@ impl Cx {
             mir.Rvalue.Some(a) => "kbox(T_SOME, {self.operand(a)?})"
             mir.Rvalue.Ok(a) => "kbox(T_OK, {self.operand(a)?})"
             mir.Rvalue.Err(a) => "kbox(T_ERR, {self.operand(a)?})"
-            mir.Rvalue.Is(a, tag) => "kis({self.operand(a)?}, {tag})"
+            mir.Rvalue.Is(a, tag) => {
+                // A value that is only looked at is not taken and let go of.
+                let v = self.operand(a)?
+                if text.starts_with(v, "kretain(") && text.ends_with(v, ")") {
+                    let inner = without_last(rest(v, 8))
+                    if text.starts_with(inner, "*") { return "kisb({rest(inner, 1)}, {tag})" }
+                    return "kisb(&{inner}, {tag})"
+                }
+                "kis({v}, {tag})"
+            }
             mir.Rvalue.Len(a) => "klength({self.operand(a)?})"
             mir.Rvalue.Push(p, a) => {
                 if let Some(ptr) = self.ptr(p.local, p.proj, true) {

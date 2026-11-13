@@ -634,6 +634,15 @@ No se verifica todavía: `ref` como tipo de retorno, las regiones (`ref[r]`), ni
 
 ### El emisor de C
 
+Medición del 13/11/2026, el compilador compilándose a sí mismo (`mouc c compiler/main.mou`, C compilado con `-O1`): 4,35 s antes, 2,53 s ahora. Lo que lo bajó, medido paso por paso con `callgrind`:
+
+- Cada función generada ponía sus variables en la unidad una por una y las soltaba una por una en cada `return`, con una llamada por variable: 295.000 llamadas a `krelease` en el C del compilador. Ahora se ponen en cero juntas (`memset`) y se sueltan con una sola llamada que recorre una lista (`kdrop`). El C generado bajó de 553.000 a 237.000 líneas y el tiempo a 3,11 s.
+- La prueba de variante de un `match` tomaba el valor y lo soltaba; ahora lo mira donde está (`kisb`): 2,97 s.
+- `kmk`, que arma un valor vacío, quedó en línea: 2,80 s.
+- En el lexer del compilador, `at` y `digit_at` leían cada carácter a través de un opcional; ahora lo leen directo: 2,53 s.
+
+Lo que probé y no sirvió: poner en línea el chequeo rápido de `kset` y `kretain` (el C tardó cuatro veces más en compilar y el programa corrió más lento, 4,55 s), inicializar las variables con `= {0}` (igual de rápido, C más lento de compilar) y mover en vez de copiar los temporales que se leen una sola vez (1 % de ganancia). Lo que sigue pesando es lo de siempre: los strings, arrays y structs con otros valores adentro van etiquetados y con cuenta de referencias, y cada copia entre variables cuesta un par de llamadas. Un `char?` en particular arma un bloque por cada `Some`.
+
 `mou build archivo.mou` genera un único archivo C (visible con `mou c`) y llama al compilador de C (`cc`, o el de la variable `CC`). Necesita `__int128`, o sea GCC o Clang.
 
 Los valores compuestos (structs, enums, arrays, strings, opcionales) se representan igual que en el intérprete: etiquetados y con conteo de referencias. Los enteros de hasta 64 bits, los booleanos y los `f64`, no: el emisor mira cada variable local y, si su tipo es uno de esos (o si solo guarda enteros de un mismo tipo, solo booleanos o solo `f64`), la declara como una variable de C común. La aritmética sobre ellas se escribe en línea con detección de overflow del compilador (`__builtin_add_overflow` y parientes); el camino lento, que es el que arma el mensaje del panic, solo corre cuando hay overflow, división por cero o por `-1`, o una operación menos común (desplazamientos, envolventes, saturantes). Una función cuyos parámetros y resultado son todos enteros o booleanos, y que no modifica sus parámetros, se llama directamente con valores de máquina; conserva además una entrada con valores etiquetados para cuando se la usa como valor.
