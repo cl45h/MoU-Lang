@@ -1834,6 +1834,23 @@ impl Lower {
     }
 }
 
+// Whether the parameter an argument goes to is a `comptime` one that
+// takes a type. `self` is not among the arguments.
+fn type_param_at(decl: parser.FnDecl?, i: int) -> bool {
+    match decl {
+        Some(d) => {
+            var k = 0
+            for p in d.params {
+                if p.name == "self" { continue }
+                if k == i { return p.ct && check.is_type_type(p.ty) }
+                k += 1
+            }
+            false
+        }
+        None => false
+    }
+}
+
 fn find_var(scopes: [Scope], name: str) -> int {
     var s = scopes.len as int - 1
     while s >= 0 {
@@ -3474,6 +3491,11 @@ impl Lower {
                     }
                     _ => {}
                 }
+            }
+            if type_param_at(decl, i) {
+                // A type is not a value: the copy made for it knows it.
+                ops.push(unit())
+                continue
             }
             if by_mut {
                 let p = self.place(a.value)

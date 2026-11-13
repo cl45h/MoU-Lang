@@ -1,0 +1,37 @@
+import std.io
+import std.meta
+
+// A `comptime` parameter that is a type: the call gives the type as an
+// argument, and each type gets its own copy of the function.
+
+struct Point { x: int, y: int }
+struct Pair[T] { a: T, b: T }
+
+fn filled(comptime T: type, comptime n: int, v: T) -> [T] {
+    var out: [T] = []
+    for i in 0..n { out.push(v) }
+    out
+}
+
+fn empty(comptime T: type) -> [T] { [] }
+
+fn named(comptime T: type) -> str { meta.info(T).name }
+
+fn pair(comptime T: type, a: T, b: T) -> Pair[T] { Pair(a, b) }
+
+fn twice(comptime T: type, v: T) -> [T] { filled(T, 2, v) }
+
+fn first[U](comptime T: type, xs: [U], or: T) -> T { if xs.len > 0 { or } else { or } }
+
+fn main() ! io.Error {
+    io.print("{filled(int, 3, 0)} {filled(str, 2, "a")} {filled(f64, 1, 2.5)}")?
+    var xs = empty(int)
+    xs.push(4)
+    var ps = empty(Point)
+    ps.push(Point(1, 2))
+    let nested = empty([int])
+    io.print("{xs} {ps.len} {ps[0].y} {nested.len} {empty(Pair[int]).len}")?
+    io.print("{named(int)} {named(Point)} {named(Pair[str])}")?
+    let p = pair(u8, 1, 2)
+    io.print("{p.a + p.b} {twice(bool, true)} {twice(Point, Point(3, 4)).len} {first(str, [1], "x")}")?
+}

@@ -29,7 +29,7 @@ fn main() ! io.Error {
 - Verificador de tipos con genéricos, traits y `dyn`.
 - Ownership sin lifetimes: las referencias no se guardan, así que no hace falta anotarlas.
 - Efectos inferidos (`alloc`, `panic`, `io`, `unsafe`, `block`) y anotaciones que los prohíben: `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`. Para `@nopanic` el compilador prueba rangos de índices y de aritmética.
-- Constantes y expresiones `comptime` calculadas al compilar, y parámetros `comptime` de enteros: `fn power(comptime n: int, x: int)` da una copia de la función por cada valor de `n`.
+- Constantes y expresiones `comptime` calculadas al compilar, y parámetros `comptime` de enteros y de tipos: `fn power(comptime n: int, x: int)` da una copia de la función por cada valor de `n`, y `fn empty(comptime T: type) -> [T]` se llama `empty(int)`.
 - Llamadas a funciones de C con números, `bool`, strings y punteros opacos (`ptr`).
 - Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.
 - Redes: `std.net` da TCP (escuchar, conectar, leer y escribir), escrito en Mou sobre los sockets de C. Un servidor atiende cada conexión en una tarea. Solo Linux, IPv4 y programas compilados.
@@ -45,7 +45,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida con un bucle de eventos: hoy `std.net` da TCP con funciones que esperan, y varias conexiones a la vez se atienden con una tarea (un hilo) por conexión; solo Linux e IPv4. Tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden.
 - El resto del contexto (un `io` reemplazable entero; `with alloc = arena` y `with io = lineas`, que captura lo que se imprime, ya están) y los efectos escritos en los tipos de función (hoy una llamada a un valor función toma los efectos de las funciones que el programa usa como valor).
-- Tipos como valores (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y la reflexión con `meta.info(T)` ya están.
+- Funciones que devuelven un tipo (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y de tipos (`empty(int)`) y la reflexión con `meta.info(T)` ya están.
 - Que el compilador lea los headers de C al compilar: hoy `mou bind header.h` escribe las declaraciones de las funciones y se guardan en un módulo (números, `bool`, strings, punteros opacos, structs de C con `@c`, arrays de números y callbacks ya se pueden).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 

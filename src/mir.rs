@@ -2835,7 +2835,11 @@ impl<'a> Lower<'a> {
         }
         let offset = ops.len();
         for (i, a) in args.iter().enumerate() {
-            if sig.params.get(i).is_some_and(|p| p.mode == Mode::Mut) {
+            let is_type = decl.and_then(|d| d.params.iter().filter(|p| p.name != "self").nth(i)).is_some_and(|p| p.comptime && matches!(p.ty, Some(crate::ast::Type::TypeType)));
+            if is_type {
+                // A type is not a value: the copy made for it knows it.
+                ops.push(Operand::Const(Value::Unit));
+            } else if sig.params.get(i).is_some_and(|p| p.mode == Mode::Mut) {
                 let p = self.place(&a.value);
                 writeback.push((offset + i, p.clone()));
                 ops.push(Operand::Place(p));

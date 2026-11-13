@@ -1632,8 +1632,8 @@ impl Checker {
                             let signed = self.signature(f, at)
                             self.fns[idx].sig = signed.sig
                             for k in 0..f.params.len {
-                                if k < signed.sig.params.len && f.params[k].ct && !is_int(signed.sig.params[k].ty) {
-                                    self.err(at, "`{f.params[k].name}` is a `comptime` parameter, and for now it has to be an integer")
+                                if k < signed.sig.params.len && f.params[k].ct && !is_int(signed.sig.params[k].ty) && !is_type_type(f.params[k].ty) {
+                                    self.err(at, "`{f.params[k].name}` is a `comptime` parameter, and for now it has to be an integer or a `type`")
                                 }
                             }
                             self.fns[idx].tparams = tparams
@@ -2395,6 +2395,27 @@ impl Checker {
                 sig = self.methods[mi].m.sig
             }
         }
+        // The parameters that take a type: an argument there is read as
+        // a type, not as a value.
+        var type_at: [bool] = []
+        var type_names: [str] = []
+        var any_type = false
+        match target {
+            Target.Fn(i) => {
+                match self.decls[self.decl_of_fn[i]].kind {
+                    parser.DeclKind.Fn(f) => {
+                        for p in f.params {
+                            let t = p.ct && is_type_type(p.ty)
+                            type_at.push(t)
+                            type_names.push(p.name)
+                            if t { any_type = true }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
         var pre = PreArgs([], [])
         match self.pre_args {
             Some(p) => {
@@ -2402,7 +2423,24 @@ impl Checker {
                 self.pre_args = None
             }
             None => {
-                pre = self.arg_types(args)
+                if any_type {
+                    var logs: [LogRange] = []
+                    var found: [types.Ty] = []
+                    for k in 0..args.len {
+                        let start = self.mut_log.len as int
+                        if k < type_at.len && type_at[k] {
+                            let t = self.type_of_expr(args[k].value)
+                            types.define(mut env, type_names[k], t)
+                            found.push(types.Ty.Unknown)
+                        } else {
+                            found.push(self.expr(args[k].value))
+                        }
+                        logs.push(LogRange(start, self.mut_log.len as int))
+                    }
+                    pre = PreArgs(found, logs)
+                } else {
+                    pre = self.arg_types(args)
+                }
             }
         }
         let tys = pre.tys
@@ -2415,6 +2453,7 @@ impl Checker {
                         for k in 0..f.params.len {
                             if !f.params[k].ct { continue }
                             given += 1
+                            if is_type_type(f.params[k].ty) { continue }
                             if k >= args.len { continue }
                             let name = f.params[k].name
                             let a = args[k].value
@@ -3928,6 +3967,19 @@ fn is_int(t: types.Ty) -> bool {
     match t {
         types.Ty.Int(_) => true
         _ => false
+    }
+}
+
+// Whether a parameter is declared as `type`.
+pub fn is_type_type(t: parser.Type?) -> bool {
+    match t {
+        Some(x) => {
+            match x {
+                parser.Type.TypeType => true
+                _ => false
+            }
+        }
+        None => false
     }
 }
 

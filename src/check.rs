@@ -2057,8 +2057,8 @@ impl<'a> Checker<'a> {
                         self.enter_definition(&tparams);
                         self.fns[idx].sig = self.signature(f, d.span).0;
                         for (p, q) in f.params.iter().zip(&self.fns[idx].sig.params.clone()) {
-                            if p.comptime && !matches!(q.ty, Ty::Int(_)) {
-                                self.err(d.span, format!("`{}` is a `comptime` parameter, and for now it has to be an integer", p.name));
+                            if p.comptime && !matches!(q.ty, Ty::Int(_)) && !matches!(p.ty, Some(Type::TypeType)) {
+                                self.err(d.span, format!("`{}` is a `comptime` parameter, and for now it has to be an integer or a `type`", p.name));
                             }
                         }
                         self.fns[idx].tparams = tparams;
@@ -2639,19 +2639,42 @@ impl<'a> Checker<'a> {
                 None => return Ty::Unknown,
             },
         };
-        let (tys, logs) = match self.pre_args.take() {
-            Some(known) => known,
-            None => self.arg_types(args),
-        };
-        // What each `comptime` parameter is given has to be known here.
-        let known: Vec<(usize, String)> = match &target {
+        // What each `comptime` parameter is given has to be known here:
+        // a number, or a type when the parameter is a `type`.
+        let known: Vec<(usize, String, bool)> = match &target {
             Target::Fn(i) => match &self.file.decls[self.decl_of_fn[*i]].kind {
-                DeclKind::Fn(f) => f.params.iter().enumerate().filter(|(_, p)| p.comptime).map(|(k, p)| (k, p.name.clone())).collect(),
+                DeclKind::Fn(f) => {
+                    f.params.iter().enumerate().filter(|(_, p)| p.comptime).map(|(k, p)| (k, p.name.clone(), matches!(p.ty, Some(Type::TypeType)))).collect()
+                }
                 _ => Vec::new(),
             },
             Target::Method(..) => Vec::new(),
         };
-        for (k, name) in &known {
+        let (tys, logs) = match self.pre_args.take() {
+            Some(known) => known,
+            None if known.iter().any(|k| k.2) => {
+                // An argument that is a type is read as one, not as a value.
+                let (mut tys, mut logs) = (Vec::new(), Vec::new());
+                for (k, a) in args.iter().enumerate() {
+                    let start = self.mut_log.len();
+                    match known.iter().find(|n| n.0 == k && n.2) {
+                        Some((_, name, _)) => {
+                            let t = self.type_of_expr(&a.value);
+                            env.insert(name.clone(), t);
+                            tys.push(Ty::Unknown);
+                        }
+                        None => tys.push(self.expr(&a.value)),
+                    }
+                    logs.push((start, self.mut_log.len()));
+                }
+                (tys, logs)
+            }
+            None => self.arg_types(args),
+        };
+        for (k, name, is_type) in &known {
+            if *is_type {
+                continue;
+            }
             let Some(a) = args.get(*k) else { continue };
             match self.const_int(&a.value, 0) {
                 Some(v) => {
@@ -5231,7 +5254,13 @@ mod tests {
         bad(&f("power(k, 2)"), "`n` is a `comptime` parameter: what it is given must be a number known when the program is compiled");
         bad(&f("power(f(1), 2)"), "must be a number known when the program is compiled");
         bad(&f("small(100 * 4)"), "400 does not fit in `u8`, the type of the `comptime` parameter `k`");
-        bad("fn word(comptime s: str) -> str { s }", "`s` is a `comptime` parameter, and for now it has to be an integer");
+        bad("fn word(comptime s: str) -> str { s }", "`s` is a `comptime` parameter, and for now it has to be an integer or a `type`");
+        // A type as an argument.
+        let t = "fn filled(comptime T: type, comptime n: int, v: T) -> [T] {\n var out: [T] = []\n for i in 0..n { out.push(v) }\n out\n}\nfn empty(comptime T: type) -> [T] { [] }\n";
+        ok(&format!("{t}fn f() -> int {{\n var xs = empty(int)\n xs.push(1)\n let ys = filled(str, 2, \"a\")\n xs[0] + ys.len as int\n}}"));
+        bad(&format!("{t}fn f() {{ let a = filled(3, 1, 0) }}"), "expected a type");
+        bad(&format!("{t}fn f() {{ let a = filled(int, 2, \"a\") }}"), "argument: expected `i64`, found `str`");
+        bad(&format!("{t}fn f() {{ let a = empty(Nope) }}"), "unknown type `Nope`");
         bad("struct B { v: int }\nimpl B {\n fn up(self, comptime n: int) -> int { self.v + n }\n}", "a method cannot have `comptime` parameters yet");
     }
 

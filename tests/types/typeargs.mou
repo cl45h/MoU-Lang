@@ -1,0 +1,13 @@
+fn filled(comptime T: type, comptime n: int, v: T) -> [T] {
+    var out: [T] = []
+    for i in 0..n { out.push(v) }
+    out
+}
+fn main() -> int {
+    let a = filled(3, 1, 0)
+    let b = filled(int, 2, "a")
+    let c = filled(Nope, 2, 1)
+    let k = 2
+    let d = filled(k, 1, 0)
+    0
+}
