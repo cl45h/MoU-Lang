@@ -1240,6 +1240,14 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     let mine = direct[i].as_ref();
     // The name of the function in the program, for whoever reads the C.
     writeln!(out, "/* {} */", f.name.replace("*/", "* /")).unwrap();
+    // The locals to let go of where the function returns: with many of
+    // them, one call walks a list instead of a call for each.
+    let owned: Vec<usize> = (f.params..n).filter(|l| cx.reps.get(*l) == Some(&Rep::Boxed)).collect();
+    let listed = owned.len() > 3;
+    if listed {
+        let list: Vec<String> = owned.iter().map(|l| l.to_string()).collect();
+        writeln!(out, "static const int D{i}[] = {{{}}};", list.join(", ")).unwrap();
+    }
     match mine {
         Some((params, ret)) => writeln!(out, "{} {{", direct_head(i, params, *ret)).unwrap(),
         None => writeln!(out, "static kv f{i}(kv *a, kv env) {{").unwrap(),
@@ -1270,17 +1278,16 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     if mine.is_none() {
         writeln!(out, "    (void)env;").unwrap();
     }
-    // The slots of machine locals stay empty, so that releasing them is free.
-    for l in 0..n {
+    // Every slot starts as the unit value, which is all zeros.
+    if n > 0 {
+        writeln!(out, "    memset(L, 0, sizeof L);").unwrap();
+    }
+    for l in 0..n.min(f.params) {
         if cx.reps.get(l).is_some_and(|r| *r != Rep::Boxed) {
             continue;
         }
-        let init = match (l < f.params, mine.is_some()) {
-            // Lent by the caller: it is not released here.
-            (true, true) => format!("s{l}"),
-            (true, false) => format!("a[{l}]"),
-            _ => "KUNIT".to_string(),
-        };
+        // Lent by the caller: it is not released here.
+        let init = if mine.is_some() { format!("s{l}") } else { format!("a[{l}]") };
         writeln!(out, "    L[{l}] = {init};").unwrap();
     }
     writeln!(out, "    goto b0;").unwrap();
@@ -1508,9 +1515,12 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         // It was read from the block of the caller, which is still there.
                     } else if l < f.params {
                         writeln!(out, "        a[{l}] = {};", cx.boxed(l)).unwrap();
-                    } else if cx.reps.get(l) == Some(&Rep::Boxed) {
+                    } else if cx.reps.get(l) == Some(&Rep::Boxed) && !listed {
                         writeln!(out, "        krelease(L[{l}]);").unwrap();
                     }
+                }
+                if listed {
+                    writeln!(out, "        kdrop(L, D{i}, {});", owned.len()).unwrap();
                 }
                 writeln!(out, "        return r;").unwrap();
                 writeln!(out, "    }}").unwrap();

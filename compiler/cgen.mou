@@ -2002,6 +2002,16 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
     }
     // The name of the function in the program, for whoever reads the C.
     line(mut out, "/* {safe_name(f.name)} */")
+    // The locals to let go of where the function returns: with many of
+    // them, one call walks a list instead of a call for each.
+    var owned: [str] = []
+    for l in f.params..n {
+        if l < (cx.reps.len as int) {
+            if is_boxed(cx.reps[l]) { owned.push("{l}") }
+        }
+    }
+    let listed = owned.len > 3
+    if listed { line(mut out, "static const int D{i}[] = {{{text.join(owned, ", ")}}};") }
     if is_direct {
         line(mut out, "{direct_head(i, my_params, my_ret)} {{")
     } else {
@@ -2047,18 +2057,19 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
     }
     line(mut out, "    kenter();")
     if !is_direct { line(mut out, "    (void)env;") }
-    // The places of the locals of the machine stay empty, so that letting
-    // go of them costs nothing.
+    // Every place starts as the unit value, which is all zeros.
+    if n > 0 { line(mut out, "    memset(L, 0, sizeof L);") }
     for l in 0..n {
+        if l >= f.params { break }
         if l < (cx.reps.len as int) {
             if !is_boxed(cx.reps[l]) { continue }
         }
-        var init = "KUNIT"
-        if l < f.params {
-            // Lent by the caller: it is not let go of here.
-            if is_direct { init = "s{l}" } else { init = "a[{l}]" }
+        // Lent by the caller: it is not let go of here.
+        if is_direct {
+            line(mut out, "    L[{l}] = s{l};")
+        } else {
+            line(mut out, "    L[{l}] = a[{l}];")
         }
-        line(mut out, "    L[{l}] = {init};")
     }
     line(mut out, "    goto b0;")
     for b in 0..(f.blocks.len as int) {
@@ -2368,10 +2379,11 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if !is_agg(cx.reps[l]) { line(mut out, "        a[{l}] = {cx.boxed(l)};") }
                     } else {
                         if l < (cx.reps.len as int) {
-                            if is_boxed(cx.reps[l]) { line(mut out, "        krelease(L[{l}]);") }
+                            if is_boxed(cx.reps[l]) && !listed { line(mut out, "        krelease(L[{l}]);") }
                         }
                     }
                 }
+                if listed { line(mut out, "        kdrop(L, D{i}, {owned.len});") }
                 line(mut out, "        return r;")
                 line(mut out, "    }}")
             }

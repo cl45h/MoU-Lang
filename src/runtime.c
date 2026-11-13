@@ -423,6 +423,14 @@ static void krelease(kv v) {
     kfree_obj(o);
 }
 
+/* Lets go of the locals of a function that are listed. */
+static void kdrop(kv *locals, const int *at, int n) {
+    for (int i = 0; i < n; i++) {
+        kv v = locals[at[i]];
+        if (v.tag >= T_STR) krelease(v);
+    }
+}
+
 static void kset(kv *slot, kv v) {
     kv old = *slot;
     *slot = v;
