@@ -255,6 +255,8 @@ pub struct Checker {
     // What was found about each expression, by instance and number.
     types: hash.Table[int, types.Ty]
     wants: hash.Table[int, types.Ty]
+    // The functions given where a type rules effects out: which ones.
+    demands: hash.Table[int, int]
     res: hash.Table[int, Res]
     var_of: hash.Table[int, int]
     ref_calls: hash.Table[int, RefCall]
@@ -433,7 +435,7 @@ fn c_name(args: [parser.Expr]) -> str? {
 // Whether a type is a function C can call: one of numbers, `bool` and `ptr?`.
 fn is_callback(t: types.Ty) -> bool {
     match t {
-        types.Ty.Fn(sig) => {
+        types.Ty.Fn(sig, _) => {
             for q in sig.params {
                 let by_value = match q.mode {
                     parser.Mode.Let => true
@@ -654,7 +656,7 @@ impl Checker {
                 "{self.show(x)}?"
             }
             types.Ty.Result(x, e) => "{self.show(x)} ! {self.show(e)}"
-            types.Ty.Fn(sig) => {
+            types.Ty.Fn(sig, no) => {
                 var ps: [str] = []
                 for p in sig.params {
                     let mode = match p.mode {
@@ -664,7 +666,7 @@ impl Checker {
                     }
                     ps.push("{mode}{self.show(p.ty)}")
                 }
-                "fn({text.join(ps, ", ")}) -> {self.show(sig.ret)}"
+                "fn({text.join(ps, ", ")}) -> {self.show(sig.ret)}{types.limits_text(no)}"
             }
         }
     }
@@ -1159,11 +1161,17 @@ impl Checker {
                 for x in ts { out.push(self.resolve(x, at)) }
                 types.Ty.Tuple(out)
             }
-            parser.Type.Fn(params, ret, fails) => {
+            parser.Type.Fn(params, ret, fails, no) => {
+                var mask = 0
+                for name in no {
+                    let bit = types.limit_of(name)
+                    if bit == 0 { self.err(at, "unknown annotation `@{name}`: the type of a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`") }
+                    mask = mask | bit
+                }
                 var out: [types.ParamSig] = []
                 for p in params { out.push(types.ParamSig("", p.mode, self.resolve(p.ty, at), false)) }
                 let result = self.ret_type(ret, fails, at)
-                types.Ty.Fn(types.Sig(out, result))
+                types.Ty.Fn(types.Sig(out, result), mask)
             }
             // References are second class: the checker sees what they refer to.
             parser.Type.Ref(_, _, x) => self.resolve(x, at)
@@ -2013,6 +2021,7 @@ fn start(p: load.Program, decls_only: bool) -> Checker {
         inst: 0,
         types: tys,
         wants: wants,
+        demands: hash.Table[int, int].new(),
         res: res,
         var_of: var_of,
         ref_calls: ref_calls,
@@ -3893,7 +3902,33 @@ impl Checker {
         self.coerce(e, want, got, what)
     }
 
-    fn coerce(mut self, e: parser.Expr, want: types.Ty, got: types.Ty, what: str) {
+    // A function given by its name, or a closure, where the type rules
+    // effects out: it is taken as one that has none of them, and whether
+    // that is so is checked once the effects are known.
+    fn promised(mut self, e: parser.Expr, want: types.Ty, got: types.Ty) -> types.Ty {
+        match (want, got) {
+            (types.Ty.Fn(_, mask), types.Ty.Fn(sig, has)) => {
+                if mask == 0 || has != 0 { return got }
+                var direct = match e.kind {
+                    parser.Kind.Closure(_, _, _, _) => true
+                    _ => false
+                }
+                match self.res.get(self.slot(e)) {
+                    Some(Res.Fn(_)) => {
+                        direct = true
+                    }
+                    _ => {}
+                }
+                if !direct { return got }
+                self.demands.set(self.slot(e), mask)
+                types.Ty.Fn(sig, mask)
+            }
+            _ => got
+        }
+    }
+
+    fn coerce(mut self, e: parser.Expr, want: types.Ty, given: types.Ty, what: str) {
+        let got = self.promised(e, want, given)
         if types.assignable(want, got) {
             self.wants.set(self.slot(e), want)
             self.lit_range(e, want)
@@ -4456,7 +4491,7 @@ impl Checker {
                     }
                 }
                 if let Some(x) = failing { result = types.Ty.Result(result, x) }
-                types.Ty.Fn(types.Sig(ps, result))
+                types.Ty.Fn(types.Sig(ps, result), 0)
             }
             parser.Kind.Comptime(inner) => self.expr(inner)
             parser.Kind.Unsafe(b) => {
@@ -4833,7 +4868,7 @@ impl Checker {
             Some(Global.Fn(i)) => {
                 if self.fns[i].generic || self.fns[i].tparams.len > 0 { return self.skip() }
                 self.set_res(e, Res.Fn(i))
-                types.Ty.Fn(self.fns[i].sig)
+                types.Ty.Fn(self.fns[i].sig, 0)
             }
             Some(Global.Const(i)) => {
                 match self.consts[i] {
@@ -5455,7 +5490,7 @@ impl Checker {
         }
         let ct = self.expr(callee)
         match ct {
-            types.Ty.Fn(sig) => self.apply(sig, args, at)
+            types.Ty.Fn(sig, _) => self.apply(sig, args, at)
             types.Ty.Unknown => {
                 self.args_unchecked(args)
                 types.Ty.Unknown
@@ -5504,7 +5539,7 @@ impl Checker {
                         _ => false
                     }
                     let wanted = match sig.params[k].ty {
-                        types.Ty.Fn(_) => true
+                        types.Ty.Fn(_, _) => true
                         _ => false
                     }
                     if wanted && !named { self.err(at_expr(a), "a C function is given a function by its name: a closure or a variable cannot go to C") }
@@ -5636,7 +5671,7 @@ impl Checker {
                 for f in fields {
                     if f.name != name { continue }
                     match types.subst(f.ty, env) {
-                        types.Ty.Fn(sig) => return self.apply(sig, args, at)
+                        types.Ty.Fn(sig, _) => return self.apply(sig, args, at)
                         _ => {}
                     }
                     break
@@ -5709,7 +5744,7 @@ impl Checker {
                 }
                 if name == "update" {
                     self.set_res(e, Res.Builtin("mutex.update"))
-                    let change = types.Ty.Fn(types.Sig([param("", t)], t))
+                    let change = types.Ty.Fn(types.Sig([param("", t)], t), 0)
                     return self.apply(types.Sig([param("change", change)], types.Ty.Unit), args, at)
                 }
                 self.args_unchecked(args)

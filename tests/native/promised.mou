@@ -1,0 +1,22 @@
+import std.io
+
+fn double(x: int) -> int { x *% 2 }
+fn risky(x: int) -> int { 100 / x }
+fn loud(x: int) -> int {
+    io.print("{x}") catch e { return 0 }
+    x
+}
+
+// What is called here cannot panic: the type of `f` says so.
+@nopanic
+fn apply(f: fn(int) -> int @nopanic, x: int) -> int { f(x) }
+
+@nopanic @noio
+fn twice(f: fn(int) -> int @nopanic @noio, x: int) -> int { f(f(x)) }
+
+fn main() ! io.Error {
+    // `risky` is used as a value too, where nothing is promised.
+    let any: fn(int) -> int = risky
+    let quiet: fn(int) -> int @nopanic @noio = double
+    io.print("{apply(double, 4)} {apply(fn(x: int) -> int { x +% 1 }, 4)} {twice(quiet, 3)} {any(5)} {apply(loud, 7)}")?
+}

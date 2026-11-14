@@ -41,7 +41,9 @@ pub enum Ty {
     Range(Box<Ty>),
     Optional(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
-    Fn(Box<Sig>),
+    /// A function, and the effects its type says it does not have: bits
+    /// of `effects::NOALLOC` and the others.
+    Fn(Box<Sig>, u8),
     /// A type provided by a built-in module, such as `io.Error`.
     Builtin(&'static str),
     /// A type parameter, inside the definition of a generic function or trait.
@@ -243,6 +245,8 @@ pub struct Info {
     pub types: HashMap<(usize, usize), Ty>,
     /// Type an expression is coerced to where it is used, when one is required.
     pub wants: HashMap<(usize, usize), Ty>,
+    /// The functions given where a type rules effects out: which ones.
+    pub demands: HashMap<(usize, usize), u8>,
     pub res: HashMap<(usize, usize), Res>,
     /// Generic functions with their type arguments, one per distinct use.
     pub instances: Vec<Instance>,
@@ -283,6 +287,7 @@ fn checker(file: &File) -> Checker<'_> {
         decls_only: false,
         types: HashMap::new(),
         wants: HashMap::new(),
+        demands: HashMap::new(),
         res: HashMap::new(),
         inst: 0,
         tenv: HashMap::new(),
@@ -349,6 +354,7 @@ pub fn analyze(file: &File) -> Result<(Report, Info), Vec<Error>> {
         let info = Info {
             types: c.types,
             wants: c.wants,
+            demands: c.demands,
             res: c.res,
             instances: c.instances,
             decl_of_fn: c.decl_of_fn,
@@ -780,7 +786,8 @@ fn plain_text(t: &Ty) -> String {
         Optional(t) => format!("{}?", text(t)),
         Result(t, e) => format!("{} ! {}", text(t), text(e)),
         Param(n) => format!("'{n}"),
-        Fn(sig) => {
+        Fn(sig, no) => {
+            let no = *no;
             let ps: Vec<String> = sig
                 .params
                 .iter()
@@ -793,7 +800,7 @@ fn plain_text(t: &Ty) -> String {
                     format!("{mode} {}", text(&p.ty))
                 })
                 .collect();
-            format!("fn({}) -> {}", ps.join(", "), text(&sig.ret))
+            format!("fn({}) -> {}{}", ps.join(", "), text(&sig.ret), crate::effects::limits_text(no))
         }
     }
 }
@@ -850,7 +857,7 @@ pub fn join(a: &Ty, b: &Ty) -> Option<Ty> {
         (Array(x, _), Array(y, _)) => Slice(boxed(join(x, y))?),
         (Range(x), Range(y)) => Range(boxed(join(x, y))?),
         (Result(x, e), Result(y, f)) => Result(boxed(join(x, y))?, boxed(join(e, f))?),
-        (Fn(x), Fn(y)) if fn_compatible(x, y) => a.clone(),
+        (Fn(x, m), Fn(y, n)) if fn_compatible(x, y) => Fn(x.clone(), m & n),
         (Struct(i, x), Struct(j, y)) if i == j && same_args(x, y) => Struct(*i, fill(x, y)),
         (Enum(i, x), Enum(j, y)) if i == j && same_args(x, y) => Enum(*i, fill(x, y)),
         _ if a == b => a.clone(),
@@ -882,7 +889,8 @@ pub fn assignable(exp: &Ty, act: &Ty) -> bool {
         // Two lengths that are both known have to be the same.
         (Array(e, n), Array(a, m)) => assignable(e, a) && !matches!((&**n, &**m), (Value(x), Value(y)) if x != y),
         (Result(e, x), Result(a, y)) => assignable(e, a) && assignable(x, y),
-        (Fn(e), Fn(a)) => fn_compatible(e, a),
+        // What is given has to rule out every effect the type rules out.
+        (Fn(e, m), Fn(a, n)) => fn_compatible(e, a) && m & !n == 0,
         (Struct(i, e), Struct(j, a)) | (Enum(i, e), Enum(j, a)) => i == j && same_args(e, a),
         _ => exp == act,
     }
@@ -985,7 +993,7 @@ pub fn subst(t: &Ty, env: &HashMap<String, Ty>) -> Ty {
         Mutex(t) => Mutex(b(t)),
         Optional(t) => Optional(b(t)),
         Result(t, e) => Result(b(t), b(e)),
-        Fn(sig) => Fn(Box::new(subst_sig(sig, env))),
+        Fn(sig, no) => Fn(Box::new(subst_sig(sig, env)), *no),
         Struct(i, ts) => Struct(*i, ts.iter().map(|t| subst(t, env)).collect()),
         Enum(i, ts) => Enum(*i, ts.iter().map(|t| subst(t, env)).collect()),
         Dyn(i, ts) => Dyn(*i, ts.iter().map(|t| subst(t, env)).collect()),
@@ -1025,7 +1033,7 @@ fn bind(pat: &Ty, actual: &Ty, env: &mut HashMap<String, Ty>) {
             bind(p, t, env);
             bind(pe, te, env);
         }
-        (Fn(p), Fn(t)) => {
+        (Fn(p, _), Fn(t, _)) => {
             p.params.iter().zip(&t.params).for_each(|(a, b)| bind(&a.ty, &b.ty, env));
             bind(&p.ret, &t.ret, env);
         }
@@ -1080,7 +1088,7 @@ fn concrete(t: &Ty) -> bool {
         Tuple(ts) | Struct(_, ts) | Enum(_, ts) | Dyn(_, ts) => ts.iter().all(concrete),
         Slice(t) | Array(t, _) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => concrete(t),
         Result(t, e) => concrete(t) && concrete(e),
-        Fn(sig) => sig.params.iter().all(|p| concrete(&p.ty)) && concrete(&sig.ret),
+        Fn(sig, _) => sig.params.iter().all(|p| concrete(&p.ty)) && concrete(&sig.ret),
         _ => true,
     }
 }
@@ -1096,7 +1104,7 @@ pub fn types_selftest() -> String {
     let p = |n: &str| Param(n.to_string());
     let f = |params: Vec<(Mode, Ty)>, ret: Ty| {
         let params = params.into_iter().map(|(mode, ty)| ParamSig { name: "x".into(), mode, ty, optional: false }).collect();
-        Fn(Box::new(Sig { params, ret }))
+        Fn(Box::new(Sig { params, ret }), 0)
     };
     let int = Int("i64");
     let samples: Vec<Ty> = vec![
@@ -1384,6 +1392,7 @@ struct Checker<'a> {
     decls_only: bool,
     types: HashMap<(usize, usize), Ty>,
     wants: HashMap<(usize, usize), Ty>,
+    demands: HashMap<(usize, usize), u8>,
     res: HashMap<(usize, usize), Res>,
     /// Instance being checked: 0 for ordinary code, `DEFINITION` for the
     /// body of a generic function checked against its bounds.
@@ -1553,7 +1562,7 @@ impl<'a> Checker<'a> {
                 // numbers, `bool` and `ptr?`.
                 let nullable = |t: &Ty| *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
                 let callback = match &ty {
-                    Ty::Fn(sig) => {
+                    Ty::Fn(sig, _) => {
                         sig.params.iter().all(|q| q.mode == Mode::Let && (plain(&q.ty) || nullable(&q.ty)))
                             && (plain(&sig.ret) || sig.ret == Ty::Unit || address(&sig.ret))
                     }
@@ -1676,7 +1685,8 @@ impl<'a> Checker<'a> {
             Optional(t) if matches!(**t, Never) => "None".into(),
             Optional(t) => format!("{}?", self.show(t)),
             Result(t, e) => format!("{} ! {}", self.show(t), self.show(e)),
-            Fn(sig) => {
+            Fn(sig, no) => {
+                let no = *no;
                 let ps: Vec<String> = sig
                     .params
                     .iter()
@@ -1689,7 +1699,7 @@ impl<'a> Checker<'a> {
                         format!("{mode}{}", self.show(&p.ty))
                     })
                     .collect();
-                format!("fn({}) -> {}", ps.join(", "), self.show(&sig.ret))
+                format!("fn({}) -> {}{}", ps.join(", "), self.show(&sig.ret), crate::effects::limits_text(no))
             }
         }
     }
@@ -3244,7 +3254,14 @@ impl<'a> Checker<'a> {
             }
             Type::Tuple(ts) if ts.is_empty() => Ty::Unit,
             Type::Tuple(ts) => Ty::Tuple(ts.iter().map(|t| self.resolve(t, span)).collect()),
-            Type::Fn { params, ret, err } => {
+            Type::Fn { params, ret, err, no } => {
+                let mut mask = 0;
+                for name in no {
+                    match crate::effects::limit_of(name) {
+                        Some(bit) => mask |= bit,
+                        None => self.err(span, format!("unknown annotation `@{name}`: the type of a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`")),
+                    }
+                }
                 let params = params
                     .iter()
                     .map(|(mode, t)| ParamSig {
@@ -3255,7 +3272,7 @@ impl<'a> Checker<'a> {
                     })
                     .collect();
                 let ret = self.ret_type(ret.as_deref(), err.as_deref(), span);
-                Ty::Fn(Box::new(Sig { params, ret }))
+                Ty::Fn(Box::new(Sig { params, ret }), mask)
             }
             // References are second-class: the checker sees the referent.
             Type::Ref { ty, .. } => self.resolve(ty, span),
@@ -3967,7 +3984,21 @@ impl<'a> Checker<'a> {
         got
     }
 
+    /// A function given by its name, or a closure, where the type rules
+    /// effects out: it is taken as one that has none of them, and whether
+    /// that is so is checked once the effects are known.
+    fn promised(&mut self, e: &Expr, want: &Ty, got: &Ty) -> Ty {
+        let (Ty::Fn(_, mask), Ty::Fn(sig, 0)) = (want, got) else { return got.clone() };
+        let direct = matches!(e.kind, ExprKind::Closure { .. }) || matches!(self.res.get(&(self.inst, id(e))), Some(Res::Fn(_)));
+        if *mask == 0 || !direct {
+            return got.clone();
+        }
+        self.demands.insert((self.inst, id(e)), *mask);
+        Ty::Fn(sig.clone(), *mask)
+    }
+
     fn coerce(&mut self, e: &Expr, want: &Ty, got: &Ty, what: &str) {
+        let got = &self.promised(e, want, got);
         if assignable(want, got) {
             self.wants.insert((self.inst, id(e)), want.clone());
             self.lit_range(e, want);
@@ -4236,7 +4267,7 @@ impl<'a> Checker<'a> {
                     Some(e) => Ty::Result(Box::new(ret), Box::new(e)),
                     None => ret,
                 };
-                Ty::Fn(Box::new(Sig { params: ps, ret }))
+                Ty::Fn(Box::new(Sig { params: ps, ret }), 0)
             }
             ExprKind::Comptime(inner) => self.expr(inner),
             ExprKind::Unsafe(b) => {
@@ -4518,7 +4549,7 @@ impl<'a> Checker<'a> {
             Some(Global::Fn(i)) if self.fns[i].generic || !self.fns[i].tparams.is_empty() => self.skip(),
             Some(Global::Fn(i)) => {
                 self.res.insert((self.inst, id(e)), Res::Fn(i));
-                Ty::Fn(Box::new(self.fns[i].sig.clone()))
+                Ty::Fn(Box::new(self.fns[i].sig.clone()), 0)
             }
             Some(Global::Const(i)) => match self.consts[i].clone() {
                 Some(t) => {
@@ -4871,7 +4902,7 @@ impl<'a> Checker<'a> {
                             // What C is given to call is a function, by its name.
                             for (a, p) in args.iter().zip(&sig.params) {
                                 let named = matches!(self.res.get(&(self.inst, id(&a.value))), Some(Res::Fn(_)));
-                                if matches!(p.ty, Ty::Fn(_)) && !named {
+                                if matches!(p.ty, Ty::Fn(..)) && !named {
                                     self.err(a.value.span, "a C function is given a function by its name: a closure or a variable cannot go to C");
                                 }
                             }
@@ -5067,7 +5098,7 @@ impl<'a> Checker<'a> {
                         let env = targ_env(&self.structs[*i].tparams, targs);
                         let field = self.structs[*i].fields.iter().find(|f| f.name == *name).map(|f| subst(&f.ty, &env));
                         match field {
-                            Some(Ty::Fn(sig)) => self.apply(&sig, args, span),
+                            Some(Ty::Fn(sig, _)) => self.apply(&sig, args, span),
                             _ => {
                                 self.args_unchecked(args);
                                 self.err(span, format!("type `{}` has no method `{name}`", key.0));
@@ -5112,7 +5143,7 @@ impl<'a> Checker<'a> {
                             "get" => ("mutex.get", Sig { params: Vec::new(), ret: item }),
                             "set" => ("mutex.set", Sig { params: vec![plain_param("value", item)], ret: Ty::Unit }),
                             _ => {
-                                let change = Ty::Fn(Box::new(Sig { params: vec![plain_param("", item.clone())], ret: item }));
+                                let change = Ty::Fn(Box::new(Sig { params: vec![plain_param("", item.clone())], ret: item }), 0);
                                 ("mutex.update", Sig { params: vec![plain_param("change", change)], ret: Ty::Unit })
                             }
                         };
@@ -5134,7 +5165,7 @@ impl<'a> Checker<'a> {
             _ => {}
         }
         match self.expr(callee) {
-            Ty::Fn(sig) => self.apply(&sig, args, span),
+            Ty::Fn(sig, _) => self.apply(&sig, args, span),
             Ty::Unknown => {
                 self.args_unchecked(args);
                 Ty::Unknown
@@ -5252,6 +5283,17 @@ mod tests {
         bad(&format!("{p}fn f() {{\n let p = P.new()\n p.inc()\n}}"), "not mutable");
         bad(&format!("{p}fn f(p: P) {{ p.nope() }}"), "no method `nope`");
         bad(&format!("{p}impl P {{ fn bad(self) {{ self.x = 1 }} }}"), "immutable");
+    }
+
+    #[test]
+    fn effects_in_function_types() {
+        let d = "fn d(x: int) -> int { x }\nfn run(h: fn(int) -> int @nopanic) -> int { h(1) }\n";
+        ok(&format!("{d}fn f() -> int {{ run(d) }}"));
+        ok(&format!("{d}fn f() -> int {{\n let h: fn(int) -> int @nopanic @noio = d\n run(h)\n}}"));
+        ok(&format!("{d}fn f(h: fn(int) -> int @nopanic) -> int {{\n let any: fn(int) -> int = h\n any(1)\n}}"));
+        bad(&format!("{d}fn f(h: fn(int) -> int) -> int {{ run(h) }}"), "expected `fn(i64) -> i64 @nopanic`, found `fn(i64) -> i64`");
+        bad(&format!("{d}fn f(h: fn(int) -> int @noio) -> int {{ run(h) }}"), "expected `fn(i64) -> i64 @nopanic`");
+        bad("fn f(h: fn(int) -> int @quiet) {}", "unknown annotation `@quiet`");
     }
 
     #[test]

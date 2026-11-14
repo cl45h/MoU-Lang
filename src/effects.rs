@@ -537,6 +537,9 @@ struct Found {
     /// Where it calls a function value: the calls from there are the
     /// functions that value can be.
     values: Vec<Span>,
+    /// Where the type of the function value called rules effects out,
+    /// and which: whether that holds is said where the value is given.
+    promised: Vec<(Span, u8)>,
     /// Whether one of its `where` conditions can fail.
     unproved: bool,
 }
@@ -636,6 +639,14 @@ fn taken(p: &Program) -> Vec<(usize, Option<(usize, usize)>)> {
     let mut out: Vec<(usize, Option<(usize, usize)>)> = (0..p.fns.len()).filter(|f| seen[*f]).map(|f| (f, None)).collect();
     methods.sort();
     out.extend(methods);
+    // And the ones given where a type rules effects out, in the order
+    // they were found.
+    for (g, no, _) in &p.demands {
+        let entry = (*g, Some((PROMISED, *no as usize)));
+        if !out.contains(&entry) {
+            out.push(entry);
+        }
+    }
     out
 }
 
@@ -936,7 +947,16 @@ impl Walk<'_> {
                         // uses as a value, that takes this many arguments.
                         if let Some(found) = &mut found {
                             found.values.push(block.span);
-                            for (g, _) in self.taken.iter().filter(|(g, of)| of == slot && self.p.fns[*g].params == args.len()) {
+                            if let Some((PROMISED, no)) = slot {
+                                found.promised.push((block.span, *no as u8));
+                            }
+                            // With effects ruled out by the type, it is one of
+                            // those given where a type rules them out.
+                            let fits = |of: &Option<(usize, usize)>| match (of, slot) {
+                                (Some((PROMISED, has)), Some((PROMISED, asked))) => has & asked == *asked,
+                                _ => of == slot,
+                            };
+                            for (g, _) in self.taken.iter().filter(|(g, of)| fits(of) && self.p.fns[*g].params == args.len()) {
                                 found.calls.push((block.span, *g));
                             }
                         }
@@ -1298,11 +1318,21 @@ pub fn names(effects: u8) -> String {
 
 /// Checks the functions that rule effects out.
 pub fn check(p: &Program) -> Vec<Error> {
-    if p.fns.iter().all(|f| f.limits == 0) {
+    if p.fns.iter().all(|f| f.limits == 0) && p.demands.is_empty() {
         return Vec::new();
     }
     let fx = infer(p);
     let mut errors: Vec<(Span, String, String)> = Vec::new();
+    // A function given where the type rules an effect out cannot have it.
+    for (g, no, span) in &p.demands {
+        let rules = [(ALLOC, "@noalloc", "allocates"), (PANIC, "@nopanic", "can panic"), (IO, "@noio", "does input or output"), (BLOCK, "@noblock", "can wait"), (UNSAFE, "@nounsafe", "runs code the compiler does not check")];
+        for (effect, rule, does) in rules {
+            if no & effect != 0 && fx.of[*g] & effect != 0 {
+                let why = fx.cause(p, *g, effect, &mut Vec::new());
+                errors.push((*span, format!("a `{rule}` function is expected here, but "), format!("`{}` {does}: {why}", shown(&p.fns[*g].name))));
+            }
+        }
+    }
     for (i, f) in p.fns.iter().enumerate() {
         if f.name.ends_with(" (place)") {
             continue;
@@ -1325,7 +1355,8 @@ pub fn check(p: &Program) -> Vec<Error> {
             for (span, g) in &fx.found[i].calls {
                 // One reason for each call is enough.
                 let told = fx.found[i].sites.iter().any(|s| s.span == *span && s.effect & effect != 0);
-                if fx.of[*g] & effect != 0 && !told {
+                let promised = fx.found[i].promised.iter().any(|(at, no)| at == span && no & effect != 0);
+                if fx.of[*g] & effect != 0 && !told && !promised {
                     let why = fx.cause(p, *g, effect, &mut vec![i]);
                     if !fx.found[i].values.contains(span) {
                         errors.push((*span, head.clone(), format!("it calls `{}`, which {does}: {why}", shown(&p.fns[*g].name))));
@@ -1372,6 +1403,20 @@ fn say() ! io.Error { io.print(\"x\")? }
     fn bad(rule: &str, body: &str, needle: &str) {
         let es = errors(rule, body);
         assert!(es.iter().any(|e| e.contains(needle)), "{body}: expected `{needle}` in {es:?}");
+    }
+
+    #[test]
+    fn effects_in_function_types() {
+        let r = "fn wrap(n: int) -> int { n *% 2 }\n@nopanic fn run(h: fn(int) -> int @nopanic, n: int) -> int { h(n) }\n@nopanic";
+        // What the type rules out does not count against who calls it.
+        ok(r, "run(wrap, n)");
+        ok(r, "run(fn(v: int) -> int { v +% 1 }, n)");
+        ok(r, "let h: fn(int) -> int @nopanic = wrap\nrun(h, n)");
+        // What is given has to keep the promise of the type.
+        bad(r, "run(twice, n)", "a `@nopanic` function is expected here, but `twice` can panic");
+        bad(r, "run(fn(v: int) -> int { v + 1 }, n)", "a `@nopanic` function is expected here, but `closure` can panic");
+        // Without the promise, a function value can be any of the ones used as values.
+        bad("fn keep() -> fn(int) -> int { twice }\n@nopanic", "g(n)", "the function value or `dyn` method called here can be `twice`");
     }
 
     #[test]
@@ -1481,4 +1526,22 @@ fn say() ! io.Error { io.print(\"x\")? }
         assert!(es[0].contains("`f` is in a `system` module, which has no allocator, but `push` can make the array grow"), "{es:?}");
         assert_eq!(check("@profile(app)\nfn f(xs: mut [int]) { xs.push(0) }"), Vec::<String>::new());
     }
+}
+
+/// The bit of the effect an annotation rules out, by its name.
+pub fn limit_of(name: &str) -> Option<u8> {
+    Some(match name {
+        "noalloc" => NOALLOC,
+        "nopanic" => NOPANIC,
+        "noio" => NOIO,
+        "noblock" => NOBLOCK,
+        "nounsafe" => NOUNSAFE,
+        _ => return None,
+    })
+}
+
+/// The annotations of some limits, as they are written after a type.
+pub fn limits_text(limits: u8) -> String {
+    let all = [(NOALLOC, " @noalloc"), (NOPANIC, " @nopanic"), (NOIO, " @noio"), (NOBLOCK, " @noblock"), (NOUNSAFE, " @nounsafe")];
+    all.iter().filter(|(bit, _)| limits & bit != 0).map(|(_, name)| *name).collect()
 }

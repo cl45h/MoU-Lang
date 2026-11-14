@@ -816,6 +816,8 @@ struct Site { at: Where, effect: int, what: str }
 
 struct CallSite { at: Where, f: int }
 
+struct Promise { at: Where, no: int }
+
 struct Found {
     sites: [Site]
     // The functions it calls, and where.
@@ -823,6 +825,9 @@ struct Found {
     // Where it calls a function value: the calls from there are the
     // functions that value can be.
     values: [Where]
+    // Where the type of the function value called rules effects out, and
+    // which: whether that holds is said where the value is given.
+    promised: [Promise]
     // Whether one of its `where` conditions can fail.
     unproved: bool
 }
@@ -952,6 +957,15 @@ fn taken(p: mir.Program) -> [Taken] {
             if k != best { rest.push(left[k]) }
         }
         left = rest
+    }
+    // And the ones given where a type rules effects out, in the order
+    // they were found.
+    for d in p.demands {
+        var known = false
+        for t in out {
+            if t.f == d.f && t.of == mir.PROMISED && t.slot == d.no { known = true }
+        }
+        if !known { out.push(Taken(d.f, mir.PROMISED, d.no)) }
     }
     out
 }
@@ -1473,8 +1487,13 @@ impl Walk {
                         // uses as a value, that takes this many arguments.
                         if report {
                             found.values.push(here)
+                            if of == mir.PROMISED { found.promised.push(Promise(here, slot)) }
                             for t in self.taken {
-                                if t.of == of && t.slot == slot && self.p.fns[t.f].params == (args.len as int) { found.calls.push(CallSite(here, t.f)) }
+                                // With effects ruled out by the type, it is one of
+                                // those given where a type rules them out.
+                                var fits = t.of == of && t.slot == slot
+                                if of == mir.PROMISED { fits = t.of == of && (t.slot & slot) == slot }
+                                if fits && self.p.fns[t.f].params == (args.len as int) { found.calls.push(CallSite(here, t.f)) }
                             }
                         }
                     }
@@ -1610,7 +1629,7 @@ impl Walk {
         let heads = loop_heads(self.f)
         var work: [int] = []
         work.push(0)
-        var quiet = Found([], [], [], false)
+        var quiet = Found([], [], [], [], false)
         while work.len > 0 {
             var b = 0
             if let Some(x) = work.pop() { b = x }
@@ -1631,7 +1650,7 @@ impl Walk {
                 }
             }
         }
-        var found = Found([], [], [], false)
+        var found = Found([], [], [], [], false)
         for b in 0..n {
             if reached[b] && b != stop { let _ = self.step(b, at[b], true, mut found) }
         }
@@ -1798,7 +1817,7 @@ pub fn infer_from(p: mir.Program, roots: [int]) -> Effects {
     var callees: [[int]] = []
     var done: [bool] = []
     for f in p.fns {
-        found.push(Found([], [], [], false))
+        found.push(Found([], [], [], [], false))
         callees.push([])
         done.push(false)
     }
@@ -1883,9 +1902,21 @@ pub fn check(p: mir.Program) -> [lexer.Error] {
     for f in p.fns {
         if f.limits != 0 { limited = true }
     }
-    if !limited { return [] }
+    if !limited && p.demands.len == 0 { return [] }
     let fx = infer(p)
     var errors: [Told] = []
+    // A function given where the type rules an effect out cannot have it.
+    for d in p.demands {
+        let effects = [ALLOC, PANIC, IO, BLOCK, UNSAFE]
+        let rules = ["@noalloc", "@nopanic", "@noio", "@noblock", "@nounsafe"]
+        let does = ["allocates", "can panic", "does input or output", "can wait", "runs code the compiler does not check"]
+        for r in 0..5 {
+            if (d.no & effects[r]) == 0 || (fx.of[d.f] & effects[r]) == 0 { continue }
+            var seen: [int] = []
+            let why = fx.cause(p, d.f, effects[r], mut seen)
+            errors.push(Told(Where(d.line, d.col), "a `{rules[r]}` function is expected here, but ", "`{without_place(p.fns[d.f].name)}` {does[r]}: {why}"))
+        }
+    }
     for i in 0..(p.fns.len as int) {
         let f = p.fns[i]
         if text.ends_with(f.name, " (place)") { continue }
@@ -1906,7 +1937,11 @@ pub fn check(p: mir.Program) -> [lexer.Error] {
                 for s in fx.found[i].sites {
                     if s.at.line == c.at.line && s.at.col == c.at.col && (s.effect & effect) != 0 { told = true }
                 }
-                if (fx.of[c.f] & effect) != 0 && !told {
+                var promised = false
+                for pr in fx.found[i].promised {
+                    if pr.at.line == c.at.line && pr.at.col == c.at.col && (pr.no & effect) != 0 { promised = true }
+                }
+                if (fx.of[c.f] & effect) != 0 && !told && !promised {
                     var seen: [int] = []
                     seen.push(i)
                     let why = fx.cause(p, c.f, effect, mut seen)

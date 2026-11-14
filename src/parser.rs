@@ -504,7 +504,13 @@ impl Parser {
                     Ok((mode, p.ty()?))
                 })?;
                 let (ret, _, err) = self.ret()?;
-                Ok(Type::Fn { params, ret: ret.map(Box::new), err: err.map(Box::new) })
+                // `fn(int) -> int @nopanic`: the effects it does not have.
+                let mut no = Vec::new();
+                while self.is_p("@") && matches!(self.peek_at(1), Tok::Ident(_)) {
+                    self.bump();
+                    no.push(self.ident()?);
+                }
+                Ok(Type::Fn { params, ret: ret.map(Box::new), err: err.map(Box::new), no })
             }
             Tok::Kw("ref") => {
                 self.bump();

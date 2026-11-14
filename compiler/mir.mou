@@ -192,6 +192,14 @@ pub struct VariantShape { name: str, fields: [str?] }
 
 pub struct EnumShape { name: str, variants: [VariantShape] }
 
+// In `Callee.Indirect`, in the place of a `dyn`: the type of what is
+// called rules effects out, and which ones comes next.
+pub let PROMISED: int = -2
+
+// A function given where a type rules effects out: which function, which
+// effects, and where.
+pub struct Demand { f: int, no: int, line: int, col: int }
+
 pub struct Program {
     fns: [Func]
     // The functions that work out the constants, in the order they are declared.
@@ -213,6 +221,8 @@ pub struct Program {
     // For each enum: how it is kept as a struct of C (see `sum_kinds`),
     // or nothing when it is not.
     sums: [[int]]
+    // The functions given where a type rules effects out.
+    demands: [Demand]
     errors: [lexer.Error]
 }
 
@@ -639,6 +649,8 @@ struct Lower {
     stack: [Saved]
     // The closures lowered so far; their numbers start at `base`.
     extra: [Func]
+    // The functions given where a type rules effects out.
+    demands: [Demand]
     base: int
     // For a function that returns `ref mut`: the one that works out where its result is.
     path_ids: [IdPair]
@@ -688,6 +700,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
         hints: [],
         stack: [],
         extra: [],
+        demands: [],
         base: 0,
         path_ids: [],
         in_const: false,
@@ -926,7 +939,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
             }
             // A function goes as its address: its parameters and its result.
             match q.ty {
-                types.Ty.Fn(sig) => {
+                types.Ty.Fn(sig, _) => {
                     var takes: [str] = []
                     for sp in sig.params { takes.push(c_type(sp.ty)) }
                     kind = "cb {text.join(takes, ",")}>{c_type(sig.ret)}"
@@ -968,7 +981,7 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
             }
         }
     }
-    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, cstructs, sums, sorted_errors(lw.errors))
+    Program(fns, lw.const_ids, main, tests, structs, records, enums, boxed_structs, boxed_enums, c.structs.len as int, externs, cstructs, sums, lw.demands, sorted_errors(lw.errors))
 }
 
 fn c_type(t: types.Ty) -> str {
@@ -1149,7 +1162,7 @@ impl Lower {
                 false
             }
             types.Ty.Dyn(_, _) => true
-            types.Ty.Fn(_) => true
+            types.Ty.Fn(_, _) => true
             types.Ty.Unknown => true
             _ => false
         }
@@ -1485,7 +1498,7 @@ impl Lower {
         let at = check.Span(e.line, e.col)
         var sig = types.Sig([], types.Ty.Unit)
         match self.ty(e) {
-            types.Ty.Fn(s) => {
+            types.Ty.Fn(s, _) => {
                 sig = s
             }
             _ => return self.unsupported(at, "this closure")
@@ -2309,6 +2322,35 @@ impl Lower {
     // asks for. What comes back is a constant or a new temporary, never a variable.
     fn expr(mut self, e: parser.Expr) -> Operand {
         let op = self.expr_raw(e)
+        if let Some(no) = self.c.demands.get(self.slot(e)) {
+            // Which function it is: one by its name, or the closure just made.
+            var f = -1
+            match op {
+                Operand.Const(v) => {
+                    match v {
+                        Value.Fn(g) => {
+                            f = g
+                        }
+                        _ => {}
+                    }
+                }
+                Operand.At(q) => {
+                    let stmts = self.blocks[self.cur].stmts
+                    var k = stmts.len as int - 1
+                    while k >= 0 && f < 0 {
+                        let s = stmts[k]
+                        match s.rv {
+                            Rvalue.Closure(g, _) => {
+                                if s.place.local == q.local && s.place.proj.len == 0 && q.proj.len == 0 { f = g }
+                            }
+                            _ => {}
+                        }
+                        k -= 1
+                    }
+                }
+            }
+            if f >= 0 { self.demands.push(Demand(f, no, e.line, e.col)) }
+        }
         match self.wanted(e) {
             Some(want) => {
                 let source = self.ty(e)
@@ -3438,8 +3480,10 @@ impl Lower {
             }
             _ => {
                 match self.ty(callee) {
-                    types.Ty.Fn(sig) => {
+                    types.Ty.Fn(sig, no) => {
                         let f = self.expr(callee)
+                        // The effects the type rules out go with the call.
+                        if no != 0 { return self.invoke(Callee.Indirect(f, PROMISED, no), None, sig, None, 0, args, at) }
                         self.invoke(Callee.Indirect(f, -1, -1), None, sig, None, 0, args, at)
                     }
                     _ => self.unsupported(at, "generic functions, imported modules and methods of built-in types")
@@ -3860,6 +3904,7 @@ pub fn dump(p: Program) -> [str] {
     out.push("dyn_from {p.dyn_from}")
     for x in p.externs { out.push("extern {x.name} {x.header} ({text.join(x.params, ", ")}) -> {x.ret}") }
     for cs in p.cstructs { out.push("cstruct {cs.index} {cs.name} ({text.join(cs.kinds, ", ")})") }
+    for d in p.demands { out.push("demand {d.f} {d.no} {d.line}:{d.col}") }
     for e in 0..(p.sums.len as int) {
         if p.sums[e].len == 0 { continue }
         var kinds: [str] = []

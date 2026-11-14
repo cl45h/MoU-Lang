@@ -81,7 +81,7 @@ tipo_base   = ruta ("[" lista(arg_gen) "]")?
             | "[" tipo (";" expr)? "]"                 (* slice o array *)
             | "soa" "[" tipo (";" expr)? "]"
             | "(" lista(tipo) ")"                      (* tupla; () es unidad *)
-            | "fn" "(" lista(modo? tipo) ")" retorno
+            | "fn" "(" lista(modo? tipo) ")" retorno ("@" ident)*   (* @nopanic: efectos que no tiene *)
             | "ref" ("[" ident "]")? "mut"? tipo       (* solo retornos y perfil system *)
             | "dyn" cota
             | "Self" | "type" ;

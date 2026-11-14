@@ -29,7 +29,9 @@ pub enum Ty {
     Range(Ty)
     Optional(Ty)
     Result(Ty, Ty)
-    Fn(Sig)
+    // A function, and the effects its type says it does not have: bits
+    // of `NOALLOC` and the others.
+    Fn(Sig, int)
     // A type a module of the compiler gives, as `io.Error`.
     Builtin(str)
     // A type parameter, inside what declares it.
@@ -186,7 +188,7 @@ pub fn join(a: Ty, b: Ty) -> Ty? {
                 _ => None
             }
         }
-        (Ty.Fn(x), Ty.Fn(y)) if fn_compatible(x, y) => Some(a)
+        (Ty.Fn(x, m), Ty.Fn(y, n)) if fn_compatible(x, y) => Some(Ty.Fn(x, m & n))
         (Ty.Struct(i, x), Ty.Struct(j, y)) if i == j && same_args(x, y) => Some(Ty.Struct(i, fill(x, y)))
         (Ty.Enum(i, x), Ty.Enum(j, y)) if i == j && same_args(x, y) => Some(Ty.Enum(i, fill(x, y)))
         _ => if a == b { Some(a) } else { None }
@@ -229,7 +231,8 @@ pub fn assignable(exp: Ty, act: Ty) -> bool {
         (Ty.Array(e, n), Ty.Array(a, m)) => assignable(e, a) && !known_apart(n, m)
         (Ty.Range(e), Ty.Range(a)) => assignable(e, a)
         (Ty.Result(e, x), Ty.Result(a, y)) => assignable(e, a) && assignable(x, y)
-        (Ty.Fn(e), Ty.Fn(a)) => fn_compatible(e, a)
+        // What is given has to rule out every effect the type rules out.
+        (Ty.Fn(e, m), Ty.Fn(a, n)) => fn_compatible(e, a) && (m & n) == m
         (Ty.Struct(i, e), Ty.Struct(j, a)) => i == j && same_args(e, a)
         (Ty.Enum(i, e), Ty.Enum(j, a)) => i == j && same_args(e, a)
         _ => exp == act
@@ -247,6 +250,33 @@ fn is_some(t: Ty?) -> bool {
 // (the item of `[]`, the argument of `Tree.Leaf`) are filled in. Unlike
 // `assignable` it allows no conversion: the values are not touched.
 // Whether two lengths of arrays are the same one.
+pub let NOALLOC: int = 1
+pub let NOPANIC: int = 2
+pub let NOIO: int = 4
+pub let NOUNSAFE: int = 16
+pub let NOBLOCK: int = 32
+
+// The bit of the effect an annotation rules out, by its name, or 0.
+pub fn limit_of(name: str) -> int {
+    if name == "noalloc" { return NOALLOC }
+    if name == "nopanic" { return NOPANIC }
+    if name == "noio" { return NOIO }
+    if name == "noblock" { return NOBLOCK }
+    if name == "nounsafe" { return NOUNSAFE }
+    0
+}
+
+// The annotations of some limits, as they are written after a type.
+pub fn limits_text(limits: int) -> str {
+    var out = ""
+    if (limits & NOALLOC) != 0 { out = "{out} @noalloc" }
+    if (limits & NOPANIC) != 0 { out = "{out} @nopanic" }
+    if (limits & NOIO) != 0 { out = "{out} @noio" }
+    if (limits & NOBLOCK) != 0 { out = "{out} @noblock" }
+    if (limits & NOUNSAFE) != 0 { out = "{out} @nounsafe" }
+    out
+}
+
 pub fn same_len(n: Ty, m: Ty) -> bool {
     match (n, m) {
         (Ty.Value(x), Ty.Value(y)) => x == y
@@ -428,7 +458,7 @@ pub fn subst(t: Ty, env: [Binding]) -> Ty {
         Ty.Mutex(x) => Ty.Mutex(subst(x, env))
         Ty.Optional(x) => Ty.Optional(subst(x, env))
         Ty.Result(x, e) => Ty.Result(subst(x, env), subst(e, env))
-        Ty.Fn(sig) => Ty.Fn(subst_sig(sig, env))
+        Ty.Fn(sig, no) => Ty.Fn(subst_sig(sig, env), no)
         Ty.Struct(i, ts) => Ty.Struct(i, subst_all(ts, env))
         Ty.Enum(i, ts) => Ty.Enum(i, subst_all(ts, env))
         Ty.Dyn(i, ts) => Ty.Dyn(i, subst_all(ts, env))
@@ -493,7 +523,7 @@ pub fn bind(pat: Ty, actual: Ty, env: mut [Binding]) {
             bind(p, t, mut env)
             bind(pe, te, mut env)
         }
-        (Ty.Fn(p), Ty.Fn(t)) => {
+        (Ty.Fn(p, _), Ty.Fn(t, _)) => {
             for k in 0..p.params.len {
                 if k < t.params.len { bind(p.params[k].ty, t.params[k].ty, mut env) }
             }
@@ -597,7 +627,7 @@ pub fn concrete(t: Ty) -> bool {
         Ty.Mutex(x) => concrete(x)
         Ty.Optional(x) => concrete(x)
         Ty.Result(x, e) => concrete(x) && concrete(e)
-        Ty.Fn(sig) => {
+        Ty.Fn(sig, _) => {
             for p in sig.params {
                 if !concrete(p.ty) { return false }
             }
@@ -649,7 +679,7 @@ pub fn plain(t: Ty) -> str {
         Ty.Optional(x) => "{plain(x)}?"
         Ty.Result(x, e) => "{plain(x)} ! {plain(e)}"
         Ty.Param(n) => "'{n}"
-        Ty.Fn(sig) => {
+        Ty.Fn(sig, no) => {
             var ps: [str] = []
             for p in sig.params {
                 let mode = match p.mode {
@@ -659,7 +689,7 @@ pub fn plain(t: Ty) -> str {
                 }
                 ps.push("{mode} {plain(p.ty)}")
             }
-            "fn({text.join(ps, ", ")}) -> {plain(sig.ret)}"
+            "fn({text.join(ps, ", ")}) -> {plain(sig.ret)}{limits_text(no)}"
         }
     }
 }
@@ -667,7 +697,7 @@ pub fn plain(t: Ty) -> str {
 fn fun(modes: [parser.Mode], tys: [Ty], ret: Ty) -> Ty {
     var params: [ParamSig] = []
     for k in 0..tys.len { params.push(ParamSig("x", modes[k], tys[k], false)) }
-    Ty.Fn(Sig(params, ret))
+    Ty.Fn(Sig(params, ret), 0)
 }
 
 fn samples() -> [Ty] {

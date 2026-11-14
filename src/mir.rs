@@ -259,6 +259,10 @@ pub enum Callee {
     Extern(usize),
 }
 
+/// In `Callee::Indirect`, in the place of a `dyn`: the type of what is
+/// called rules effects out, and which ones comes next.
+pub const PROMISED: usize = usize::MAX;
+
 /// A function of a C header. The types are names of the language: `i32`,
 /// `f64`, `bool`, and `unit` for a function that returns nothing.
 #[derive(Debug)]
@@ -465,6 +469,9 @@ pub struct Program {
     /// The structs that are a type of a C header: the struct, the name of
     /// that type, and the type of each field as C takes it.
     pub cstructs: Vec<(usize, String, Vec<&'static str>)>,
+    /// The functions given where a type rules effects out: which
+    /// function, which effects, and where.
+    pub demands: Vec<(usize, u8, Span)>,
     /// For each enum: how it is kept as a struct of C (see `sum_kinds`),
     /// or nothing when it is not.
     pub sums: Vec<Vec<u8>>,
@@ -687,6 +694,9 @@ pub fn dump(p: &Program) -> String {
     for (i, name, kinds) in &p.cstructs {
         let _ = writeln!(out, "cstruct {i} {name} ({})", kinds.join(", "));
     }
+    for (f, no, span) in &p.demands {
+        let _ = writeln!(out, "demand {f} {no} {}:{}", span.line, span.col);
+    }
     for (e, kinds) in p.sums.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
         let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
         let _ = writeln!(out, "sum {e} ({})", kinds.join(", "));
@@ -808,6 +818,8 @@ struct Lower<'a> {
     stack: Vec<Saved<'a>>,
     /// Closures lowered so far; their ids start at `base`.
     extra: Vec<Func>,
+    /// The functions given where a type rules effects out.
+    demands: Vec<(usize, u8, Span)>,
     base: usize,
     /// For a function that returns `ref mut`: the one that computes where
     /// its result is.
@@ -868,6 +880,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         hints: Vec::new(),
         stack: Vec::new(),
         extra: Vec::new(),
+        demands: Vec::new(),
         base: 0,
         path_ids: HashMap::new(),
         twin: false,
@@ -1048,7 +1061,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
     let c_param = |p: &crate::check::ParamSig| match (&p.ty, p.mode) {
         (Ty::Struct(i, _), Mode::Mut) => &*Box::leak(format!("mut {i}").into_boxed_str()),
         // A function goes as its address: its parameters and its result.
-        (Ty::Fn(sig), _) => {
+        (Ty::Fn(sig, _), _) => {
             let params: Vec<&str> = sig.params.iter().map(|q| c_type(&q.ty)).collect();
             &*Box::leak(format!("cb {}>{}", params.join(","), c_type(&sig.ret)).into_boxed_str())
         }
@@ -1074,7 +1087,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         })
         .collect();
     let values = vec![None; lw.const_ids.len()];
-    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs, sums: (0..info.enums.len()).map(|e| sum_kinds(info, e).unwrap_or_default()).collect() })
+    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs, demands: lw.demands, sums: (0..info.enums.len()).map(|e| sum_kinds(info, e).unwrap_or_default()).collect() })
 }
 
 impl<'a> Lower<'a> {
@@ -1127,7 +1140,7 @@ impl<'a> Lower<'a> {
                 args.iter().any(|a| self.holds_array(a, seen))
                     || self.info.enums.get(*i).is_some_and(|e| e.variants.iter().any(|v| v.fields.iter().any(|(_, t)| self.holds_array(t, seen))))
             }
-            Ty::Dyn(..) | Ty::Fn(_) | Ty::Unknown => true,
+            Ty::Dyn(..) | Ty::Fn(..) | Ty::Unknown => true,
             _ => false,
         }
     }
@@ -1392,7 +1405,7 @@ impl<'a> Lower<'a> {
 
     fn closure(&mut self, e: &'a Expr, params: &'a [Param], body: &'a Block_) -> Operand {
         let span = e.span;
-        let Ty::Fn(sig) = self.ty(e) else { return self.unsupported(span, "this closure") };
+        let Ty::Fn(sig, _) = self.ty(e) else { return self.unsupported(span, "this closure") };
         if params.iter().any(|p| p.ty.is_none()) {
             return self.unsupported(span, "closures whose parameters have no type");
         }
@@ -2006,6 +2019,20 @@ impl<'a> Lower<'a> {
     /// The result is a constant or a fresh temporary, never a variable.
     fn expr(&mut self, e: &'a Expr) -> Operand {
         let op = self.expr_raw(e);
+        if let Some(&no) = self.info.demands.get(&(self.inst, id(e))) {
+            // Which function it is: one by its name, or the closure just made.
+            let f = match &op {
+                Operand::Const(Value::Fn(f)) => Some(*f),
+                Operand::Place(p) => self.blocks[self.cur].stmts.iter().rev().find_map(|s| match &s.rv {
+                    Rvalue::Closure(f, _) if s.place == *p => Some(*f),
+                    _ => None,
+                }),
+                Operand::Const(_) => None,
+            };
+            if let Some(f) = f {
+                self.demands.push((f, no, e.span));
+            }
+        }
         match self.info.wants.get(&(self.inst, id(e))) {
             Some(want) => {
                 let from = self.ty(e);
@@ -2797,9 +2824,11 @@ impl<'a> Lower<'a> {
                 self.finish_call(Callee::Print, ops, Vec::new(), span)
             }
             _ => match self.ty(callee) {
-                Ty::Fn(sig) => {
+                Ty::Fn(sig, no) => {
                     let f = self.expr(callee);
-                    self.invoke(Callee::Indirect(f, None), None, &sig, None, 0, args, span)
+                    // The effects the type rules out go with the call.
+                    let slot = (no != 0).then_some((PROMISED, no as usize));
+                    self.invoke(Callee::Indirect(f, slot), None, &sig, None, 0, args, span)
                 }
                 _ => self.unsupported(span, "generic functions, imported modules and methods of built-in types"),
             },

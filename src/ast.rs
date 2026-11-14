@@ -176,7 +176,8 @@ pub enum Type {
     Array(Box<Type>, Box<Expr>),
     Soa(Box<Type>),
     Tuple(Vec<Type>),
-    Fn { params: Vec<(Mode, Type)>, ret: Option<Box<Type>>, err: Option<Box<Type>> },
+    /// `no`: the effects it is written not to have (`@nopanic`), by name.
+    Fn { params: Vec<(Mode, Type)>, ret: Option<Box<Type>>, err: Option<Box<Type>>, no: Vec<String> },
     Ref { region: Option<String>, mutable: bool, ty: Box<Type> },
     Dyn(Vec<Type>),
     Optional(Box<Type>),
@@ -365,9 +366,10 @@ fn ty_text(t: &Type) -> String {
         Type::Array(t, n) => format!("(array {} {})", ty_text(t), expr_text(n)),
         Type::Soa(t) => format!("(soa {})", ty_text(t)),
         Type::Tuple(ts) => format!("(tuple {})", seq(ts, ty_text)),
-        Type::Fn { params, ret, err } => {
+        Type::Fn { params, ret, err, no } => {
             let param = |p: &(Mode, Type)| format!("({} {})", mode_text(&p.0), ty_text(&p.1));
-            format!("(fn {} {} {})", seq(params, param), opt(ret, |t| ty_text(t)), opt(err, |t| ty_text(t)))
+            let no: String = no.iter().map(|n| format!(" @{n}")).collect();
+            format!("(fn {} {} {}{no})", seq(params, param), opt(ret, |t| ty_text(t)), opt(err, |t| ty_text(t)))
         }
         Type::Ref { region, mutable, ty } => format!("(ref {} {} {})", opt(region, |r| r.clone()), var_text(*mutable), ty_text(ty)),
         Type::Dyn(ts) => format!("(dyn {})", seq(ts, ty_text)),

@@ -15,7 +15,8 @@ pub enum Type {
     Array(Type, Expr)
     Soa(Type)
     Tuple([Type])
-    Fn([FnParam], Type?, Type?)
+    // The last: the effects it is written not to have (`@nopanic`), by name.
+    Fn([FnParam], Type?, Type?, [str])
     Ref(str?, bool, Type)
     Dyn([Type])
     Optional(Type)
@@ -721,7 +722,13 @@ impl Parser {
                 if self.list_end(")")? { break }
             }
             let r = self.ret()?
-            return Type.Fn(params, r.ret, r.err)
+            // `fn(int) -> int @nopanic`: the effects it does not have.
+            var no: [str] = []
+            while self.is_p("@") && self.ident_at(1) {
+                self.bump()
+                no.push(self.ident()?)
+            }
+            return Type.Fn(params, r.ret, r.err, no)
         }
         if k == "ref" {
             self.bump()
@@ -1433,10 +1440,12 @@ pub fn ty_text(t: Type) -> str {
         Type.Array(x, n) => "(array {ty_text(x)} {expr_text(n)})"
         Type.Soa(x) => "(soa {ty_text(x)})"
         Type.Tuple(ts) => "(tuple {types_text(ts)})"
-        Type.Fn(params, ret, err) => {
+        Type.Fn(params, ret, err, no) => {
             var out: [str] = []
             for p in params { out.push("({mode_text(p.mode)} {ty_text(p.ty)})") }
-            "(fn {seq(out)} {opt_ty(ret)} {opt_ty(err)})"
+            var limits: [str] = []
+            for n in no { limits.push(" @{n}") }
+            "(fn {seq(out)} {opt_ty(ret)} {opt_ty(err)}{text.join(limits, "")})"
         }
         Type.Ref(reg, mutable, x) => "(ref {opt_str(reg)} {var_text(mutable)} {ty_text(x)})"
         Type.Dyn(ts) => "(dyn {types_text(ts)})"

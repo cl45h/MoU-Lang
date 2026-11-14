@@ -1,0 +1,27 @@
+import std.io
+
+fn double(x: int) -> int { x *% 2 }
+fn risky(x: int) -> int { 100 / x }
+fn loud(x: int) -> int {
+    io.print("{x}") catch e { return 0 }
+    x
+}
+
+@nopanic
+fn apply(f: fn(int) -> int @nopanic, x: int) -> int { f(x) }
+
+@noio
+fn silent(f: fn(int) -> int @noio @nopanic, x: int) -> int { f(x) }
+
+fn pick(n: int) -> fn(int) -> int @nopanic {
+    let a: fn(int) -> int @nopanic = risky
+    a
+}
+
+fn main() {
+    apply(risky, 1)
+    apply(fn(x: int) -> int { x + 1 }, 1)
+    apply(double, 1)
+    silent(loud, 2)
+    silent(double, 2)
+}
