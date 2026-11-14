@@ -35,8 +35,11 @@ fn main() ! io.Error {
 - Calls to C functions with numbers, `bool`, strings and opaque pointers (`ptr`). `import c "math.h" as m` reads the header at compile time, with nothing declared by hand.
 - Tasks on threads with structured concurrency: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. A task reads the variables outside it and cannot modify them, so there are no data races.
 - Networking: `std.net` gives TCP (listen, connect, read and write), written in Mou on top of C sockets. A server handles each connection in a task. Linux, IPv4 and compiled programs only.
+- A standard library written in Mou: lists, maps, hash tables, text with Unicode, math, files and directories (`std.fs`), and `std.pool` with `Pool[T]` and `Handle[T]` for graphs and cyclic structures.
+- Python inside the program with `std.py`: `py.module("math")?.method("sqrt", [py.from_float(2.0)])?`. It is a library on top of the C interface of CPython; exceptions arrive as errors.
+- Integer conversions that never lose anything silently: `as` keeps the value or panics, and `u8.truncate(x)`, `u8.saturate(x)` and `u8.try_from(x)` say what to do when it does not fit.
 - Two ways to run: an interpreter (`mou run`) and native binaries through C (`mou build`).
-- Tools: `mou test`, `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` and `mou bind` (writes the declarations of a C header).
+- Tools: `mou test` (with a name filter, `--all` and `--native`), `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` and `mou bind` (writes the declarations of a C header).
 - The compiler written in Mou (`compiler/`): lexer, parser, module loader, type checker, lowering to MIR, ownership, effects, compile-time constants and C emitter. It gives the same output as the Rust one at every stage and **it compiles itself**: the resulting compiler writes exactly the same C again.
 
 ## What is missing
@@ -48,7 +51,7 @@ The core of the language is complete and the compiler compiles itself. What foll
 - Input and output with a ready-made event loop: today `std.net` gives TCP with blocking functions, and several connections at once are handled with one task (one thread) per connection, or from a single thread with `net.wait`, which tells which ones have something to read; Linux and IPv4 only. Cancellable tasks, channels with `Chan[T]` and shared state with `Mutex[T]` already work.
 - The rest of the context: replacing files, arguments and environment too. `with alloc = arena`, `with io = lines` (captures what is printed) and `with input = lines` (provides what is read) are already there, and function types already carry written effects (`fn(int) -> int @nopanic`).
 - Functions that return a type (`fn Matrix(comptime T: type) -> type`); `comptime` parameters for integers and types (`empty(int)`), fixed-length arrays `[T; N]` and reflection with `meta.info(T)` are already there.
-- LLVM backend, SIMD and `soa`; `import cpp` and `import py`.
+- An LLVM backend of its own, SIMD and `soa`: today LLVM is used through Clang (`CC=clang mou build`), which compiles the same C. `import cpp`, and the language form of `import py` (Python is already usable with `std.py`).
 
 The details, with the known limits of each part, are in [DESIGN.md](DESIGN.md). The grammar is in [GRAMMAR.md](GRAMMAR.md). Both documents are in Spanish.
 
