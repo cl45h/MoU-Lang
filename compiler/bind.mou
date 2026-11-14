@@ -161,10 +161,26 @@ fn plain(decl: [str]) -> [str] {
     out
 }
 
+// A name `typedef` gives to a struct that has a name of its own.
+struct Alias { name: str, c: str }
+
 struct Reader {
     typedefs: hash.Table[str, CType]
     // The size in bytes of `long` on this machine.
     long: int
+    aliases: [Alias]
+    // The structs that can go by value, by how C names them: the name in Mou.
+    whole: hash.Table[str, str]
+}
+
+// A struct of the header, as far as Mou reads it: how C names it
+// (`struct timeval`, or `div_t`), its fields as they are written, and
+// whether every member of it is among them.
+pub struct CStruct { c: str, name: str, fields: [str], whole: bool }
+
+// The declaration in Mou of a struct of the header.
+pub fn struct_text(s: CStruct) -> [str] {
+    ["@c(\"{s.c}\")", "pub struct {s.name} {{ {text.join(s.fields, ", ")} }}"]
 }
 
 let BASIC: [str] = ["void", "char", "short", "int", "long", "signed", "unsigned", "float", "double", "_Bool", "bool"]
@@ -249,6 +265,14 @@ impl Reader {
             return
         }
         var t = self.ctype(part(words, 0, words.len as int - 1))
+        // `typedef struct tm tm_t`, `typedef struct tm {} tm_t`: the same struct.
+        if words.len >= 3 && words[0] == "struct" && words[1] != "{{}}" {
+            var same = true
+            for k in 2..(words.len as int - 1) {
+                if words[k] != "{{}}" { same = false }
+            }
+            if same { self.aliases.push(Alias(name, "struct {words[1]}")) }
+        }
         if has_word(words, "{{}}") {
             t = CType.Other(name)
             for w in words {
@@ -274,7 +298,7 @@ fn good(line: str) -> Made { Made(true, line) }
 fn bad(why: str) -> Made { Made(false, why) }
 
 // How a parameter is written in Mou, or why it cannot be.
-fn param_type(t: CType) -> Made {
+fn param_type(r: Reader, t: CType) -> Made {
     match t {
         CType.Scalar(s) => good(s)
         CType.Char => good("i8")
@@ -291,11 +315,16 @@ fn param_type(t: CType) -> Made {
             }
         }
         CType.Void => bad("a parameter of type `void`")
-        CType.Other(what) => bad("`{what}` passed by value")
+        CType.Other(what) => {
+            match r.whole.get(what) {
+                Some(name) => good(name)
+                None => bad("`{what}` passed by value")
+            }
+        }
     }
 }
 
-fn result_type(t: CType) -> Made {
+fn result_type(r: Reader, t: CType) -> Made {
     match t {
         CType.Void => good("")
         CType.Scalar(s) => good(" -> {s}")
@@ -303,7 +332,12 @@ fn result_type(t: CType) -> Made {
         CType.Pointer(inner, _) => {
             if is_char_type(inner) { good(" -> str?") } else { good(" -> ptr?") }
         }
-        CType.Other(what) => bad("it gives `{what}` by value")
+        CType.Other(what) => {
+            match r.whole.get(what) {
+                Some(name) => good(" -> {name}")
+                None => bad("it gives `{what}` by value")
+            }
+        }
     }
 }
 
@@ -360,7 +394,7 @@ fn function(r: Reader, decl: [str]) -> Found? {
 fn declaration(r: Reader, decl: [str], name: str, open: int, close: int) -> Made {
     if has_word(lexer.KEYWORDS, name) { return bad("its name is a word of the language") }
     if close + 1 != (decl.len as int) { return bad("it gives a function or an array") }
-    let ret = result_type(r.ctype(part(decl, 0, open - 1)))
+    let ret = result_type(r, r.ctype(part(decl, 0, open - 1)))
     if !ret.ok { return ret }
     let inner = part(decl, open + 1, close)
     var params: [[str]] = []
@@ -402,7 +436,7 @@ fn declaration(r: Reader, decl: [str], name: str, open: int, close: int) -> Made
             words = part(words, 0, words.len as int - 1)
         }
         if array { words.push("*") }
-        let ty = param_type(r.ctype(words))
+        let ty = param_type(r, r.ctype(words))
         if !ty.ok { return ty }
         out.push(ParamText(pname, ty.text))
     }
@@ -463,6 +497,156 @@ fn sorted(fns: [Found]) -> [Found] {
         j += 1
     }
     out
+}
+
+fn is_word(t: str) -> bool {
+    let cs = text.chars(t)
+    cs.len > 0 && (text.is_alpha(cs[0]) || cs[0] == '_')
+}
+
+fn sorted_structs(all: [CStruct]) -> [CStruct] {
+    var out: [CStruct] = []
+    for s in all {
+        var at = out.len as int
+        while at > 0 && before(s.name, out[at - 1].name) { at -= 1 }
+        var next: [CStruct] = []
+        for k in 0..at { next.push(out[k]) }
+        next.push(s)
+        for k in at..(out.len as int) { next.push(out[k]) }
+        out = next
+    }
+    out
+}
+
+// The structs of the header that have a member Mou can read: numbers,
+// `bool` and pointers. The members it cannot read (arrays, other structs,
+// bit fields, names that start with `_`) are left out.
+fn structs(r: Reader, toks: [str]) -> [CStruct] {
+    var out: [CStruct] = []
+    var i = 0
+    let n = toks.len as int
+    while i < n {
+        if toks[i] != "struct" {
+            i += 1
+            continue
+        }
+        let typedef = i > 0 && toks[i - 1] == "typedef"
+        var j = i + 1
+        var tag = ""
+        // `struct __attribute__ ((__may_alias__)) sockaddr_in`
+        if j + 1 < n && (toks[j] == "__attribute__" || toks[j] == "__attribute") && toks[j + 1] == "(" {
+            var level = 0
+            j += 1
+            while j < n {
+                if toks[j] == "(" { level += 1 }
+                if toks[j] == ")" { level -= 1 }
+                j += 1
+                if level == 0 { break }
+            }
+        }
+        if j < n && is_word(toks[j]) {
+            tag = toks[j]
+            j += 1
+        }
+        i += 1
+        if j >= n || toks[j] != "{{" { continue }
+        // Where its braces close.
+        var depth = 0
+        var close = j
+        while close < n {
+            if toks[close] == "{{" { depth += 1 }
+            if toks[close] == "}}" { depth -= 1 }
+            if depth == 0 { break }
+            close += 1
+        }
+        let named = typedef && close + 2 < n && is_word(toks[close + 1]) && toks[close + 2] == ";"
+        var c = ""
+        var name = ""
+        if tag != "" {
+            c = "struct {tag}"
+            name = tag
+        } else if named {
+            c = toks[close + 1]
+            name = c
+        } else {
+            continue
+        }
+        var again = false
+        for s in out {
+            if s.name == name { again = true }
+        }
+        if again || text.starts_with(name, "_") || mou_name(name, 0) != name { continue }
+        // Its members: each up to its `;`.
+        let body = part(toks, j + 1, close)
+        var fields: [str] = []
+        var names: [str] = []
+        var whole = true
+        depth = 0
+        var start = 0
+        for k in 0..(body.len as int) {
+            let t = body[k]
+            if t == "{{" || t == "(" || t == "[" { depth += 1 }
+            if t == "}}" || t == ")" || t == "]" { depth -= 1 }
+            if t != ";" || depth != 0 { continue }
+            let member = plain(part(body, start, k))
+            start = k + 1
+            if member.len < 2 || has_word(member, "{{") || has_word(member, "(") || has_word(member, "[") || has_word(member, ":") {
+                whole = false
+                continue
+            }
+            // `int a, *b`: the first one says the type of all.
+            var parts: [[str]] = []
+            var from = 0
+            for m in 0..(member.len as int) {
+                if member[m] == "," {
+                    parts.push(part(member, from, m))
+                    from = m + 1
+                }
+            }
+            parts.push(part(member, from, member.len as int))
+            let first = parts[0]
+            if first.len == 0 {
+                whole = false
+                continue
+            }
+            var base_end = first.len as int - 1
+            for m in 0..(first.len as int) {
+                if first[m] == "*" {
+                    base_end = m
+                    break
+                }
+            }
+            for p in 0..(parts.len as int) {
+                let one = parts[p]
+                if one.len == 0 {
+                    whole = false
+                    continue
+                }
+                let fname = one[one.len - 1]
+                var words = part(first, 0, base_end)
+                if p == 0 {
+                    for m in base_end..(first.len as int - 1) { words.push(first[m]) }
+                } else {
+                    for m in 0..(one.len as int - 1) { words.push(one[m]) }
+                }
+                let ty = match r.ctype(words) {
+                    CType.Scalar(scalar) => scalar
+                    CType.Char => "i8"
+                    CType.Pointer(_, _) => "ptr?"
+                    _ => ""
+                }
+                let fine = !text.starts_with(fname, "_") && is_word(fname) && mou_name(fname, 0) == fname && !has_word(names, fname)
+                if ty != "" && fine {
+                    names.push(fname)
+                    fields.push("{fname}: {ty}")
+                } else {
+                    whole = false
+                }
+            }
+        }
+        if fields.len > 0 { out.push(CStruct(c, name, fields, whole)) }
+    }
+    sorted_structs(out)
 }
 
 // The names an `enum` of the header gives to numbers.
@@ -676,15 +860,36 @@ fn values(defines: str, toks: [str]) -> [Value] {
 
 // What a header declares: the declarations in Mou of the functions that
 // can be called, and the others with the reason they are left out.
-pub struct Declared { good: [str], left: [str], values: int }
+pub struct Declared { good: [str], left: [str], values: int, structs: [CStruct] }
 
 fn declared(preprocessed: str, defines: str) -> Declared {
     let toks = tokens(preprocessed)
-    var r = Reader(hash.Table[str, CType].new(), 8)
+    var decls: [[str]] = []
+    for raw in declarations(toks) { decls.push(plain(raw)) }
+    // First the names of the types, which the structs are read with.
+    var types = Reader(hash.Table[str, CType].new(), 8, [], hash.Table[str, str].new())
+    for decl in decls {
+        if decl.len == 2 && decl[0] == "mou_long_size" {
+            types.long = match text.parse_int(decl[1]) {
+                Some(size) => size
+                None => 8
+            }
+        }
+        if first_is(decl, "typedef") { types.typedef(decl) }
+    }
+    let read = structs(types, toks)
+    var whole = hash.Table[str, str].new()
+    for s in read {
+        if s.whole { whole.set(s.c, s.name) }
+    }
+    for a in types.aliases {
+        if whole.has(a.name) { continue }
+        if let Some(name) = whole.get(a.c) { whole.set(a.name, name) }
+    }
+    var r = Reader(hash.Table[str, CType].new(), types.long, [], whole)
     var fns: [Found] = []
     var seen = hash.Table[str, bool].new()
-    for raw in declarations(toks) {
-        let decl = plain(raw)
+    for decl in decls {
         // The line this module adds to ask for the size of `long`.
         if decl.len == 2 && decl[0] == "mou_long_size" {
             r.long = match text.parse_int(decl[1]) {
@@ -707,7 +912,7 @@ fn declared(preprocessed: str, defines: str) -> Declared {
             None => {}
         }
     }
-    var out = Declared([], [], 0)
+    var out = Declared([], [], 0, read)
     var names = hash.Table[str, bool].new()
     for f in sorted(fns) {
         if f.made.ok {
@@ -754,9 +959,9 @@ fn preprocessed(header: str) -> Texts ! Failed {
 
 // The declarations of the functions of a header, as they are written
 // inside an `import c` block.
-pub fn functions(header: str) -> [str] ! Failed {
+pub fn functions(header: str) -> Declared ! Failed {
     let read = preprocessed(header)?
-    declared(read.source, read.defines).good
+    declared(read.source, read.defines)
 }
 
 // What `mou bind <header> [name]` prints.
@@ -787,6 +992,10 @@ pub fn bind(header: str, alias: str) -> [str] ! Failed {
     out.push("import c \"{header}\" as {name} {{")
     for g in d.good { out.push("    {g}") }
     out.push("}}")
+    for s in d.structs {
+        out.push("")
+        for line in struct_text(s) { out.push(line) }
+    }
     if d.left.len > 0 {
         out.push("")
         out.push("// Left out:")

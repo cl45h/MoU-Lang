@@ -300,6 +300,7 @@ fn checker(file: &File) -> Checker<'_> {
         externs: Vec::new(),
         extern_ids: HashMap::new(),
         foreign_todo: Vec::new(),
+        extern_views: HashMap::new(),
         metas: HashMap::new(),
         cstructs: HashMap::new(),
         unsafe_depth: 0,
@@ -1410,6 +1411,8 @@ struct Checker<'a> {
     /// The headers of C whose functions are taken in once the structs
     /// they may name have their fields.
     foreign_todo: Vec<(usize, String, String, &'a [Decl])>,
+    /// The C functions as some call uses them: see `extern_view`.
+    extern_views: HashMap<(usize, Vec<Option<usize>>), usize>,
     metas: HashMap<(usize, usize), Meta>,
     /// The structs marked `@c`, and the type of C each one is.
     cstructs: HashMap<usize, String>,
@@ -1569,6 +1572,43 @@ impl<'a> Checker<'a> {
             self.externs.push(Extern { name: f.name.clone(), header: header.to_string(), sig: Sig { params, ret }, value });
         }
         self.module = 0;
+    }
+
+    /// A C function as this call uses it: where it takes an address and
+    /// is given `mut s`, with `s` a variable that is a struct of C, it
+    /// takes that struct, and C gets where it is.
+    fn extern_view(&mut self, x: usize, args: &[Arg]) -> usize {
+        let address = |t: &Ty| *t == Ty::Builtin("ptr") || *t == Ty::Optional(Box::new(Ty::Builtin("ptr")));
+        let picks: Vec<Option<usize>> = args
+            .iter()
+            .zip(&self.externs[x].sig.params)
+            .map(|(a, p)| {
+                let ExprKind::Path(name) = &a.value.kind else { return None };
+                if a.mode != Mode::Mut || !address(&p.ty) {
+                    return None;
+                }
+                match self.lookup(name).map(|v| v.ty) {
+                    Some(Ty::Struct(i, targs)) if targs.is_empty() && self.cstructs.contains_key(&i) => Some(i),
+                    _ => None,
+                }
+            })
+            .collect();
+        if picks.iter().all(Option::is_none) {
+            return x;
+        }
+        if let Some(&view) = self.extern_views.get(&(x, picks.clone())) {
+            return view;
+        }
+        let mut view = self.externs[x].clone();
+        for (p, pick) in view.sig.params.iter_mut().zip(&picks) {
+            if let Some(i) = pick {
+                p.ty = Ty::Struct(*i, Vec::new());
+                p.mode = Mode::Mut;
+            }
+        }
+        self.externs.push(view);
+        self.extern_views.insert((x, picks), self.externs.len() - 1);
+        self.externs.len() - 1
     }
 
     /// Whether the module being checked is a `system` one.
@@ -4788,6 +4828,7 @@ impl<'a> Checker<'a> {
                             } else if self.unsafe_depth == 0 {
                                 self.err(span, format!("`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`"));
                             }
+                            let x = self.extern_view(x, args);
                             self.res.insert((self.inst, id(e)), Res::Extern(x));
                             let sig = self.externs[x].sig.clone();
                             let ret = self.apply(&sig, args, span);

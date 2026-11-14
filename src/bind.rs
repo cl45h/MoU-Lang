@@ -137,6 +137,28 @@ struct Reader {
     typedefs: HashMap<String, CType>,
     /// The size in bytes of `long` on this machine.
     long: usize,
+    /// The names `typedef` gives to a struct that has a name of its own.
+    aliases: HashMap<String, String>,
+    /// The structs that can go by value, by how C names them: the name in Mou.
+    whole: HashMap<String, String>,
+}
+
+/// A struct of the header, as far as Mou reads it.
+pub struct CStruct {
+    /// How C names it: `struct timeval`, or `div_t`.
+    pub c: String,
+    pub name: String,
+    pub fields: Vec<(String, String)>,
+    /// Whether every member of it is among the fields.
+    pub whole: bool,
+}
+
+impl CStruct {
+    /// The declaration in Mou.
+    pub fn text(&self) -> String {
+        let fields: Vec<String> = self.fields.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+        format!("@c(\"{}\")\npub struct {} {{ {} }}", self.c, self.name, fields.join(", "))
+    }
 }
 
 impl Reader {
@@ -213,6 +235,10 @@ impl Reader {
             return;
         }
         let mut t = self.ctype(&words[..words.len() - 1]);
+        // `typedef struct tm tm_t`, `typedef struct tm {} tm_t`: the same struct.
+        if words.len() >= 3 && words[0] == "struct" && words[1] != "{}" && words[2..words.len() - 1].iter().all(|w| w == "{}") {
+            self.aliases.insert(name.clone(), format!("struct {}", words[1]));
+        }
         if words.iter().any(|w| w == "{}") {
             let stars = words.iter().filter(|w| *w == "*").count();
             t = CType::Other(name.clone());
@@ -229,7 +255,7 @@ impl Reader {
 }
 
 /// How a parameter is written in Mou, or why it cannot be.
-fn param_type(t: &CType) -> Result<String, String> {
+fn param_type(r: &Reader, t: &CType) -> Result<String, String> {
     match t {
         CType::Scalar(s) => Ok(s.to_string()),
         CType::Char => Ok("i8".into()),
@@ -240,17 +266,23 @@ fn param_type(t: &CType) -> Result<String, String> {
             _ => Ok("ptr?".into()),
         },
         CType::Void => Err("a parameter of type `void`".into()),
-        CType::Other(what) => Err(format!("`{what}` passed by value")),
+        CType::Other(what) => match r.whole.get(what) {
+            Some(name) => Ok(name.clone()),
+            None => Err(format!("`{what}` passed by value")),
+        },
     }
 }
 
-fn result_type(t: &CType) -> Result<String, String> {
+fn result_type(r: &Reader, t: &CType) -> Result<String, String> {
     match t {
         CType::Void => Ok(String::new()),
         CType::Scalar(s) => Ok(format!(" -> {s}")),
         CType::Char => Ok(" -> i8".into()),
         CType::Pointer(inner, _) => Ok(if **inner == CType::Char { " -> str?" } else { " -> ptr?" }.into()),
-        CType::Other(what) => Err(format!("it gives `{what}` by value")),
+        CType::Other(what) => match r.whole.get(what) {
+            Some(name) => Ok(format!(" -> {name}")),
+            None => Err(format!("it gives `{what}` by value")),
+        },
     }
 }
 
@@ -297,7 +329,7 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
         if close + 1 != decl.len() {
             return Err("it gives a function or an array".to_string());
         }
-        let ret = result_type(&r.ctype(&decl[..open - 1]))?;
+        let ret = result_type(r, &r.ctype(&decl[..open - 1]))?;
         let inner = &decl[open + 1..close];
         let mut params: Vec<&[String]> = Vec::new();
         let (mut depth, mut start) = (0, 0);
@@ -345,7 +377,7 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
             if array {
                 words.push("*".to_string());
             }
-            let ty = param_type(&r.ctype(&words))?;
+            let ty = param_type(r, &r.ctype(&words))?;
             out.push((pname, ty));
         }
         // Two parameters cannot share a name.
@@ -358,6 +390,124 @@ fn function(r: &Reader, decl: &[String]) -> Option<(String, Result<String, Strin
         Ok(format!("fn {name}({}){ret}", params.join(", ")))
     })();
     Some((name, made))
+}
+
+/// The structs of the header that have a member Mou can read: numbers,
+/// `bool` and pointers. The members it cannot read (arrays, other structs,
+/// bit fields, names that start with `_`) are left out.
+fn structs(r: &Reader, toks: &[String]) -> Vec<CStruct> {
+    let word = |t: &str| t.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    let mut out: Vec<CStruct> = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i] != "struct" {
+            i += 1;
+            continue;
+        }
+        let typedef = i > 0 && toks[i - 1] == "typedef";
+        let mut j = i + 1;
+        let mut tag = None;
+        // `struct __attribute__ ((__may_alias__)) sockaddr_in`
+        if j + 1 < toks.len() && (toks[j] == "__attribute__" || toks[j] == "__attribute") && toks[j + 1] == "(" {
+            let mut depth = 0;
+            j += 1;
+            while j < toks.len() {
+                match toks[j].as_str() {
+                    "(" => depth += 1,
+                    ")" => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+        }
+        if j < toks.len() && word(&toks[j]) {
+            tag = Some(toks[j].clone());
+            j += 1;
+        }
+        i += 1;
+        if j >= toks.len() || toks[j] != "{" {
+            continue;
+        }
+        // Where its braces close.
+        let (mut depth, mut close) = (0, j);
+        while close < toks.len() {
+            match toks[close].as_str() {
+                "{" => depth += 1,
+                "}" => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            close += 1;
+        }
+        let named = typedef && close + 2 < toks.len() && word(&toks[close + 1]) && toks[close + 2] == ";";
+        let (c, name) = match (&tag, named) {
+            (Some(tag), _) => (format!("struct {tag}"), tag.clone()),
+            (None, true) => (toks[close + 1].clone(), toks[close + 1].clone()),
+            (None, false) => continue,
+        };
+        if name.starts_with('_') || mou_name(&name, 0) != name || out.iter().any(|s| s.name == name) {
+            continue;
+        }
+        // Its members: each up to its `;`.
+        let body = &toks[(j + 1).min(close)..close.min(toks.len())];
+        let mut fields: Vec<(String, String)> = Vec::new();
+        let mut whole = true;
+        let (mut depth, mut start) = (0, 0);
+        for (k, t) in body.iter().enumerate() {
+            match t.as_str() {
+                "{" | "(" | "[" => depth += 1,
+                "}" | ")" | "]" => depth -= 1,
+                ";" if depth == 0 => {
+                    let member = plain(&body[start..k]);
+                    start = k + 1;
+                    let odd = member.iter().any(|t| matches!(t.as_str(), "{" | "(" | "[" | ":"));
+                    if odd || member.len() < 2 {
+                        whole = false;
+                        continue;
+                    }
+                    // `int a, *b`: the first one says the type of all.
+                    let parts: Vec<&[String]> = member.split(|t| t == ",").collect();
+                    let first = parts[0];
+                    if first.is_empty() {
+                        whole = false;
+                        continue;
+                    }
+                    let base_end = first.iter().position(|t| t == "*").unwrap_or(first.len() - 1);
+                    for (n, part) in parts.iter().enumerate() {
+                        let Some(fname) = part.last() else {
+                            whole = false;
+                            continue;
+                        };
+                        let mut words: Vec<String> = first[..base_end].to_vec();
+                        let stars = if n == 0 { &first[base_end..first.len() - 1] } else { &part[..part.len() - 1] };
+                        words.extend(stars.iter().cloned());
+                        let ty = match r.ctype(&words) {
+                            CType::Scalar(s) => Some(s.to_string()),
+                            CType::Char => Some("i8".to_string()),
+                            CType::Pointer(..) => Some("ptr?".to_string()),
+                            _ => None,
+                        };
+                        let fine = !fname.starts_with('_') && word(fname) && mou_name(fname, 0) == *fname && !fields.iter().any(|(f, _)| f == fname);
+                        match ty {
+                            Some(ty) if fine => fields.push((fname.clone(), ty)),
+                            _ => whole = false,
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !fields.is_empty() {
+            out.push(CStruct { c, name, fields, whole });
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 /// The names an `enum` of the header gives to numbers.
@@ -513,12 +663,33 @@ fn values(defines: &str, toks: &[String]) -> Vec<(String, &'static str)> {
 /// The functions a header declares, from what the preprocessor gives:
 /// the declarations in Mou of the ones that can be called, and the names
 /// of the others with the reason they are left out.
-fn declared(preprocessed: &str, defines: &str) -> (Vec<String>, Vec<(String, String)>) {
+fn declared(preprocessed: &str, defines: &str) -> (Vec<String>, Vec<(String, String)>, Vec<CStruct>) {
     let toks = tokens(preprocessed);
-    let mut r = Reader { typedefs: HashMap::new(), long: 8 };
+    let decls: Vec<Vec<String>> = declarations(&toks).iter().map(|d| plain(d)).collect();
+    // First the names of the types, which the structs are read with.
+    let mut r = Reader { typedefs: HashMap::new(), long: 8, aliases: HashMap::new(), whole: HashMap::new() };
+    for decl in &decls {
+        if let [mark, size] = decl.as_slice() {
+            if mark == "mou_long_size" {
+                r.long = size.parse().unwrap_or(8);
+            }
+        }
+        if decl.first().is_some_and(|t| t == "typedef") {
+            r.typedef(decl);
+        }
+    }
+    let read = structs(&r, &toks);
+    let mut whole: HashMap<String, String> = read.iter().filter(|s| s.whole).map(|s| (s.c.clone(), s.name.clone())).collect();
+    let mut aliases: Vec<(&String, &String)> = r.aliases.iter().collect();
+    aliases.sort();
+    for (alias, c) in aliases {
+        if let Some(name) = whole.get(c).cloned() {
+            whole.entry(alias.clone()).or_insert(name);
+        }
+    }
+    let mut r = Reader { typedefs: HashMap::new(), long: r.long, aliases: HashMap::new(), whole };
     let mut fns: Vec<(String, Result<String, String>)> = Vec::new();
-    for decl in declarations(&toks) {
-        let decl = plain(&decl);
+    for decl in decls {
         // The line this module adds to ask for the size of `long`.
         if let [mark, size] = decl.as_slice() {
             if mark == "mou_long_size" {
@@ -556,12 +727,12 @@ fn declared(preprocessed: &str, defines: &str) -> (Vec<String>, Vec<(String, Str
             good.push(format!("@value fn {name}() -> {t}"));
         }
     }
-    (good, left)
+    (good, left, read)
 }
 
 /// The text of the bindings of a header, from what the preprocessor gives.
 fn bindings(header: &str, alias: &str, preprocessed: &str, defines: &str) -> String {
-    let (good, left) = declared(preprocessed, defines);
+    let (good, left, structs) = declared(preprocessed, defines);
     let mut out = String::new();
     let values = good.iter().filter(|g| g.starts_with("@value ")).count();
     out.push_str(&format!("// Written by `mou bind {header}`: {} functions, {values} values, {} left out.\n", good.len() - values, left.len()));
@@ -574,6 +745,9 @@ fn bindings(header: &str, alias: &str, preprocessed: &str, defines: &str) -> Str
         out.push_str(&format!("    {g}\n"));
     }
     out.push_str("}\n");
+    for s in &structs {
+        out.push_str(&format!("\n{}\n", s.text()));
+    }
     if !left.is_empty() {
         out.push_str("\n// Left out:\n");
         for (n, why) in left {
@@ -602,9 +776,10 @@ fn preprocessed(header: &str) -> Result<(String, String), String> {
 
 /// The declarations of the functions of a header, as they are written
 /// inside an `import c` block.
-pub fn functions(header: &str) -> Result<Vec<String>, String> {
+pub fn functions(header: &str) -> Result<(Vec<String>, Vec<CStruct>), String> {
     let (text, defines) = preprocessed(header)?;
-    Ok(declared(&text, &defines).0)
+    let (good, _, structs) = declared(&text, &defines);
+    Ok((good, structs))
 }
 
 /// `mou bind <header> [name]`: the bindings, or what failed.
@@ -658,6 +833,8 @@ extern long double sqrtl (long double x);
 extern void srand (unsigned int __seed);
 extern int rand (void);
 extern int pick (int, int type, char fn[8]);
+struct point { double x, y; struct point *next; int a, *b; char name[8]; int bits : 3; };
+struct _hidden { int x; };
 ";
         let defines = "#define BIG 0x7fffffffffL\n#define ONE 1\n#define NEG (-1)\n#define PI 3.14159\n#define TINY 1e-5\n#define ALIAS ONE\n#define RED RED\n#define stdin stdin\n#define CALL(x) x\n#define U 4000000000U\n#define TEXT \"a\"\n#define _HIDDEN 3\n#define OCT 0644\n";
         let src = format!("{src}enum color {{ RED, GREEN = (1 << 2), BLUE }};\n");
@@ -674,7 +851,10 @@ extern int pick (int, int type, char fn[8]);
             "@value fn BLUE() -> i32",
             "@value fn U() -> u32",
             "@value fn OCT() -> i32",
-            "10 functions, 11 values, 4 left out",
+            "11 functions, 11 values, 3 left out",
+            "@c(\"div_t\")\npub struct div_t { quot: i32, rem: i32 }",
+            "@c(\"struct point\")\npub struct point { x: f64, y: f64, next: ptr?, a: i32, b: ptr? }",
+            "fn div(numer: i32, denom: i32) -> div_t",
         ] {
             assert!(out.contains(line), "missing {line:?} in:\n{out}");
         }
@@ -693,14 +873,13 @@ extern int pick (int, int type, char fn[8]);
             "fn rand() -> i32",
             "fn pick(a0: i32, type_: i32, fn_: mut [u8]) -> i32",
             "//   printf: it takes any number of arguments",
-            "//   div: it gives `div_t` by value",
             "//   qsort: it takes a function",
             "//   sqrtl: it gives `long double` by value",
             "import c \"x.h\" as x {",
         ] {
             assert!(out.contains(line), "missing {line:?} in:\n{out}");
         }
-        for absent in ["twice", "hidden", "fn signal"] {
+        for absent in ["twice", "hidden", "fn signal", "name:", "bits"] {
             assert!(!out.contains(absent), "{absent} should not be there:\n{out}");
         }
     }

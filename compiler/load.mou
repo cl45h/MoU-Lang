@@ -206,13 +206,53 @@ fn in_decl(d: parser.Decl, out: mut [parser.Decl]) {
     }
 }
 
+// The name a declaration gives, or nothing for an `impl`.
+fn decl_name(d: parser.Decl) -> str {
+    match d.kind {
+        parser.DeclKind.Fn(f) => f.name
+        parser.DeclKind.Struct(s) => s.name
+        parser.DeclKind.Enum(e) => e.name
+        parser.DeclKind.Trait(t) => t.name
+        parser.DeclKind.Impl(_) => ""
+        parser.DeclKind.Const(name, _, _) => name
+        parser.DeclKind.Alias(name, _, _) => name
+    }
+}
+
 impl Loader {
     // The functions a header of C declares, as the declarations of an
     // `import c` block.
-    fn header(mut self, path: str, alias: str, origin: int) -> [parser.Decl] {
-        let lines = bind.functions(path) catch e {
+    fn header(mut self, path: str, alias: str, origin: int, taken: mut [str], added: mut [parser.Decl]) -> [parser.Decl] {
+        let found = bind.functions(path) catch e {
             self.errors.push(lexer.Error(e.msg, origin, 1))
             return []
+        }
+        var lines = found.good
+        // Its structs become structs of this module, each unless its name
+        // is already taken here.
+        for s in found.structs {
+            if !has(taken, s.name) {
+                var parsed = true
+                let read = parser.parse_from(text.join(bind.struct_text(s), "\n"), origin, self.next_id) catch e {
+                    self.errors.push(lexer.Error("the header `{path}` cannot be used: {e.msg}", origin, 1))
+                    parsed = false
+                    parser.File(None, [], [], self.next_id)
+                }
+                if parsed {
+                    self.next_id = read.exprs
+                    taken.push(s.name)
+                    for d in read.decls { added.push(d) }
+                    continue
+                }
+            }
+            // The functions that pass it by value go with it.
+            if s.whole {
+                var rest: [str] = []
+                for l in lines {
+                    if !text.contains(l, ": {s.name},") && !text.contains(l, ": {s.name})") && !text.ends_with(l, "-> {s.name}") { rest.push(l) }
+                }
+                lines = rest
+            }
         }
         let block = "import c \"{path}\" as {alias} {{\n{text.join(lines, "\n")}\n}}\n"
         let read = parser.parse_from(block, origin, self.next_id) catch e {
@@ -237,6 +277,27 @@ impl Loader {
         self.next_id = file.exprs
         var imports: [ModImport] = []
         var kept: [parser.Import] = []
+        // The names this module already uses, and the structs its headers add.
+        var taken: [str] = []
+        for d in file.decls {
+            let name = decl_name(d)
+            if name != "" { taken.push(name) }
+        }
+        for imp in file.imports {
+            match imp.alias {
+                Some(a) => taken.push(a)
+                None => {
+                    match imp.origin {
+                        Some(_) => {}
+                        None => {
+                            let parts = text.split(imp.path, '.')
+                            taken.push(parts[parts.len - 1])
+                        }
+                    }
+                }
+            }
+        }
+        var added: [parser.Decl] = []
         for imp in file.imports {
             var alias = ""
             var named = true
@@ -273,7 +334,7 @@ impl Loader {
             var decls = imp.decls
             var from_c = false
             if let Some(o) = imp.origin { from_c = o == "c" }
-            if from_c && decls.len == 0 { decls = self.header(imp.path, alias, origin) }
+            if from_c && decls.len == 0 { decls = self.header(imp.path, alias, origin, mut taken, mut added) }
             imports.push(ModImport(alias, imp.path, target, imp.origin, decls))
             kept.push(parser.Import(imp.origin, imp.path, imp.alias, []))
         }
@@ -283,6 +344,7 @@ impl Loader {
         }
         let first = self.merged.decls.len as int
         for d in file.decls { self.merged.decls.push(d) }
+        for d in added { self.merged.decls.push(d) }
         // A declaration inside a block is one of the module.
         var nested: [parser.Decl] = []
         for d in file.decls { in_decl(d, mut nested) }

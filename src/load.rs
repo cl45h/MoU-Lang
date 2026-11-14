@@ -123,6 +123,10 @@ impl Loader {
             }
         };
         let mut imports = Vec::new();
+        // The names this module already uses, and the structs its headers add.
+        let mut taken: Vec<String> = file.decls.iter().filter(|d| !matches!(d.kind, crate::ast::DeclKind::Impl(_))).map(|d| d.kind.describe().1).collect();
+        taken.extend(file.imports.iter().filter_map(|i| i.alias.clone().or_else(|| i.origin.is_none().then(|| i.path.rsplit('.').next().unwrap_or(&i.path).to_string()))));
+        let mut added: Vec<crate::ast::Decl> = Vec::new();
         for imp in &mut file.imports {
             let alias = match (&imp.alias, &imp.origin) {
                 (Some(a), _) => a.clone(),
@@ -139,7 +143,26 @@ impl Loader {
             // the C compiler says what it declares.
             if imp.origin.as_deref() == Some("c") && imp.decls.is_empty() {
                 match crate::bind::functions(&imp.path) {
-                    Ok(lines) => {
+                    Ok((mut lines, structs)) => {
+                        // Its structs become structs of this module, each
+                        // unless its name is already taken here.
+                        for s in structs {
+                            if !taken.contains(&s.name) {
+                                match parser::parse_file_at(&s.text(), origin) {
+                                    Ok(read) => {
+                                        taken.push(s.name.clone());
+                                        added.extend(read.decls);
+                                        continue;
+                                    }
+                                    Err(e) => self.errors.push(Error { msg: format!("the header `{}` cannot be used: {}", imp.path, e.msg), span: origin }),
+                                }
+                            }
+                            // The functions that pass it by value go with it.
+                            if s.whole {
+                                let (a, b, c) = (format!(": {},", s.name), format!(": {})", s.name), format!("-> {}", s.name));
+                                lines.retain(|l| !l.contains(&a) && !l.contains(&b) && !l.ends_with(&c));
+                            }
+                        }
                         let block = format!("import c \"{}\" as {alias} {{\n{}\n}}\n", imp.path, lines.join("\n"));
                         match parser::parse_file_at(&block, origin) {
                             Ok(mut read) => imp.decls = read.imports.pop().map(|i| i.decls).unwrap_or_default(),
@@ -158,6 +181,7 @@ impl Loader {
         }
         let start = self.merged.decls.len();
         // A declaration inside a block is one of the module.
+        file.decls.extend(added);
         let nested = crate::ast::nested_decls(&file.decls);
         self.merged.decls.extend(file.decls);
         self.merged.decls.extend(nested);

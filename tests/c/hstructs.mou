@@ -1,0 +1,19 @@
+import std.io
+import cread
+
+fn main() ! io.Error {
+    let t = cread.now()
+    io.print("{t.tv_sec > 1700000000} {t.tv_usec >= 0 && t.tv_usec < 1000000}")?
+    let d = cread.divide(17, 5)
+    io.print("{d.quot} {d.rem}")?
+    let day = cread.noon(11, 12)
+    io.print("{cread.stamp(day)} {day.tm_wday} {day.tm_yday}")?
+    match cread.look("/") {
+        Some(info) => io.print("{info.st_mode & 61440 == 16384} {info.st_nlink > 1}")?
+        None => io.print("no root")?
+    }
+    match cread.look("/no/such/path") {
+        Some(_) => io.print("found")?
+        None => io.print("nothing there")?
+    }
+}

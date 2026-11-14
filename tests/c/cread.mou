@@ -1,0 +1,34 @@
+@profile(system)
+
+import c "sys/time.h" as st
+import c "time.h" as t
+import c "stdlib.h" as lib
+import c "sys/stat.h" as fs
+
+// The clock, read into a struct the header declares.
+pub fn now() -> timeval {
+    var tv = timeval(0, 0)
+    unsafe { st.gettimeofday(mut tv, None) }
+    tv
+}
+
+pub fn divide(a: i32, b: i32) -> div_t { unsafe { lib.div(a, b) } }
+
+// Noon of a day of 2026, and the seconds since 1970 it is at.
+pub fn noon(month: i32, day: i32) -> tm {
+    var at = tm(0, 0, 12, day, month - 1, 126, 0, 0, 0, 0, None)
+    unsafe { t.timegm(mut at) }
+    at
+}
+
+pub fn stamp(at: tm) -> i64 {
+    var copy = at
+    unsafe { t.timegm(mut copy) }
+}
+
+// What the system says of a path, or nothing when it is not there.
+pub fn look(path: str) -> stat? {
+    var info = stat(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    if unsafe { fs.stat(path, mut info) } != 0 { return None }
+    Some(info)
+}

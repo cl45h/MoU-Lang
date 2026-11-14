@@ -105,6 +105,9 @@ struct ImportEntry { module: int, name: str, path: str }
 
 struct ExternId { module: int, alias: str, name: str, id: int }
 
+// A C function as some call uses it: see `extern_view`.
+struct ExternView { of: int, picks: [int], id: int }
+
 struct MethodEntry { key: str, name: str, m: Method }
 
 struct ImplsEntry { tr: int, key: str, infos: [ImplInfo] }
@@ -217,6 +220,7 @@ pub struct Checker {
     // The headers of C whose functions are taken in once the structs
     // they may name have their fields.
     foreign_todo: [Pending]
+    extern_views: [ExternView]
     // The structs marked `@c`, and the type of C each one is.
     cstructs: [CStruct]
     imports: [ImportEntry]
@@ -1957,6 +1961,7 @@ fn start(p: load.Program, decls_only: bool) -> Checker {
         externs: [],
         extern_ids: [],
         foreign_todo: [],
+        extern_views: [],
         cstructs: [],
         imports: [],
         structs: [],
@@ -4106,6 +4111,65 @@ fn fits(kind: str, negative: bool, v: [int]) -> bool {
 // ---- each kind of expression ----
 
 impl Checker {
+    // A C function as this call uses it: where it takes an address and is
+    // given `mut s`, with `s` a variable that is a struct of C, it takes
+    // that struct, and C gets where it is.
+    fn extern_view(mut self, x: int, args: [parser.Arg]) -> int {
+        let params = self.externs[x].sig.params
+        var picks: [int] = []
+        var any = false
+        for k in 0..(args.len as int) {
+            if k >= (params.len as int) { break }
+            var pick = -1
+            let is_mut = match args[k].mode {
+                parser.Mode.Mut => true
+                _ => false
+            }
+            if is_mut && is_address(params[k].ty) {
+                match args[k].value.kind {
+                    parser.Kind.Name(name) => {
+                        if let Some(v) = self.lookup(name) {
+                            if self.is_cstruct(v.ty) {
+                                match v.ty {
+                                    types.Ty.Struct(i, _) => {
+                                        pick = i
+                                        any = true
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            picks.push(pick)
+        }
+        if !any { return x }
+        for v in self.extern_views {
+            if v.of != x || v.picks.len != picks.len { continue }
+            var same = true
+            for k in 0..(picks.len as int) {
+                if v.picks[k] != picks[k] { same = false }
+            }
+            if same { return v.id }
+        }
+        let from = self.externs[x]
+        var seen: [types.ParamSig] = []
+        for k in 0..(params.len as int) {
+            let p = params[k]
+            if k < (picks.len as int) && picks[k] >= 0 {
+                seen.push(types.ParamSig(p.name, parser.Mode.Mut, types.Ty.Struct(picks[k], []), p.optional))
+            } else {
+                seen.push(p)
+            }
+        }
+        let id = self.externs.len as int
+        self.externs.push(Extern(from.name, from.header, types.Sig(seen, from.sig.ret), from.value))
+        self.extern_views.push(ExternView(x, picks, id))
+        id
+    }
+
     // Whether the module being checked is a `system` one.
     fn in_system(self) -> bool {
         if self.module < 0 || self.module >= (self.modules.len as int) { return false }
@@ -5389,8 +5453,9 @@ impl Checker {
                 } else {
                     if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` is a C function, which the compiler cannot check: call it inside `unsafe {{ }}`") }
                 }
-                self.set_res(e, Res.Extern(x))
-                let sig = self.externs[x].sig
+                let seen = self.extern_view(x, args)
+                self.set_res(e, Res.Extern(seen))
+                let sig = self.externs[seen].sig
                 let ret = self.apply(sig, args, at)
                 // What C is given to call is a function, by its name.
                 for k in 0..(args.len as int) {
