@@ -1591,6 +1591,43 @@ impl<'a> Checker<'a> {
         self.module = 0;
     }
 
+    /// `T.load(p)` and `T.store(p, v)`, for `T` a struct of C or the type
+    /// of a number: what reads a `T` at an address, or writes one there.
+    /// Each is a function of the C that is written, so it is called as
+    /// the ones of a header are.
+    fn pointer_op(&mut self, ty: &str, op: &str) -> Option<usize> {
+        if op != "load" && op != "store" {
+            return None;
+        }
+        let (t, c) = match (self.global(ty), ty) {
+            (Some(Global::Struct(i)), _) if self.cstructs.contains_key(&i) => (Ty::Struct(i, Vec::new()), format!("KX{i}")),
+            (None, "i8") => (Ty::Int("i8"), "kmem_i8".to_string()),
+            (None, "i16") => (Ty::Int("i16"), "kmem_i16".to_string()),
+            (None, "i32") => (Ty::Int("i32"), "kmem_i32".to_string()),
+            (None, "i64") => (Ty::Int("i64"), "kmem_i64".to_string()),
+            (None, "u8") => (Ty::Int("u8"), "kmem_u8".to_string()),
+            (None, "u16") => (Ty::Int("u16"), "kmem_u16".to_string()),
+            (None, "u32") => (Ty::Int("u32"), "kmem_u32".to_string()),
+            (None, "u64") => (Ty::Int("u64"), "kmem_u64".to_string()),
+            (None, "f32") => (Ty::Float("f32"), "kmem_f32".to_string()),
+            (None, "f64") => (Ty::Float("f64"), "kmem_f64".to_string()),
+            _ => return None,
+        };
+        let name = format!("{c}_{op}");
+        if let Some(x) = self.externs.iter().position(|x| x.name == name) {
+            return Some(x);
+        }
+        let mut params = vec![plain_param("at", Ty::Builtin("ptr"))];
+        let ret = if op == "store" {
+            params.push(plain_param("value", t));
+            Ty::Unit
+        } else {
+            t
+        };
+        self.externs.push(Extern { name, header: "stdint.h".to_string(), sig: Sig { params, ret }, value: false });
+        Some(self.externs.len() - 1)
+    }
+
     /// A C function as this call uses it: where it takes an address and
     /// is given `mut s`, with `s` a variable that is a struct of C, it
     /// takes that struct, and C gets where it is.
@@ -4889,6 +4926,15 @@ impl<'a> Checker<'a> {
             ExprKind::Field { base, name } => {
                 if let ExprKind::Path(b) = &base.kind {
                     if self.lookup(b).is_none() {
+                        // `tm.load(p)`, `i32.store(p, v)`: through an address of C.
+                        if let Some(x) = self.pointer_op(b, name) {
+                            if self.unsafe_depth == 0 {
+                                self.err(span, format!("`{b}.{name}` reads or writes memory the compiler cannot check: call it inside `unsafe {{ }}`"));
+                            }
+                            self.res.insert((self.inst, id(e)), Res::Extern(x));
+                            let sig = self.externs[x].sig.clone();
+                            return self.apply(&sig, args, span);
+                        }
                         if let Some(&x) = self.extern_ids.get(&(self.module, b.clone(), name.clone())) {
                             if self.externs[x].value {
                                 self.err(span, format!("`{b}.{name}` is a value of C, not a function: write it without `()`"));

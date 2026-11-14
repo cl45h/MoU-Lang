@@ -4170,7 +4170,52 @@ fn fits(kind: str, negative: bool, v: [int]) -> bool {
 
 // ---- each kind of expression ----
 
+let MEMORY_TYPES: [str] = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"]
+
 impl Checker {
+    // `T.load(p)` and `T.store(p, v)`, for `T` a struct of C or the type
+    // of a number: what reads a `T` at an address, or writes one there.
+    // Each is a function of the C that is written, so it is called as the
+    // ones of a header are. Gives its number, or -1.
+    fn pointer_op(mut self, ty: str, op: str) -> int {
+        if op != "load" && op != "store" { return -1 }
+        var t = types.Ty.Unknown
+        var c = ""
+        match self.global(ty) {
+            Some(g) => {
+                match g {
+                    Global.Struct(i) => {
+                        if !self.is_cstruct(types.Ty.Struct(i, [])) { return -1 }
+                        t = types.Ty.Struct(i, [])
+                        c = "KX{i}"
+                    }
+                    _ => return -1
+                }
+            }
+            None => {
+                var known = false
+                for m in MEMORY_TYPES {
+                    if m == ty { known = true }
+                }
+                if !known { return -1 }
+                t = if ty == "f32" || ty == "f64" { types.Ty.Float(ty) } else { types.Ty.Int(ty) }
+                c = "kmem_{ty}"
+            }
+        }
+        let name = "{c}_{op}"
+        for k in 0..(self.externs.len as int) {
+            if self.externs[k].name == name { return k }
+        }
+        var params = [param("at", types.Ty.Builtin("ptr"))]
+        var ret = t
+        if op == "store" {
+            params.push(param("value", t))
+            ret = types.Ty.Unit
+        }
+        self.externs.push(Extern(name, "stdint.h", types.Sig(params, ret), false))
+        self.externs.len as int - 1
+    }
+
     // A C function as this call uses it: where it takes an address and is
     // given `mut s`, with `s` a variable that is a struct of C, it takes
     // that struct, and C gets where it is.
@@ -5519,6 +5564,14 @@ impl Checker {
         }
         if named {
             let b = base_name
+            // `tm.load(p)`, `i32.store(p, v)`: through an address of C.
+            let op = self.pointer_op(b, name)
+            if op >= 0 {
+                if self.unsafe_depth == 0 { self.err(at, "`{b}.{name}` reads or writes memory the compiler cannot check: call it inside `unsafe {{ }}`") }
+                self.set_res(e, Res.Extern(op))
+                let sig = self.externs[op].sig
+                return self.apply(sig, args, at)
+            }
             let x = self.extern_id(b, name)
             if x >= 0 {
                 if self.externs[x].value {

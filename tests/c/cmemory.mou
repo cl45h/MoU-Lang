@@ -1,0 +1,41 @@
+@profile(system)
+
+import c "time.h" as t
+import c "stdlib.h" as lib
+
+// The date of a moment (its seconds, in an array of one), read from the
+// struct C gives the address of.
+pub fn date(at: [i64]) -> tm? {
+    match unsafe { t.gmtime(at) } {
+        Some(p) => Some(unsafe { tm.load(p) })
+        None => None
+    }
+}
+
+// Numbers kept in memory asked from C: written, read back, and freed.
+pub fn round_trip(a: i32, b: f64) -> f64 {
+    match unsafe { lib.malloc(16) } {
+        Some(p) => {
+            unsafe { i32.store(p, a) }
+            let first = unsafe { i32.load(p) }
+            unsafe { f64.store(p, b) }
+            let second = unsafe { f64.load(p) }
+            unsafe { lib.free(Some(p)) }
+            (first as f64) + second
+        }
+        None => 0.0
+    }
+}
+
+// A struct written through an address, and read back from there.
+pub fn through(quot: i32, rem: i32) -> i32 {
+    match unsafe { lib.malloc(64) } {
+        Some(p) => {
+            unsafe { div_t.store(p, div_t(quot, rem)) }
+            let back = unsafe { div_t.load(p) }
+            unsafe { lib.free(Some(p)) }
+            back.quot * 10 + back.rem
+        }
+        None => 0
+    }
+}

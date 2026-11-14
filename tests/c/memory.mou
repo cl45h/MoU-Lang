@@ -1,0 +1,10 @@
+import std.io
+import cmemory
+
+fn main() ! io.Error {
+    match cmemory.date([1794484800]) {
+        Some(d) => io.print("{d.tm_year + 1900}-{d.tm_mon + 1}-{d.tm_mday} {d.tm_hour}h, day {d.tm_wday} of the week")?
+        None => io.print("no date")?
+    }
+    io.print("{cmemory.round_trip(40, 2.5)} {cmemory.through(4, 2)}")?
+}

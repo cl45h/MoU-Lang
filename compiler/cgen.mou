@@ -384,6 +384,15 @@ fn c_structs(out: mut [str], p: mir.Program) {
         line(mut out, "    return c;")
         line(mut out, "}}")
         line(mut out, "static kv KX{i}_box(KX{i}_t c) {{ return kagg(T_STRUCT, {i}, 0, {cs.kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
+        // Through an address: the whole struct is read, and only the
+        // members the program knows are written.
+        line(mut out, "static inline KX{i}_t KX{i}_load(void *p) {{ return *(KX{i}_t *)p; }}")
+        var sets: [str] = []
+        for k in 0..(fields.len as int) {
+            if k >= (cs.kinds.len as int) { break }
+            sets.push("((KX{i}_t *)p)->{fields[k]} = v.{fields[k]};")
+        }
+        line(mut out, "static inline void KX{i}_store(void *p, KX{i}_t v) {{ {text.join(sets, " ")} }}")
     }
 }
 

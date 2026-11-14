@@ -967,7 +967,13 @@ impl Walk<'_> {
                         if self.p.externs[*x].params == ["const"] {
                             notes.push((UNSAFE, format!("the C value `{name}` is read here")));
                         } else {
-                            notes.push((UNSAFE, format!("the C function `{name}` is called here")));
+                            // What the language itself gives to read and write at an address.
+                            let memory = name.starts_with("kmem_") || (name.starts_with("KX") && (name.ends_with("_load") || name.ends_with("_store")));
+                            if memory {
+                                notes.push((UNSAFE, "memory is read or written through an address here".to_string()));
+                            } else {
+                                notes.push((UNSAFE, format!("the C function `{name}` is called here")));
+                            }
                         }
                         // What C calls back counts as called here.
                         for a in args {

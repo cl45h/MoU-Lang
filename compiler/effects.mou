@@ -1503,7 +1503,9 @@ impl Walk {
                         if ext.params.len == 1 && ext.params[0] == "const" {
                             notes.push(Note(UNSAFE, "the C value `{ext.name}` is read here"))
                         } else {
-                            notes.push(Note(UNSAFE, "the C function `{ext.name}` is called here"))
+                            // What the language itself gives to read and write at an address.
+                            let memory = text.starts_with(ext.name, "kmem_") || (text.starts_with(ext.name, "KX") && (text.ends_with(ext.name, "_load") || text.ends_with(ext.name, "_store")))
+                            if memory { notes.push(Note(UNSAFE, "memory is read or written through an address here")) } else { notes.push(Note(UNSAFE, "the C function `{ext.name}` is called here")) }
                         }
                         // What C calls back counts as called here.
                         for a in args {

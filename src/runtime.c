@@ -2016,6 +2016,14 @@ static kv KOU_box(struct KOU s) { return s.has ? kbox(T_SOME, kint((i128)s.v)) :
 
 /* An address a C function gave or takes. It is kept as a number; null is
    no address. */
+/* A number at an address of C: read, and written. */
+#define KMEM(T, N) \
+    static inline T kmem_##N##_load(void *p) { T v; memcpy(&v, p, sizeof v); return v; } \
+    static inline void kmem_##N##_store(void *p, T v) { memcpy(p, &v, sizeof v); }
+KMEM(int8_t, i8) KMEM(int16_t, i16) KMEM(int32_t, i32) KMEM(int64_t, i64)
+KMEM(uint8_t, u8) KMEM(uint16_t, u16) KMEM(uint32_t, u32) KMEM(uint64_t, u64)
+KMEM(float, f32) KMEM(double, f64)
+
 static kv kptr_v_opt(const void *p) { return p ? kbox(T_SOME, kint((i128)(uintptr_t)p)) : KNONE; }
 
 static kv kptr_v(const void *p, const char *name) {

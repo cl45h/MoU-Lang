@@ -1850,6 +1850,11 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "    return c;").unwrap();
         writeln!(out, "}}").unwrap();
         writeln!(out, "static kv KX{i}_box(KX{i}_t c) {{ return kagg(T_STRUCT, {i}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+        // Through an address: the whole struct is read, and only the
+        // members the program knows are written.
+        writeln!(out, "static inline KX{i}_t KX{i}_load(void *p) {{ return *(KX{i}_t *)p; }}").unwrap();
+        let sets: Vec<String> = fields.iter().zip(kinds).map(|(f, _)| format!("((KX{i}_t *)p)->{f} = v.{f};")).collect();
+        writeln!(out, "static inline void KX{i}_store(void *p, KX{i}_t v) {{ {} }}", sets.join(" ")).unwrap();
     }
     let direct: Vec<Option<(Vec<Rep>, Rep)>> = p.fns.iter().map(|f| direct_sig(f, &p.fns, &recs_all)).collect();
     for (i, sig) in direct.iter().enumerate() {
