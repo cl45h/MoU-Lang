@@ -1,0 +1,60 @@
+// Files and directories.
+
+import std.io
+import std.raw
+import std.text
+
+/// All the bytes of a file.
+pub fn read_bytes(path: str) -> [u8] ! io.Error { raw.read_bytes(path)? }
+
+/// Writes a file with these bytes, in place of what it had.
+pub fn write_bytes(path: str, data: [u8]) ! io.Error { raw.write_bytes(path, data, false)? }
+
+/// Adds bytes at the end of a file, which is created if it is not there.
+pub fn append_bytes(path: str, data: [u8]) ! io.Error { raw.write_bytes(path, data, true)? }
+
+/// Adds text at the end of a file, which is created if it is not there.
+pub fn append(path: str, s: str) ! io.Error { raw.write_bytes(path, text.bytes(s), true)? }
+
+/// The names of what a directory holds, in order.
+pub fn list(path: str) -> [str] ! io.Error { raw.list_dir(path)? }
+
+/// Whether there is something with that name.
+pub fn exists(path: str) -> bool { raw.file_kind(path) != 0 }
+
+pub fn is_file(path: str) -> bool { raw.file_kind(path) == 1 }
+
+pub fn is_dir(path: str) -> bool { raw.file_kind(path) == 2 }
+
+/// Creates a directory. The one that holds it has to exist.
+pub fn make_dir(path: str) ! io.Error { raw.make_dir(path)? }
+
+/// Removes a file, or a directory that is empty.
+pub fn remove(path: str) ! io.Error { raw.remove(path)? }
+
+/// Gives a file or a directory another name, which can be in another directory.
+pub fn rename(from: str, to: str) ! io.Error { raw.rename(from, to)? }
+
+/// A file that is open, to read it or write it by parts.
+pub struct File { handle: int }
+
+/// Opens a file to read it from the start.
+pub fn open(path: str) -> File ! io.Error { File(raw.fopen(path, 0)?) }
+
+/// Opens a file to write it from the start: what it had is lost.
+pub fn create(path: str) -> File ! io.Error { File(raw.fopen(path, 1)?) }
+
+/// Opens a file to write at its end.
+pub fn extend(path: str) -> File ! io.Error { File(raw.fopen(path, 2)?) }
+
+impl File {
+    /// The next bytes, `max` at most. An empty array is the end of the file.
+    pub fn read(self, max: int) -> [u8] ! io.Error { raw.fread(self.handle, max)? }
+
+    pub fn write(self, data: [u8]) ! io.Error { raw.fwrite(self.handle, data)? }
+
+    pub fn write_text(self, s: str) ! io.Error { raw.fwrite(self.handle, text.bytes(s))? }
+
+    /// After this the file cannot be read or written.
+    pub fn close(self) ! io.Error { raw.fclose(self.handle)? }
+}

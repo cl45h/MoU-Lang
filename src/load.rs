@@ -15,6 +15,7 @@ use crate::parser;
 /// Standard modules written in the language itself.
 const STD: &[(&str, &str)] = &[
     ("std.cmp", include_str!("../std/cmp.mou")),
+    ("std.fs", include_str!("../std/fs.mou")),
     ("std.hash", include_str!("../std/hash.mou")),
     ("std.list", include_str!("../std/list.mou")),
     ("std.map", include_str!("../std/map.mou")),

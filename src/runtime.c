@@ -3224,6 +3224,209 @@ static kv kbuf_back(const void *buf, int64_t n, int kind) {
     return r;
 }
 
+/* ---- files ---- */
+
+#include <dirent.h>
+#include <sys/stat.h>
+
+static kv kio_read_bytes(kv path) {
+    FILE *f = fopen(kbytes(path), "rb");
+    krelease(path);
+    if (!f) return kos_error();
+    ksb sb = {0};
+    char buf[4096];
+    size_t n;
+    errno = 0;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) ksb_put(&sb, buf, n);
+    if (ferror(f)) {
+        kv r = kos_error();
+        fclose(f);
+        free(sb.p);
+        return r;
+    }
+    fclose(f);
+    kv r = kbox(T_OK, kbuf_back(sb.p ? sb.p : "", (int64_t)sb.len, KB_U8));
+    free(sb.p);
+    return r;
+}
+
+static kv kio_write_bytes(kv path, kv data, kv append) {
+    FILE *f = fopen(kbytes(path), append.u.t ? "ab" : "wb");
+    kv r;
+    if (!f) {
+        r = kos_error();
+    } else {
+        size_t n = (size_t)klen(data);
+        void *buf = kbuf_make(data, KB_U8);
+        bool ok = fwrite(buf, 1, n, f) == n;
+        free(buf);
+        ok = fclose(f) == 0 && ok;
+        r = ok ? kbox(T_OK, KUNIT) : kos_error();
+    }
+    krelease(path);
+    krelease(data);
+    return r;
+}
+
+static int kname_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+
+/* The names in a directory, in order. A name that is not text is left out. */
+static kv kio_list_dir(kv path) {
+    DIR *d = opendir(kbytes(path));
+    krelease(path);
+    if (!d) return kos_error();
+    char **names = NULL;
+    size_t n = 0, cap = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        const char *s = e->d_name;
+        if (!strcmp(s, ".") || !strcmp(s, "..") || !kutf8((const unsigned char *)s, strlen(s))) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 16;
+            names = (char **)realloc(names, cap * sizeof *names);
+            if (!names) kpanic("out of memory");
+        }
+        names[n] = strdup(s);
+        if (!names[n++]) kpanic("out of memory");
+    }
+    closedir(d);
+    if (n) qsort(names, n, sizeof *names, kname_cmp);
+    kv v = karray_new(P_NONE, (int64_t)n);
+    for (size_t i = 0; i < n; i++) {
+        ITEMS(v.u.o)[i] = kstr(names[i], strlen(names[i]));
+        free(names[i]);
+    }
+    free(names);
+    return kbox(T_OK, v);
+}
+
+/* 0 when there is nothing there, 1 a file, 2 a directory, 3 anything else. */
+static kv kio_file_kind(kv path) {
+    struct stat st;
+    int64_t kind = 0;
+    if (stat(kbytes(path), &st) == 0) kind = S_ISREG(st.st_mode) ? 1 : S_ISDIR(st.st_mode) ? 2 : 3;
+    krelease(path);
+    return kint(kind);
+}
+
+static kv kio_make_dir(kv path) {
+    kv r = mkdir(kbytes(path), 0777) == 0 ? kbox(T_OK, KUNIT) : kos_error();
+    krelease(path);
+    return r;
+}
+
+static kv kio_remove(kv path) {
+    struct stat st;
+    bool dir = lstat(kbytes(path), &st) == 0 && S_ISDIR(st.st_mode);
+    kv r = (dir ? rmdir(kbytes(path)) : unlink(kbytes(path))) == 0 ? kbox(T_OK, KUNIT) : kos_error();
+    krelease(path);
+    return r;
+}
+
+static kv kio_rename(kv from, kv to) {
+    kv r = rename(kbytes(from), kbytes(to)) == 0 ? kbox(T_OK, KUNIT) : kos_error();
+    krelease(from);
+    krelease(to);
+    return r;
+}
+
+/* The files the program has open. A file is its place here, and a closed
+   one leaves its place to the next that is opened. */
+static FILE **kfiles;
+static size_t kfiles_n;
+#ifdef KTHREADS
+static pthread_mutex_t kfiles_lock = PTHREAD_MUTEX_INITIALIZER;
+#define KFILES_LOCK() pthread_mutex_lock(&kfiles_lock)
+#define KFILES_UNLOCK() pthread_mutex_unlock(&kfiles_lock)
+#else
+#define KFILES_LOCK() ((void)0)
+#define KFILES_UNLOCK() ((void)0)
+#endif
+
+static kv kio_fopen(kv path, kv mode) {
+    int64_t m = (int64_t)ktakei(mode);
+    FILE *f = fopen(kbytes(path), m == 0 ? "rb" : m == 1 ? "wb" : "ab");
+    krelease(path);
+    if (!f) return kos_error();
+    /* What is written is in the file at once, as in the interpreter. */
+    setvbuf(f, NULL, _IONBF, 0);
+    KFILES_LOCK();
+    size_t at = 0;
+    while (at < kfiles_n && kfiles[at]) at++;
+    if (at == kfiles_n) {
+        kfiles = (FILE **)realloc(kfiles, (kfiles_n + 1) * sizeof *kfiles);
+        if (!kfiles) kpanic("out of memory");
+        kfiles_n++;
+    }
+    kfiles[at] = f;
+    KFILES_UNLOCK();
+    return kbox(T_OK, kint((int64_t)at));
+}
+
+static FILE *kfile_at(kv file, bool close) {
+    i128 h = ktakei(file);
+    FILE *f = NULL;
+    KFILES_LOCK();
+    if (h >= 0 && h < (i128)kfiles_n) {
+        f = kfiles[(size_t)h];
+        if (close) kfiles[(size_t)h] = NULL;
+    }
+    KFILES_UNLOCK();
+    return f;
+}
+
+static kv kio_fread(kv file, kv max) {
+    FILE *f = kfile_at(file, false);
+    i128 want = ktakei(max);
+    if (!f) return kfailed("the file is closed");
+    ksb sb = {0};
+    char buf[4096];
+    errno = 0;
+    while (want > 0) {
+        size_t ask = want < (i128)sizeof buf ? (size_t)want : sizeof buf;
+        size_t n = fread(buf, 1, ask, f);
+        if (n) ksb_put(&sb, buf, n);
+        want -= (i128)n;
+        if (n < ask) break;
+    }
+    if (ferror(f)) {
+        kv r = kos_error();
+        clearerr(f);
+        free(sb.p);
+        return r;
+    }
+    clearerr(f);
+    kv r = kbox(T_OK, kbuf_back(sb.p ? sb.p : "", (int64_t)sb.len, KB_U8));
+    free(sb.p);
+    return r;
+}
+
+static kv kio_fwrite(kv file, kv data) {
+    FILE *f = kfile_at(file, false);
+    if (!f) {
+        krelease(data);
+        return kfailed("the file is closed");
+    }
+    size_t n = (size_t)klen(data);
+    void *buf = kbuf_make(data, KB_U8);
+    errno = 0;
+    bool ok = fwrite(buf, 1, n, f) == n;
+    free(buf);
+    krelease(data);
+    if (!ok) {
+        kv r = kos_error();
+        clearerr(f);
+        return r;
+    }
+    return kbox(T_OK, KUNIT);
+}
+
+static kv kio_fclose(kv file) {
+    FILE *f = kfile_at(file, true);
+    if (!f) return kfailed("the file is closed");
+    return fclose(f) == 0 ? kbox(T_OK, KUNIT) : kos_error();
+}
+
 /* Calls a function value. Takes ownership of `f`; the callee leaves the
  * final values of its parameters in `args`. */
 static kv kcall(kv f, kv *args) {

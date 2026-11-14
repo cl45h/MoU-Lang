@@ -1352,7 +1352,9 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     for (l, rep) in cx.reps.iter().enumerate() {
         match rep {
             _ if l < f.params && mine.is_some() => {}
-            Rep::Int(k) if l < f.params => writeln!(out, "    {} s{l} = ({})kwide(a[{l}]);", ctype(k), ctype(k)).unwrap(),
+            // The value is let go of here: every `return` leaves a new one
+            // in its place, and a number too wide for a tagged value has a block.
+            Rep::Int(k) if l < f.params => writeln!(out, "    {} s{l} = ({})ktakei(a[{l}]);", ctype(k), ctype(k)).unwrap(),
             Rep::Int(k) => writeln!(out, "    {} s{l} = 0;", ctype(k)).unwrap(),
             Rep::Bool if l < f.params => writeln!(out, "    bool s{l} = a[{l}].u.t;").unwrap(),
             Rep::Bool => writeln!(out, "    bool s{l} = false;").unwrap(),

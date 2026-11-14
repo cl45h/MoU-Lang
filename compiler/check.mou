@@ -5402,6 +5402,18 @@ fn native(module: str, name: str) -> Native? {
         if name == "hash" { return Some(Native("raw.hash", types.Sig([param("text", types.Ty.Str)], int))) }
         if name == "mix" { return Some(Native("raw.mix", types.Sig([param("n", int)], int))) }
         if name == "parse_float" { return Some(Native("raw.parse_float", types.Sig([param("text", types.Ty.Str)], types.Ty.Optional(types.Ty.Float("f64"))))) }
+        let bytes = types.Ty.Slice(types.Ty.Int("u8"))
+        if name == "read_bytes" { return Some(Native("io.read_bytes", types.Sig([param("path", types.Ty.Str)], fails_io(bytes)))) }
+        if name == "write_bytes" { return Some(Native("io.write_bytes", types.Sig([param("path", types.Ty.Str), param("data", bytes), param("append", types.Ty.Bool)], fails_io(types.Ty.Unit)))) }
+        if name == "list_dir" { return Some(Native("io.list_dir", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Slice(types.Ty.Str))))) }
+        if name == "file_kind" { return Some(Native("io.file_kind", types.Sig([param("path", types.Ty.Str)], int))) }
+        if name == "make_dir" { return Some(Native("io.make_dir", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "remove" { return Some(Native("io.remove", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "rename" { return Some(Native("io.rename", types.Sig([param("from", types.Ty.Str), param("to", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "fopen" { return Some(Native("io.fopen", types.Sig([param("path", types.Ty.Str), param("mode", int)], fails_io(int)))) }
+        if name == "fread" { return Some(Native("io.fread", types.Sig([param("file", int), param("max", int)], fails_io(bytes)))) }
+        if name == "fwrite" { return Some(Native("io.fwrite", types.Sig([param("file", int), param("data", bytes)], fails_io(types.Ty.Unit)))) }
+        if name == "fclose" { return Some(Native("io.fclose", types.Sig([param("file", int)], fails_io(types.Ty.Unit)))) }
         if name == "fmath" { return Some(Native("raw.fmath", types.Sig([param("op", int), param("x", types.Ty.Float("f64")), param("y", types.Ty.Float("f64"))], types.Ty.Float("f64")))) }
         if name == "char_class" { return Some(Native("raw.char_class", types.Sig([param("c", types.Ty.Char)], int))) }
         if name == "char_case" { return Some(Native("raw.char_case", types.Sig([param("c", types.Ty.Char), param("upper", types.Ty.Bool)], types.Ty.Char))) }

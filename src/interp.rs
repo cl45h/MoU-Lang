@@ -67,6 +67,12 @@ thread_local! {
 }
 
 thread_local! {
+    /// The files the program has open. A file is its number here, and a
+    /// closed one leaves its place to the next that is opened.
+    static FILES: std::cell::RefCell<Vec<Option<std::fs::File>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+thread_local! {
     /// The arguments of the program being run, for `io.args`.
     pub static ARGS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -344,6 +350,82 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             Some(Value::Int(n)) => Value::Int(mix(*n as i64) as i128),
             _ => return Err(internal("`mix` of a value that is not an integer")),
         },
+        "io.read_bytes" => done(std::fs::read(&*text(0)?).map(|b| byte_array(&b))),
+        "io.write_bytes" => {
+            let data = bytes_of(&items(1)?)?;
+            let path = text(0)?;
+            done(match args.get(2) {
+                Some(Value::Bool(true)) => std::fs::OpenOptions::new().append(true).create(true).open(&*path).and_then(|mut f| f.write_all(&data)),
+                _ => std::fs::write(&*path, &data),
+            }.map(|()| Value::Unit))
+        }
+        "io.list_dir" => done(std::fs::read_dir(&*text(0)?).and_then(|entries| {
+            let mut names = Vec::new();
+            for e in entries {
+                // A name that is not text cannot be a `str`: it is left out.
+                if let Ok(name) = e?.file_name().into_string() {
+                    names.push(name);
+                }
+            }
+            names.sort();
+            Ok(Value::Array(Rc::new(names.into_iter().map(|n| Value::Str(n.into())).collect())))
+        })),
+        "io.file_kind" => Value::Int(match std::fs::metadata(&*text(0)?) {
+            Ok(m) if m.is_file() => 1,
+            Ok(m) if m.is_dir() => 2,
+            Ok(_) => 3,
+            Err(_) => 0,
+        }),
+        "io.make_dir" => done(std::fs::create_dir(&*text(0)?).map(|()| Value::Unit)),
+        "io.remove" => {
+            let path = text(0)?;
+            let dir = std::fs::symlink_metadata(&*path).is_ok_and(|m| m.is_dir());
+            done(if dir { std::fs::remove_dir(&*path) } else { std::fs::remove_file(&*path) }.map(|()| Value::Unit))
+        }
+        "io.rename" => done(std::fs::rename(&*text(0)?, &*text(1)?).map(|()| Value::Unit)),
+        "io.fopen" => {
+            let path = text(0)?;
+            let opened = match args.get(1) {
+                Some(Value::Int(0)) => std::fs::File::open(&*path),
+                Some(Value::Int(1)) => std::fs::File::create(&*path),
+                _ => std::fs::OpenOptions::new().append(true).create(true).open(&*path),
+            };
+            done(opened.map(|f| FILES.with(|fs| {
+                let mut fs = fs.borrow_mut();
+                let at = fs.iter().position(|f| f.is_none()).unwrap_or_else(|| {
+                    fs.push(None);
+                    fs.len() - 1
+                });
+                fs[at] = Some(f);
+                Value::Int(at as i128)
+            })))
+        }
+        "io.fread" | "io.fwrite" | "io.fclose" => {
+            let Some(Value::Int(h)) = args.first() else { return Err(internal("a file that is not a number")) };
+            let closed = || std::io::Error::other("the file is closed");
+            done(FILES.with(|fs| {
+                let mut fs = fs.borrow_mut();
+                let slot = usize::try_from(*h).ok().and_then(|h| fs.get_mut(h)).ok_or_else(closed)?;
+                match name {
+                    "io.fclose" => slot.take().map(|_| Value::Unit).ok_or_else(closed),
+                    "io.fwrite" => {
+                        let Some(Value::Array(xs)) = args.get(1) else { return Err(std::io::Error::other("no bytes")) };
+                        let data = bytes_of(xs).map_err(std::io::Error::other)?;
+                        slot.as_mut().ok_or_else(closed)?.write_all(&data).map(|()| Value::Unit)
+                    }
+                    _ => {
+                        use std::io::Read;
+                        let max = match args.get(1) {
+                            Some(Value::Int(n)) if *n > 0 => u64::try_from(*n).unwrap_or(u64::MAX),
+                            _ => 0,
+                        };
+                        let mut buf = Vec::new();
+                        slot.as_mut().ok_or_else(closed)?.take(max).read_to_end(&mut buf)?;
+                        Ok(byte_array(&buf))
+                    }
+                }
+            }))
+        }
         "raw.fmath" => match args {
             [Value::Int(op), Value::Float(x), Value::Float(y)] => Value::Float(fmath(*op as i64, *x, *y)),
             _ => return Err(internal("`fmath` of values that are not numbers")),
@@ -358,6 +440,17 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         },
         _ => return Err(internal("an unknown built-in function")),
     })
+}
+
+fn byte_array(bytes: &[u8]) -> Value {
+    Value::Array(Rc::new(bytes.iter().map(|b| Value::Int(*b as i128)).collect()))
+}
+
+fn bytes_of(items: &[Value]) -> Result<Vec<u8>, String> {
+    items.iter().map(|v| match v {
+        Value::Int(i) => Ok(*i as u8),
+        _ => Err(internal("an array of bytes with a value that is not a number")),
+    }).collect()
 }
 
 /// The functions of `std.math` on numbers with a fraction, by number.

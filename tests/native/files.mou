@@ -1,0 +1,57 @@
+import std.io
+import std.fs
+import std.text
+
+fn clean(dir: str) {
+    let names = fs.list(dir) catch e { return }
+    for n in names { fs.remove("{dir}/{n}") catch e {} }
+    fs.remove(dir) catch e {}
+}
+
+fn main() ! io.Error {
+    let dir = "/tmp/mou_fs_test"
+    clean(dir)
+    io.print("{fs.exists(dir)} {fs.is_dir("/tmp")} {fs.is_file("/tmp")}")?
+    fs.make_dir(dir)?
+    let again = fs.make_dir(dir) catch e { io.print("again: {e}")? }
+    fs.write_bytes("{dir}/b.bin", [0, 255, 10, 200, 65])?
+    fs.append_bytes("{dir}/b.bin", [66, 67])?
+    io.print("{fs.read_bytes("{dir}/b.bin")?}")?
+    fs.append("{dir}/a.txt", "uno\n")?
+    fs.append("{dir}/a.txt", "dos ñ\n")?
+    io.print(io.read_file("{dir}/a.txt")?)?
+    io.print("{fs.list(dir)?} {fs.is_file("{dir}/a.txt")} {fs.is_dir(dir)}")?
+    let bad = fs.read_bytes("{dir}/nothing") catch e {
+        io.print("missing: {e}")?
+        []
+    }
+    let notdir = fs.list("{dir}/a.txt") catch e {
+        io.print("not a directory: {e}")?
+        []
+    }
+
+    let out = fs.create("{dir}/parts.txt")?
+    for i in 0..5 { out.write_text("line {i}\n")? }
+    out.write([33, 10])?
+    let other = fs.open("{dir}/parts.txt")?
+    io.print("{out} {other} {other.read(7)?} {other.read(0)?}")?
+    out.close()?
+    let late = out.write_text("x") catch e { io.print("closed: {e}")? }
+    let twice = out.close() catch e { io.print("closed twice: {e}")? }
+    var total = 7
+    loop {
+        let part = other.read(8)?
+        if part.len == 0 { break }
+        total += part.len as int
+    }
+    other.close()?
+    let reused = fs.extend("{dir}/parts.txt")?
+    reused.write_text("end\n")?
+    reused.close()?
+    io.print("{total} {reused} {text.lines(io.read_file("{dir}/parts.txt")?)}")?
+    fs.rename("{dir}/a.txt", "{dir}/z.txt")?
+    io.print("{fs.list(dir)?}")?
+    let full = fs.remove(dir) catch e { io.print("not empty: {e}")? }
+    clean(dir)
+    io.print("{fs.exists(dir)}")?
+}

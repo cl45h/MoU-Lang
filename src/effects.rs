@@ -1043,7 +1043,7 @@ impl Walk<'_> {
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
                         }
-                        if matches!(*name, "io.read_line" | "io.read_file" | "io.args" | "io.env" | "io.run" | "raw.concat" | "raw.from_chars" | "path.join") {
+                        if matches!(*name, "io.read_line" | "io.read_file" | "io.args" | "io.env" | "io.run" | "io.read_bytes" | "io.list_dir" | "io.fread" | "raw.concat" | "raw.from_chars" | "path.join") {
                             let shown = if *name == "path.join" { "a call that returns `ref mut`".to_string() } else { format!("`{name}`") };
                             notes.push((ALLOC, format!("{shown} creates its result on the heap")));
                         }
