@@ -35,6 +35,7 @@ const MAX_DEPTH: usize = 100_000;
 pub fn run(p: &Program, main: usize, out: &mut dyn Write) -> Result<Value, Panic> {
     // A run that stopped inside a `with io` block left it open.
     CAPTURE.with(|c| *c.borrow_mut() = (Vec::new(), Vec::new()));
+    INPUT.with(|c| c.borrow_mut().clear());
     let mut consts = Vec::new();
     for (k, &f) in p.consts.iter().enumerate() {
         // A constant computed while compiling is not computed again.
@@ -58,6 +59,9 @@ thread_local! {
     /// What is printed inside the `with io = lines` blocks that are open:
     /// the lines, and where the lines of each block start.
     static CAPTURE: std::cell::RefCell<(Vec<String>, Vec<usize>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+    /// The lines `io.read_line` gives inside `with input` blocks, and how
+    /// many of each were read: the innermost block is the last.
+    static INPUT: std::cell::RefCell<Vec<(Rc<Vec<Value>>, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether what runs is a constant being computed, and not the program.
     pub static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -217,6 +221,15 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         _ if name.starts_with("mutex.") => shared(name, args)?,
         "task.open" => Value::Int(0),
         "task.close" | "task.cancel" | "arena.close" => Value::Unit,
+        "input.open" => {
+            let Some(Value::Array(lines)) = args.first() else { return Err(internal("`with input` without an array")) };
+            INPUT.with(|c| c.borrow_mut().push((lines.clone(), 0)));
+            Value::Unit
+        }
+        "input.close" => {
+            INPUT.with(|c| c.borrow_mut().pop());
+            Value::Unit
+        }
         "capture.open" => CAPTURE.with(|c| {
             let mut c = c.borrow_mut();
             let from = c.0.len();
@@ -245,6 +258,17 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             let _ = out.flush();
             done(writeln!(std::io::stderr(), "{}", text(0)?).map(|()| Value::Unit))
         }
+        // Inside a `with input` block the lines are the ones it was given.
+        "io.read_line" if INPUT.with(|c| !c.borrow().is_empty()) => INPUT.with(|c| {
+            let mut c = c.borrow_mut();
+            let Some((lines, next)) = c.last_mut() else { return Value::Ok(Box::new(Value::None)) };
+            let line = lines.get(*next).cloned();
+            *next += 1;
+            Value::Ok(Box::new(match line {
+                Some(l) => Value::Some(Box::new(l)),
+                None => Value::None,
+            }))
+        }),
         "io.read_line" => {
             let _ = out.flush();
             let mut line = String::new();

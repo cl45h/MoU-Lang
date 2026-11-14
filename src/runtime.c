@@ -1754,7 +1754,43 @@ static kv kio_eprint(kv v) {
 }
 
 /* The next line of the input without its end, or `None` when there is none. */
+/* The lines `io.read_line` gives inside `with input = lines` blocks:
+   the innermost one is the last. */
+#define KINPUT_MAX 16
+static struct {
+    kv lines[KINPUT_MAX];
+    int64_t next[KINPUT_MAX];
+    int depth;
+} kinput;
+
+static kv kinput_open(kv lines) {
+    KCAP_LOCK();
+    if (kinput.depth == KINPUT_MAX) kpanic("too many `with input` blocks, one inside another");
+    kinput.lines[kinput.depth] = lines;
+    kinput.next[kinput.depth++] = 0;
+    KCAP_UNLOCK();
+    return KUNIT;
+}
+
+static kv kinput_close(void) {
+    kv old = KUNIT;
+    KCAP_LOCK();
+    if (kinput.depth) old = kinput.lines[--kinput.depth];
+    KCAP_UNLOCK();
+    krelease(old);
+    return KUNIT;
+}
+
 static kv kio_read_line(void) {
+    KCAP_LOCK();
+    if (kinput.depth) {
+        int d = kinput.depth - 1;
+        kv line = KNONE;
+        if (kinput.next[d] < klen(kinput.lines[d])) line = kbox(T_SOME, kretain(kelem(kinput.lines[d].u.o, kinput.next[d]++)));
+        KCAP_UNLOCK();
+        return kbox(T_OK, line);
+    }
+    KCAP_UNLOCK();
     ksb sb = {0};
     int c;
     bool any = false;

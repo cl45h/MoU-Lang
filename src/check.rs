@@ -4339,7 +4339,14 @@ impl<'a> Checker<'a> {
                         }
                         self.require_mut_place(value);
                     }
-                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }` and `with io = lines { }`"),
+                    [(name, value)] if name == "input" => {
+                        let t = self.expr(value);
+                        if !assignable(&Ty::Slice(Box::new(Ty::Str)), &t) {
+                            let shown = self.show(&t);
+                            self.err(value.span, format!("`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`"));
+                        }
+                    }
+                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }`, `with io = lines { }` and `with input = lines { }`"),
                     _ => {}
                 }
                 self.scopes.push(HashMap::new());

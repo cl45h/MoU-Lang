@@ -766,6 +766,9 @@ struct Scope<'a> {
     /// The scope of a `with io = lines` block: where the lines it prints
     /// are left on the way out.
     capture: Option<Place>,
+    /// The scope of a `with input = lines` block: on the way out,
+    /// `io.read_line` reads again from where it did before.
+    input: bool,
 }
 
 struct LoopCtx {
@@ -1489,6 +1492,10 @@ impl<'a> Lower<'a> {
                 let span = self.span;
                 let all = self.finish_call(Callee::Native("capture.close"), vec![Operand::Place(lines.clone())], Vec::new(), span);
                 self.emit(lines, Rvalue::Use(all));
+            }
+            if self.scopes[k].input {
+                let span = self.span;
+                self.finish_call(Callee::Native("input.close"), Vec::new(), Vec::new(), span);
             }
             let defers = self.scopes[k].defers.clone();
             if defers.is_empty() {
@@ -2401,6 +2408,23 @@ impl<'a> Lower<'a> {
                 self.run_defers(self.scopes.len() - 1);
                 self.scopes.pop();
                 v
+            }
+            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "input") => {
+                // What `io.read_line` gives is taken from these lines
+                // until the block is left.
+                let lines = self.expr(&bindings[0].1);
+                self.span = span;
+                self.scopes.push(Scope::default());
+                self.finish_call(Callee::Native("input.open"), vec![lines], Vec::new(), span);
+                if let Some(scope) = self.scopes.last_mut() {
+                    scope.input = true;
+                }
+                let v = self.block(body);
+                let kept = self.stash(v);
+                self.span = span;
+                self.run_defers(self.scopes.len() - 1);
+                self.scopes.pop();
+                Operand::Place(kept)
             }
             ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io") => {
                 // What is printed is kept until the block is left.

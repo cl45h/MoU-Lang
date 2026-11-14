@@ -1,0 +1,49 @@
+import std.io
+import std.text
+
+// A program that asks and answers, tried without anyone typing: what it
+// reads is given to it, and what it prints is kept.
+
+fn greet() ! io.Error {
+    io.print("name?")?
+    match io.read_line()? {
+        Some(name) => io.print("hello, {name}")?
+        None => io.print("nobody")?
+    }
+}
+
+fn total() -> int ! io.Error {
+    var sum = 0
+    while true {
+        match io.read_line()? {
+            Some(line) => {
+                match text.parse_int(line) {
+                    Some(n) => {
+                        sum += n
+                    }
+                    None => {}
+                }
+            }
+            None => break
+        }
+    }
+    sum
+}
+
+fn main() ! io.Error {
+    var out: [str] = []
+    with input = ["Ana"] {
+        with io = out { greet()? }
+    }
+    io.print("{out}")?
+    with input = [] { greet()? }
+    let numbers = ["3", "x", "40", "-1"]
+    with input = numbers {
+        io.print("{total()?}")?
+        // The lines are over: there is nothing more to read.
+        io.print("{total()?}")?
+        // An inner block has its own lines, and the outer one goes on after it.
+        with input = ["7"] { io.print("{total()?}")? }
+        io.print("{total()?}")?
+    }
+}

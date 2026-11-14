@@ -4575,8 +4575,15 @@ impl Checker {
                         self.err(at_expr(value), "`with io = ...` takes a variable of type `[str]`, where the lines the block prints are kept, and this is `{shown}`")
                     }
                     self.require_mut_place(value)
+                } else if bindings.len == 1 && bindings[0].name == "input" {
+                    let value = bindings[0].value
+                    let t = self.expr(value)
+                    if !types.assignable(types.Ty.Slice(types.Ty.Str), t) {
+                        let shown = self.show(t)
+                        self.err(at_expr(value), "`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`")
+                    }
                 } else {
-                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}` and `with io = lines {{ }}`") }
+                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}`, `with io = lines {{ }}` and `with input = lines {{ }}`") }
                 }
                 self.scopes.push([])
                 let t = self.block(body)
