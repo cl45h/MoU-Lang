@@ -261,3 +261,127 @@ impl Udp {
 
     pub fn close(self) { socket.close(self.fd) }
 }
+
+/// What happened to a connection of a `Server`. The number names the
+/// connection: it is the one to answer or to close.
+pub enum Event {
+    /// Someone connected.
+    Open(int)
+    /// Bytes came.
+    Data(int, [u8])
+    /// The other side will send nothing more. It can still be answered; the
+    /// connection stays until it is closed.
+    Done(int)
+}
+
+/// Many connections served from one task: `next` waits until something
+/// happens and says what, and the program answers. It keeps the list of
+/// connections, so the program does not.
+///
+///     var server = net.Server.on(net.listen("0.0.0.0", 8080)?)
+///     while true {
+///         for event in server.next(-1)? {
+///             match event {
+///                 Data(who, bytes) => { server.send(who, bytes)? }
+///                 Done(who) => { server.close(who) }
+///                 Open(_) => {}
+///             }
+///         }
+///     }
+pub struct Server {
+    listener: Listener,
+    conns: [Conn],
+    // The number each connection is known by, and whether its end was told.
+    names: [int],
+    ended: [bool],
+    made: int,
+}
+
+impl Server {
+    pub fn on(listener: Listener) -> Server { Server(listener, [], [], [], 0) }
+
+    /// How many connections are open.
+    pub fn len(self) -> int { self.conns.len as int }
+
+    fn place(self, who: int) -> int? {
+        for k in 0..(self.names.len as int) {
+            if self.names[k] == who { return Some(k) }
+        }
+        None
+    }
+
+    /// Waits until something happens, up to `ms` milliseconds (forever when
+    /// negative), and says what: nothing when the time ran out.
+    pub fn next(mut self, ms: int) -> [Event] ! Error {
+        // A connection that ended is not asked about again.
+        var asked: [Conn] = []
+        var places: [int] = []
+        for k in 0..(self.conns.len as int) {
+            if !self.ended[k] {
+                asked.push(self.conns[k])
+                places.push(k)
+            }
+        }
+        let ready = wait(Some(self.listener), asked, ms)?
+        var events: [Event] = []
+        for at in ready.conns {
+            let k = places[at]
+            let piece = self.conns[k].read(65536)?
+            if piece.len == 0 {
+                self.ended[k] = true
+                events.push(Event.Done(self.names[k]))
+            } else {
+                events.push(Event.Data(self.names[k], piece))
+            }
+        }
+        if ready.accept {
+            let conn = self.listener.accept()?
+            self.made += 1
+            self.conns.push(conn)
+            self.names.push(self.made)
+            self.ended.push(false)
+            events.push(Event.Open(self.made))
+        }
+        events
+    }
+
+    /// Sends bytes to a connection.
+    pub fn send(self, who: int, data: [u8]) ! Error {
+        match self.place(who) {
+            Some(k) => self.conns[k].write(data)?
+            None => return Error.Closed
+        }
+    }
+
+    /// Closes a connection, which leaves the server. Closing one that is
+    /// not there does nothing.
+    pub fn close(mut self, who: int) {
+        let k = match self.place(who) {
+            Some(k) => k
+            None => return
+        }
+        self.conns[k].close()
+        var conns: [Conn] = []
+        var names: [int] = []
+        var ended: [bool] = []
+        for i in 0..(self.conns.len as int) {
+            if i != k {
+                conns.push(self.conns[i])
+                names.push(self.names[i])
+                ended.push(self.ended[i])
+            }
+        }
+        self.conns = conns
+        self.names = names
+        self.ended = ended
+    }
+
+    /// Closes every connection and stops waiting for more.
+    pub fn stop(mut self) {
+        for c in self.conns { c.close() }
+        self.conns = []
+        self.names = []
+        self.ended = []
+        self.listener.close()
+    }
+}

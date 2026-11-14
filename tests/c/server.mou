@@ -1,0 +1,87 @@
+import std.io
+import std.net
+import std.text
+
+// One task serves every connection with `net.Server`: it is told what
+// happens and answers. Four clients talk to it at once, one of them in
+// several pieces.
+
+fn ask(port: int, parts: [str]) -> str ! net.Error {
+    let conn = net.connect("127.0.0.1", port)?
+    for p in parts { conn.send(p)? }
+    conn.finish()
+    let answer = conn.read_all()?
+    conn.close()
+    match text.from_bytes(answer) {
+        Some(t) => t
+        None => "?"
+    }
+}
+
+fn client(port: int, parts: [str]) -> str { ask(port, parts) catch e { "failed" } }
+
+// Answers `clients` connections: each gets back what it sent, in upper
+// case, once it has sent everything.
+fn serve(listener: net.Listener, clients: int) -> [int] ! net.Error {
+    var server = net.Server.on(listener)
+    var heard: [[u8]] = []
+    var names: [int] = []
+    var done = 0
+    var opened = 0
+    var most = 0
+    while done < clients {
+        let events = server.next(5000)?
+        if events.len == 0 { return net.Error.Failed("hear from the clients in time") }
+        for event in events {
+            match event {
+                Open(who) => {
+                    opened += 1
+                    names.push(who)
+                    heard.push([])
+                    if server.len() > most { most = server.len() }
+                }
+                Data(who, bytes) => {
+                    for k in 0..(names.len as int) {
+                        if names[k] == who {
+                            for b in bytes { heard[k].push(b) }
+                        }
+                    }
+                }
+                Done(who) => {
+                    for k in 0..(names.len as int) {
+                        if names[k] == who {
+                            let said = match text.from_bytes(heard[k]) {
+                                Some(t) => t
+                                None => "?"
+                            }
+                            server.send(who, text.bytes(text.upper(said)))?
+                        }
+                    }
+                    server.close(who)
+                    done += 1
+                }
+            }
+        }
+    }
+    let left = server.len()
+    server.send(999, [1]) catch e {}
+    server.close(999)
+    server.stop()
+    [opened, done, left]
+}
+
+fn main() ! io.Error {
+    let listener = net.listen("127.0.0.1", 0) catch e { return io.print("failed: {e}")? }
+    let port = listener.port() catch e { 0 }
+    scope s {
+        let served = s.spawn(serve(listener, 4))
+        let a = s.spawn(client(port, ["uno"]))
+        let b = s.spawn(client(port, ["dos ", "y ", "medio"]))
+        let c = s.spawn(client(port, ["ñandú"]))
+        let d = s.spawn(client(port, []))
+        var answers = [a.wait(), b.wait(), c.wait(), d.wait()]
+        io.print("{answers}")?
+        let counts = served.wait() catch e { [0 - 1] }
+        io.print("{counts}")?
+    }
+}
