@@ -1707,6 +1707,9 @@ static struct {
     size_t n, cap;
     size_t marks[KCAPTURE_MAX];
     int depth;
+    /* Whether the last entry was left without its end by `io.write`: what
+       is printed next goes on in it. */
+    bool open;
 } kcap;
 #ifdef KTHREADS
 static pthread_mutex_t kcap_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1721,18 +1724,33 @@ static kv kcapture_open(void) {
     KCAP_LOCK();
     if (kcap.depth == KCAPTURE_MAX) kpanic("too many `with io` blocks, one inside another");
     kcap.marks[kcap.depth++] = kcap.n;
+    kcap.open = false;
     KCAP_UNLOCK();
     return KUNIT;
 }
 
-/* Keeps a line when a block is open. Takes the text when it does. */
-static bool kcapture_line(char *text, size_t len) {
+/* Keeps a line when a block is open, or a piece of one when `whole` is
+   false. Takes the text when it does. */
+static bool kcapture_line(char *text, size_t len, bool whole) {
     if (!kcap.depth) return false;
     KCAP_LOCK();
     if (!kcap.depth) {
         KCAP_UNLOCK();
         return false;
     }
+    if (kcap.open) {
+        size_t had = kcap.lens[kcap.n - 1];
+        char *line = (char *)realloc(kcap.lines[kcap.n - 1], had + len + 1);
+        if (!line) kpanic("out of memory");
+        if (len) memcpy(line + had, text, len);
+        kcap.lines[kcap.n - 1] = line;
+        kcap.lens[kcap.n - 1] = had + len;
+        kcap.open = !whole;
+        KCAP_UNLOCK();
+        free(text);
+        return true;
+    }
+    kcap.open = !whole;
     if (kcap.n == kcap.cap) {
         kcap.cap = kcap.cap ? kcap.cap * 2 : 16;
         kcap.lines = (char **)realloc(kcap.lines, kcap.cap * sizeof(char *));
@@ -1751,6 +1769,7 @@ static kv kcapture_close(kv old) {
     size_t from = kcap.depth ? kcap.marks[--kcap.depth] : kcap.n;
     size_t to = kcap.n;
     kcap.n = from;
+    kcap.open = false;
     char **lines = NULL;
     size_t *lens = NULL;
     if (to > from) {
@@ -1774,7 +1793,7 @@ static kv kcapture_close(kv old) {
 static kv kprint(kv v) {
     ksb sb = {0};
     kshow(&sb, v, true);
-    if (kcapture_line(sb.p, sb.len)) {
+    if (kcapture_line(sb.p, sb.len, true)) {
         krelease(v);
         return kbox(T_OK, KUNIT);
     }
@@ -1782,6 +1801,20 @@ static kv kprint(kv v) {
     bool ok = fwrite(sb.p, 1, sb.len, stdout) == sb.len;
     free(sb.p);
     krelease(v);
+    if (ok) return kbox(T_OK, KUNIT);
+    return kbox(T_ERR, kstr("write error", 11));
+}
+
+/* `io.write`: the text as it is, without the end of the line. */
+static kv kio_write(kv text) {
+    size_t len = (size_t)klen(text);
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) kpanic("out of memory");
+    if (len) memcpy(copy, BYTES(text.u.o), len);
+    krelease(text);
+    if (kcapture_line(copy, len, false)) return kbox(T_OK, KUNIT);
+    bool ok = fwrite(copy, 1, len, stdout) == len;
+    free(copy);
     if (ok) return kbox(T_OK, KUNIT);
     return kbox(T_ERR, kstr("write error", 11));
 }

@@ -1515,6 +1515,7 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
     let int = Ty::Int("i64");
     let (native, params, ret) = match (module, name) {
         ("std.io", "print") => ("io.print", vec![param("text", Ty::Str)], fails(Ty::Unit)),
+        ("std.io", "write") => ("io.write", vec![param("text", Ty::Str)], fails(Ty::Unit)),
         ("std.io", "eprint") => ("io.eprint", vec![param("text", Ty::Str)], fails(Ty::Unit)),
         ("std.io", "read_line") => ("io.read_line", vec![], fails(Ty::Optional(Box::new(Ty::Str)))),
         ("std.io", "read_file") => ("io.read_file", vec![param("path", Ty::Str)], fails(Ty::Str)),

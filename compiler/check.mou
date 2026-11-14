@@ -5480,6 +5480,7 @@ fn native(module: str, name: str) -> Native? {
     let int = types.Ty.Int("i64")
     if module == "std.io" {
         if name == "print" { return Some(Native("io.print", types.Sig([param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
+        if name == "write" { return Some(Native("io.write", types.Sig([param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "eprint" { return Some(Native("io.eprint", types.Sig([param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "read_line" { return Some(Native("io.read_line", types.Sig([], fails_io(types.Ty.Optional(types.Ty.Str))))) }
         if name == "read_file" { return Some(Native("io.read_file", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Str)))) }

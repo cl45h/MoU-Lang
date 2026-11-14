@@ -35,6 +35,7 @@ const MAX_DEPTH: usize = 100_000;
 pub fn run(p: &Program, main: usize, out: &mut dyn Write) -> Result<Value, Panic> {
     // A run that stopped inside a `with io` block left it open.
     CAPTURE.with(|c| *c.borrow_mut() = (Vec::new(), Vec::new()));
+    OPEN_LINE.set(false);
     INPUT.with(|c| c.borrow_mut().clear());
     let mut consts = Vec::new();
     for (k, &f) in p.consts.iter().enumerate() {
@@ -64,6 +65,25 @@ thread_local! {
     static INPUT: std::cell::RefCell<Vec<(Rc<Vec<Value>>, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// Whether what runs is a constant being computed, and not the program.
     pub static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+thread_local! {
+    /// Whether the last line kept by a `with io` block was left without its
+    /// end by `io.write`: what is printed next goes on in it.
+    static OPEN_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keeps what is printed inside a `with io` block: a whole line, or a piece
+/// of one.
+fn capture(text: String, whole: bool) {
+    CAPTURE.with(|c| {
+        let mut c = c.borrow_mut();
+        match c.0.last_mut() {
+            Some(last) if OPEN_LINE.get() => last.push_str(&text),
+            _ => c.0.push(text),
+        }
+    });
+    OPEN_LINE.set(!whole);
 }
 
 thread_local! {
@@ -236,7 +256,17 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             INPUT.with(|c| c.borrow_mut().pop());
             Value::Unit
         }
+        "io.write" => {
+            let piece = text(0)?;
+            if CAPTURE.with(|c| !c.borrow().1.is_empty()) {
+                capture(piece.to_string(), false);
+                Value::Ok(Box::new(Value::Unit))
+            } else {
+                done(write!(out, "{piece}").map(|()| Value::Unit))
+            }
+        }
         "capture.open" => CAPTURE.with(|c| {
+            OPEN_LINE.set(false);
             let mut c = c.borrow_mut();
             let from = c.0.len();
             c.1.push(from);
@@ -245,6 +275,7 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
         "capture.close" => {
             let Some(Value::Array(old)) = args.first() else { return Err(internal("`with io` without an array")) };
             let mut all: Vec<Value> = old.iter().cloned().collect();
+            OPEN_LINE.set(false);
             CAPTURE.with(|c| {
                 let mut c = c.borrow_mut();
                 let from = c.1.pop().unwrap_or(0).min(c.0.len());
@@ -653,7 +684,7 @@ fn exec(p: &Program, consts: &[Value], func: usize, out: &mut dyn Write) -> Resu
                         let text = vals.first().map_or(String::new(), |v| show(p, v, true));
                         let capturing = CAPTURE.with(|c| !c.borrow().1.is_empty());
                         let result = if capturing {
-                            CAPTURE.with(|c| c.borrow_mut().0.push(text));
+                            capture(text, true);
                             Value::Ok(Box::new(Value::Unit))
                         } else {
                             match writeln!(out, "{text}") {

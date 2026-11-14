@@ -320,7 +320,7 @@ Hay dos implementaciones del compilador que dan lo mismo: la primera, en Rust (`
 5. Indexar un `str`: el verificador solo acepta rangos (`s[..i]`), no un entero, porque `str` es UTF-8. Falta confirmarlo como regla del lenguaje.
 
 6. Resuelta junto con la 4: `as` fuera de rango es un panic, en el intérprete y en el binario.
-7. `io.print` escribe una línea (agrega el salto). Falta decidir si habrá una variante sin salto.
+7. Resuelta: `io.print` escribe una línea e `io.write` el texto tal cual, sin el salto (`io.write("nombre? ")` antes de un `io.read_line`). Dentro de un `with io`, lo que deja `io.write` sigue en el mismo elemento hasta el próximo `io.print`, que lo termina.
 8. Un `int` devuelto por `main` es el código de salida del proceso; un error devuelto por `main` se informa y sale con 1; un panic sale con 101.
 9. Resuelta: `x + 300` con `x: u8` es un error de compilación, igual que `let x: u8 = 300`.
 10. `[T]` como buffer que crece: la sección 3 dice que `[T]` es una vista, pero hoy un `[T]` es dueño de sus datos y tiene `push` y `pop`, porque hacía falta una primitiva para escribir `List[T]` en el propio lenguaje. Cuando existan referencias y regiones, la primitiva debería ser un buffer aparte y `[T]` volver a ser solo una vista. El código que usa `std.list` no cambia.
@@ -364,7 +364,7 @@ Un archivo es un módulo. `import geo.shapes` carga `geo/shapes.mou`, buscado ju
 
 | Módulo | Contenido |
 |---|---|
-| `std.io` | Del compilador: `io.print`, `io.eprint` (a la salida de errores), `io.read_line` (devuelve `None` al terminar la entrada), `io.read_file`, `io.write_file`, `io.args` (los argumentos del programa), `io.env(nombre)` (una variable de entorno, o `None`), `io.run(programa, argumentos, entrada)` (corre un programa hasta que termina, sin pasar por un shell, y da lo que escribió; si termina con un estado distinto de 0 es un error que cita la primera línea de su salida de errores) e `io.Error` |
+| `std.io` | Del compilador: `io.print` (una línea), `io.write` (el texto tal cual, sin el salto), `io.eprint` (a la salida de errores), `io.read_line` (devuelve `None` al terminar la entrada), `io.read_file`, `io.write_file`, `io.args` (los argumentos del programa), `io.env(nombre)` (una variable de entorno, o `None`), `io.run(programa, argumentos, entrada)` (corre un programa hasta que termina, sin pasar por un shell, y da lo que escribió; si termina con un estado distinto de 0 es un error que cita la primera línea de su salida de errores) e `io.Error` |
 | `std.pool` | `Pool[T]` y `Handle[T]`: valores que se nombran entre sí (grafos, listas dobles, árboles con puntero al padre). `add` da el `Handle` de un valor, `at(h)` lo lee, `slot(h)` lo deja modificar en el lugar (`pool.slot(h).next = otro`), `get(h)` da `None` si ya no está, `remove(h)` lo saca y deja el lugar libre, y `has`, `len`, `handles` y `values`. Un `Handle` es un lugar y un número de turno: el de un valor que se sacó no sirve para el que ocupó su lugar después |
 | `std.py` | Python dentro del programa: `py.module(nombre)` da un módulo, y un `Object` tiene `attr`, `call`, `method`, `item`, `get`, `len`, `items`, `show`, `as_int`, `as_float`, `as_str`, `truthy` y `release`. Los valores van con `py.from_int`, `py.from_float`, `py.from_bool`, `py.from_str`, `py.none`, `py.list`, `py.tuple` y `py.dict`; `py.run(código)` corre sentencias. Una excepción de Python es un `py.Error` con su texto |
 | `std.cpython` | Soporte de `std.py`: un módulo `system` con las funciones de CPython envueltas una por una |

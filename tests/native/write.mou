@@ -1,0 +1,31 @@
+import std.io
+
+fn bar(n: int) ! io.Error {
+    io.write("[")?
+    for i in 0..n { io.write("#")? }
+    io.print("] {n}")?
+}
+
+fn main() ! io.Error {
+    io.write("a")?
+    io.write("")?
+    io.write("b ñ ")?
+    io.print("c")?
+    bar(3)?
+    var out: [str] = ["before"]
+    with io = out {
+        bar(2)?
+        io.write("left ")?
+        io.write("open")?
+        var inner: [str] = []
+        with io = inner {
+            io.write("x")?
+            io.print("y")?
+            io.write("tail")?
+        }
+        io.print("{inner}")?
+        io.write("last")?
+    }
+    io.print("{out}")?
+    io.write("no newline at the end")?
+}
