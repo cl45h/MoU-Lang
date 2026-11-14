@@ -327,11 +327,11 @@ fn c_callbacks(out: mut [str], p: mir.Program) {
         if ret == "unit" {
             line(mut out, "    krelease(r);")
         } else {
-            var value = "({c_int(ret)})r.u.i"
+            var value = "({c_int(ret)})kwide(r)"
             if ret == "bool" { value = "r.u.t" }
             if ret == "f64" { value = "r.u.f" }
             if ret == "f32" { value = "r.u.g" }
-            if ret == "ptr" { value = "(void *)(uintptr_t)r.u.i" }
+            if ret == "ptr" { value = "(void *)(uintptr_t)kwide(r)" }
             if ret == "ptr?" { value = "kptr_c_opt(r)" }
             line(mut out, "    {cb_type(ret)} out = {value};")
             line(mut out, "    krelease(r);")
@@ -356,7 +356,7 @@ fn c_structs(out: mut [str], p: mir.Program) {
             if k >= (cs.kinds.len as int) { break }
             let f = fields[k]
             let kind = cs.kinds[k]
-            var read = "({c_int(kind)})it[{k}].u.i"
+            var read = "({c_int(kind)})kwide(it[{k}])"
             var back = "kint((i128)(c.{f}))"
             if kind == "bool" {
                 read = "it[{k}].u.t"
@@ -371,7 +371,7 @@ fn c_structs(out: mut [str], p: mir.Program) {
                 back = "kf32(c.{f})"
             }
             if kind == "ptr" {
-                read = "(void *)(uintptr_t)it[{k}].u.i"
+                read = "(void *)(uintptr_t)kwide(it[{k}])"
                 back = "kptr_v(c.{f}, {quote(f)})"
             }
             if kind == "ptr?" {
@@ -1404,20 +1404,26 @@ impl Cx {
     fn untagged(self, op: mir.Operand, part: str, item: str, field_item: str) -> str ! Fail {
         match op {
             mir.Operand.At(p) => {
-                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{self.at(p.local)}].{part}" }
+                // A whole number may be kept in a block: it is read
+                // through `kwide`, and one made for this is let go of.
+                let whole = part == "u.i"
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) {
+                    if whole { return "kwide(L[{self.at(p.local)}])" }
+                    return "L[{self.at(p.local)}].{part}"
+                }
                 if let Some(it) = self.item(p, false)? { return "{item}({it.base}, {it.index})" }
                 if let Some(fi) = self.field_item(p, false)? { return "{field_item}({fi.base}, {fi.index}, {fi.field})" }
                 match self.ptr(p.local, p.proj, false) {
-                    Some(ptr) => "{ptr}->{part}"
+                    Some(ptr) => if whole { "kwide(*{ptr})" } else { "{ptr}->{part}" }
                     None => {
                         let v = self.operand(op)?
-                        "({v}).{part}"
+                        if whole { "ktakei({v})" } else { "({v}).{part}" }
                     }
                 }
             }
             _ => {
                 let v = self.operand(op)?
-                "({v}).{part}"
+                if part == "u.i" { "ktakei({v})" } else { "({v}).{part}" }
             }
         }
     }
@@ -1728,7 +1734,7 @@ impl Cx {
                     let y = self.int(b)?
                     // The slow way does the operation again on tagged
                     // values, and reports the overflow or the division by zero.
-                    let again = "({t})(kbin({binop(op)}, {kind(k)}, kint((i128)(x_)), kint((i128)(y_)))).u.i"
+                    let again = "({t})ktakei(kbin({binop(op)}, {kind(k)}, kint((i128)(x_)), kint((i128)(y_))))"
                     let head = "{t} x_ = ({t})({x}), y_ = ({t})({y}), r_;"
                     var builtin = ""
                     if op == "+" { builtin = "add" }
@@ -1749,21 +1755,21 @@ impl Cx {
                 }
                 if same {
                     let x = self.int(a)?
-                    let again = "({t})(ksucc(kint((i128)(x_)), {kind(k)})).u.i"
+                    let again = "({t})ktakei(ksucc(kint((i128)(x_)), {kind(k)}))"
                     return "({{ {t} x_ = ({t})({x}), r_; (__builtin_add_overflow(x_, 1, &r_){narrow(k, "r_")}) ? {again} : r_; }})"
                 }
             }
             mir.Rvalue.CastInt(a, given) => {
                 if given == k {
                     if let Some(x) = self.known_int(a) {
-                        let again = "({t})(kcast_int(kint(v_), {kind(k)})).u.i"
+                        let again = "({t})ktakei(kcast_int(kint(v_), {kind(k)}))"
                         return "({{ i128 v_ = (i128)({x}); (v_ < {wide(low_of(k))} || v_ > {wide(high_of(k))}) ? {again} : ({t})v_; }})"
                     }
                 }
             }
             _ => {}
         }
-        "({t})({self.rvalue(rv)?}).u.i"
+        "({t})ktakei({self.rvalue(rv)?})"
     }
 
     // An rvalue as a C boolean.
@@ -1973,7 +1979,7 @@ impl Cx {
     // Keeps a tagged value the runtime gave.
     fn take(self, place: mir.Place, value: str) -> str ! Fail {
         match self.rep(place) {
-            Rep.Int(k) => "{self.name(place)} = ({ctype(k)})({value}).u.i;"
+            Rep.Int(k) => "{self.name(place)} = ({ctype(k)})ktakei({value});"
             Rep.Bool => "{self.name(place)} = ktruth({value});"
             Rep.F64 => "{self.name(place)} = ({value}).u.f;"
             Rep.Char => "{self.name(place)} = ({value}).u.c;"
@@ -2128,7 +2134,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
         match cx.reps[l] {
             Rep.Int(k) => {
                 if l < f.params {
-                    line(mut out, "    {ctype(k)} s{l} = ({ctype(k)})a[{l}].u.i;")
+                    line(mut out, "    {ctype(k)} s{l} = ({ctype(k)})kwide(a[{l}]);")
                 } else {
                     line(mut out, "    {ctype(k)} s{l} = 0;")
                 }
@@ -2343,7 +2349,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                 continue
                             }
                             if t == "ptr" {
-                                parts.push("(void *)(uintptr_t)({v}).u.i")
+                                parts.push("(void *)(uintptr_t)ktakei({v})")
                                 continue
                             }
                             if t == "bool" {
@@ -2355,7 +2361,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                     if t == "f32" {
                                         parts.push("({v}).u.g")
                                     } else {
-                                        parts.push("({c_int(t)})({v}).u.i")
+                                        parts.push("({c_int(t)})ktakei({v})")
                                     }
                                 }
                             }
@@ -2515,7 +2521,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
         var unboxed: [str] = []
         for l in 0..my_params.len {
             match my_params[l] {
-                Rep.Int(k) => unboxed.push("({ctype(k)})a[{l}].u.i")
+                Rep.Int(k) => unboxed.push("({ctype(k)})kwide(a[{l}])")
                 Rep.F64 => unboxed.push("a[{l}].u.f")
                 Rep.Char => unboxed.push("a[{l}].u.c")
                 Rep.Boxed => unboxed.push("a[{l}]")
@@ -2755,7 +2761,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
                     if k == 4 {
                         read.push("it[{f}].u.c")
                     } else {
-                        if k == 5 { read.push("(uint64_t)it[{f}].u.i") } else { read.push("(int64_t)it[{f}].u.i") }
+                        if k == 5 { read.push("(uint64_t)kwide(it[{f}])") } else { read.push("(int64_t)it[{f}].u.i") }
                     }
                 }
             }
@@ -2791,7 +2797,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
             if k == 1 { read = "it[{f - 1}].u.t" }
             if k == 3 { read = "it[{f - 1}].u.f" }
             if k == 4 { read = "it[{f - 1}].u.c" }
-            if k == 5 { read = "(uint64_t)it[{f - 1}].u.i" }
+            if k == 5 { read = "(uint64_t)kwide(it[{f - 1}])" }
             line(mut out, "    if (n > {f - 1}) r.f{f} = {read};")
             made.push(tagged(field_rep(k), "s.f{f}"))
         }

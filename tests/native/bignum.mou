@@ -1,0 +1,75 @@
+import std.io
+
+// Whole numbers that do not fit in 64 bits: the ones a `u64` has from
+// 2^63 on, and the ones of 128 bits. They are kept apart from the others,
+// and have to behave the same everywhere a number can be.
+
+struct Pair { low: u64, high: u64 }
+
+struct Wide { id: int, big: i128 }
+
+fn top() -> u64 { 18446744073709551615 }
+
+fn half() -> u64 { 9223372036854775808 }
+
+fn sum(xs: [u64]) -> u128 {
+    var t: u128 = 0
+    for x in xs { t += x as u128 }
+    t
+}
+
+fn last(xs: [u64]) -> u64? {
+    if xs.len == 0 { return None }
+    xs.get(xs.len - 1)
+}
+
+fn main() ! io.Error {
+    let a = top()
+    let b = half()
+    io.print("{a} {b} {a - b} {a / 3} {a % 1000} {b + 5}")?
+    io.print("{a == top()} {a > b} {b < a} {a != b} {a >= a} {b == 9223372036854775807 + 1}")?
+    // In arrays: together with small ones, taken out, compared.
+    var xs: [u64] = [1, 2, 3]
+    xs.push(a)
+    xs.push(b)
+    xs.push(7)
+    io.print("{xs} {xs.len} {sum(xs)}")?
+    io.print("{xs[3] == a} {xs[4]} {last(xs)} {xs.get(3)} {xs.get(99)}")?
+    io.print("{xs.pop()} {xs.pop()} {xs.pop()} {xs.len}")?
+    xs[0] = a
+    xs[1] = xs[0] - 1
+    io.print("{xs}")?
+    // In structs, and in arrays of structs.
+    var p = Pair(5, a)
+    p.low = b
+    var ps = [Pair(1, 2), p, Pair(a, b)]
+    ps[0].high = a
+    io.print("{p.low} {p.high} {ps[0].high} {ps[1].low} {ps[2].low - ps[2].high}")?
+    // In optionals and tuples.
+    let o: u64? = Some(a)
+    let none: u64? = None
+    let t = (b, 1, a)
+    io.print("{o} {none} {t.0} {t.2}")?
+    match o {
+        Some(v) => io.print("{v - 1}")?
+        None => io.print("nothing")?
+    }
+    // Numbers of 128 bits.
+    let big: i128 = 170141183460469231731687303715884105727
+    let small: i128 = 0 - big - 1
+    let w = Wide(1, big)
+    io.print("{big} {small} {big / 7} {big % 1000} {w.big == big} {small < big}")?
+    let u: u128 = big as u128
+    io.print("{u} {u / 2} {u >> 100} {u & 255} {(u >> 64) as u64} {u % 10}")?
+    // To and from other kinds.
+    io.print("{a as u128 + 1} {(a as u128) * 2} {(b as i128) - 1} {(a / 2) as int} {a as f64} {(big / big) as u8}")?
+    io.print("{a +% 1} {a +| 1} {b *% 2} {a -% a} {0 -% 1 == 0} {b >> 63} {a & 15} {a ^ a}")?
+    // In loops and as keys of comparisons.
+    var count = 0
+    var n = b - 2
+    while n < b + 2 {
+        count += 1
+        n += 1
+    }
+    io.print("{count} {n}")?
+}

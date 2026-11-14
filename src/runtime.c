@@ -40,7 +40,11 @@ typedef unsigned __int128 u128;
 #define I128_MAX ((i128)(((u128)1 << 127) - 1))
 #define I128_MIN (-I128_MAX - 1)
 
-enum { T_UNIT, T_INT, T_F64, T_F32, T_BOOL, T_CHAR, T_STR, T_TUPLE, T_STRUCT, T_ENUM, T_ARRAY, T_NONE, T_SOME, T_OK, T_ERR, T_FN, T_CLOSURE };
+/* `T_INT` is a whole number that fits in 64 bits. One that does not (an
+   `i128`, or a `u64` from 2^63 on) is `T_BIG`: a block that holds it. A
+   number that fits is never kept as `T_BIG`, so two numbers are equal
+   only when their tags are. */
+enum { T_UNIT, T_INT, T_F64, T_F32, T_BOOL, T_CHAR, T_STR, T_TUPLE, T_STRUCT, T_ENUM, T_ARRAY, T_NONE, T_SOME, T_OK, T_ERR, T_FN, T_CLOSURE, T_BIG };
 
 /* Header of a heap block; the items (or the bytes of a string) follow it. */
 typedef struct kobj {
@@ -65,11 +69,13 @@ enum { P_NONE, P_BOOL, P_I64, P_F64, P_CHAR, P_REC };
 
 _Static_assert(sizeof(kobj) % 16 == 0, "the header must not misalign the items");
 
+/* A tagged value: 16 bytes, so that it travels in two registers. */
 typedef struct kv {
-    uint8_t tag;
-    uint32_t a, b; /* struct index; enum index and variant; function id */
+    uint32_t tag : 8;
+    uint32_t a : 24; /* struct index; enum index; function id */
+    uint32_t b; /* the variant of an enum */
     union {
-        i128 i;
+        int64_t i;
         double f;
         float g;
         bool t;
@@ -77,6 +83,8 @@ typedef struct kv {
         kobj *o;
     } u;
 } kv;
+
+_Static_assert(sizeof(kv) == 16, "a tagged value is two words");
 
 #define ITEMS(o) ((kv *)((o) + 1))
 #define BYTES(o) ((char *)((o) + 1))
@@ -239,10 +247,37 @@ static inline kv kmk(int tag) {
 #define KUNIT kmk(T_UNIT)
 #define KNONE kmk(T_NONE)
 
-static kv kint(i128 i) {
+static inline kv ki64(int64_t i) {
     kv v = kmk(T_INT);
     v.u.i = i;
     return v;
+}
+
+static kv kbig(i128 i);
+
+static kv kint(i128 i) {
+    if (i >= INT64_MIN && i <= INT64_MAX) return ki64((int64_t)i);
+    return kbig(i);
+}
+
+#define KISINT(v) ((v).tag == T_INT || (v).tag == T_BIG)
+
+/* The whole number a value is. The value is only looked at. */
+static inline i128 kwide(kv v) {
+    if (v.tag == T_INT) return v.u.i;
+    i128 w;
+    memcpy(&w, v.u.o + 1, sizeof w);
+    return w;
+}
+
+static void krelease(kv v);
+
+/* The whole number a value is, letting go of the value. */
+static inline i128 ktakei(kv v) {
+    if (v.tag == T_INT) return v.u.i;
+    i128 w = kwide(v);
+    krelease(v);
+    return w;
 }
 
 static kv kint2(uint64_t hi, uint64_t lo) { return kint((i128)(((u128)hi << 64) | lo)); }
@@ -462,6 +497,15 @@ static kobj *kalloc(size_t bytes, int64_t len) {
     return o;
 }
 
+/* A whole number that does not fit in 64 bits: a block with no items,
+   and the number after its header. */
+static kv kbig(i128 i) {
+    kv v = kmk(T_BIG);
+    v.u.o = kalloc(sizeof i, 0);
+    memcpy(v.u.o + 1, &i, sizeof i);
+    return v;
+}
+
 /* ---- packed arrays ---- */
 
 static const size_t KPACK_SIZES[] = {sizeof(kv), 1, 8, 8, 4};
@@ -475,7 +519,7 @@ static inline size_t kpack_size(int64_t pack) {
 static int kpack_of(kv v) {
     switch (v.tag) {
     case T_BOOL: return P_BOOL;
-    case T_INT: return v.u.i >= INT64_MIN && v.u.i <= INT64_MAX ? P_I64 : P_NONE;
+    case T_INT: return P_I64;
     case T_F64: return P_F64;
     case T_CHAR: return P_CHAR;
     case T_STRUCT: return v.a < KREC_COUNT && KREC_N[v.a] > 0 ? (int)(P_REC + v.a) : P_NONE;
@@ -496,7 +540,7 @@ static inline kv krec_field(const kobj *o, int64_t i, int64_t f) {
     case P_BOOL: v = kmk(T_BOOL); v.u.t = *slot != 0; return v;
     case P_F64: v = kmk(T_F64); memcpy(&v.u.f, slot, 8); return v;
     case P_CHAR: v = kmk(T_CHAR); v.u.c = (uint32_t)*slot; return v;
-    case KF_U64: v = kmk(T_INT); v.u.i = (i128)(uint64_t)*slot; return v;
+    case KF_U64: return kint((i128)(uint64_t)*slot);
     default: v = kmk(T_INT); v.u.i = *slot; return v;
     }
 }
@@ -508,7 +552,7 @@ static inline void krec_store(kobj *o, int64_t i, int64_t f, kv v) {
     case P_BOOL: *slot = v.u.t; break;
     case P_F64: memcpy(slot, &v.u.f, 8); break;
     case P_CHAR: *slot = v.u.c; break;
-    default: *slot = (int64_t)v.u.i; break;
+    default: *slot = (int64_t)kwide(v); break;
     }
 }
 
@@ -656,6 +700,7 @@ static void kshow(ksb *sb, kv v, bool top) {
     switch (v.tag) {
     case T_UNIT: ksb_str(sb, "()"); break;
     case T_INT: ksb_i128(sb, v.u.i); break;
+    case T_BIG: ksb_i128(sb, kwide(v)); break;
     case T_F64: ksb_float(sb, v.u.f, false); break;
     case T_F32: ksb_float(sb, (double)v.u.g, true); break;
     case T_BOOL: ksb_str(sb, v.u.t ? "true" : "false"); break;
@@ -764,14 +809,15 @@ typedef struct {
 
 /* The position an index operand denotes. */
 static int64_t kidx(const kv *v) {
-    if (v->tag != T_INT) kinternal("an index that is not an integer");
-    if (v->u.i < 0) kpanicf("index ", *v, " is negative");
-    return v->u.i > INT64_MAX ? INT64_MAX : (int64_t)v->u.i;
+    if (!KISINT(*v)) kinternal("an index that is not an integer");
+    if (kwide(*v) < 0) kpanicf("index ", *v, " is negative");
+    /* One that does not fit is past the end of any array. */
+    return v->tag == T_BIG ? INT64_MAX : v->u.i;
 }
 
 static int64_t kidxc(i128 i) {
-    kv v = kint(i);
-    return kidx(&v);
+    if (i < 0) kpanicf("index ", kint(i), " is negative");
+    return i > INT64_MAX ? INT64_MAX : (int64_t)i;
 }
 
 /* Stops the program unless `k` is a position of the array `v`. */
@@ -850,31 +896,46 @@ static kv kpop(kv *root, int n, const kstep *steps) {
 }
 
 static kv kget(kv a, kv i) {
-    if (a.tag != T_ARRAY || i.tag != T_INT) kinternal("`get` on a value that is not an array");
+    if (a.tag != T_ARRAY || !KISINT(i)) kinternal("`get` on a value that is not an array");
     kv r = kmk(T_NONE);
-    if (i.u.i >= 0 && i.u.i < klen(a)) {
+    if (i.tag == T_INT && i.u.i >= 0 && i.u.i < klen(a)) {
         kv item = kown(a.u.o, (int64_t)i.u.i);
         r = kagg(T_SOME, 0, 0, 1, &item);
     }
+    krelease(i);
     krelease(a);
     return r;
 }
 
 /* `pop` and `get` of an array of numbers or booleans, for whoever keeps
    the optional without a block: whether there is an item, and the item. */
+/* An item handed out bare: a number kept in a block (a `u64` from 2^63
+   on) goes as its 64 bits, which is what whoever asked reads. */
+static inline void kraw_number(kv *item, bool owned) {
+    if (item->tag != T_BIG) return;
+    kv big = *item;
+    *item = ki64((int64_t)(uint64_t)kwide(big));
+    if (owned) krelease(big);
+}
+
 static bool kpop_raw(kv *root, int n, const kstep *steps, kv *item) {
     kv *v = karray_at(root, n, steps, "`pop` on a value that is not an array");
     kobj *o = v->u.o;
     if (o->len == 0) return false;
     o->len--;
     *item = kelem(o, o->len);
+    kraw_number(item, true);
     return true;
 }
 
 static bool kget_raw(kv a, kv i, kv *item) {
-    if (a.tag != T_ARRAY || i.tag != T_INT) kinternal("`get` on a value that is not an array");
-    bool has = i.u.i >= 0 && i.u.i < klen(a);
-    if (has) *item = kelem(a.u.o, (int64_t)i.u.i);
+    if (a.tag != T_ARRAY || !KISINT(i)) kinternal("`get` on a value that is not an array");
+    bool has = i.tag == T_INT && i.u.i >= 0 && i.u.i < klen(a);
+    if (has) {
+        *item = kelem(a.u.o, (int64_t)i.u.i);
+        kraw_number(item, false);
+    }
+    krelease(i);
     krelease(a);
     return has;
 }
@@ -958,7 +1019,7 @@ static inline kv *kitemp(kv *v, i128 i, bool write) {
 static inline i128 kitem_int(const kv *v, i128 i) {
     int64_t k = kat(v, i);
     const kobj *o = v->u.o;
-    if (KRARE(o->pack != P_I64)) return kelem(o, k).u.i;
+    if (KRARE(o->pack != P_I64)) return kwide(kelem(o, k));
     return ((const int64_t *)(o + 1))[k];
 }
 
@@ -990,8 +1051,10 @@ static inline kv kitem_field(kv *v, i128 i, int64_t f) {
 static inline void kitem_field_set(kv *v, i128 i, int64_t f, kv value) {
     int64_t k = kat(v, i);
     if (KRARE(KRC(v->u.o) != 1)) kunique(v);
-    if (v->u.o->pack >= P_REC) krec_store(v->u.o, k, f, value);
-    else kset(kitem_field_slow(v, k, f, true), value);
+    if (v->u.o->pack >= P_REC) {
+        krec_store(v->u.o, k, f, value);
+        krelease(value);
+    } else kset(kitem_field_slow(v, k, f, true), value);
 }
 
 static inline double kitem_field_f64(kv *v, i128 i, int64_t f) {
@@ -1004,7 +1067,7 @@ static inline double kitem_field_f64(kv *v, i128 i, int64_t f) {
 static inline i128 kitem_field_int(kv *v, i128 i, int64_t f) {
     int64_t k = kat(v, i);
     const kobj *o = v->u.o;
-    if (KRARE(o->pack < P_REC)) return kitem_field_slow(v, k, f, false)->u.i;
+    if (KRARE(o->pack < P_REC)) return kwide(*kitem_field_slow(v, k, f, false));
     int64_t bits = ((const int64_t *)(o + 1))[k * KREC_N[o->pack - P_REC] + f];
     return KREC_K[o->pack - P_REC][f] == KF_U64 ? (i128)(uint64_t)bits : (i128)bits;
 }
@@ -1243,6 +1306,7 @@ static bool keq(kv a, kv b) {
     switch (a.tag) {
     case T_UNIT: case T_NONE: return true;
     case T_INT: return a.u.i == b.u.i;
+    case T_BIG: return kwide(a) == kwide(b);
     case T_F64: return a.u.f == b.u.f;
     case T_F32: return a.u.g == b.u.g;
     case T_BOOL: return a.u.t == b.u.t;
@@ -1265,6 +1329,7 @@ static bool keq(kv a, kv b) {
 /* -1, 0 or 1; 2 when the values have no order (a NaN). */
 static int kcmp(kv a, kv b) {
     if (a.tag == T_INT && b.tag == T_INT) return a.u.i < b.u.i ? -1 : a.u.i > b.u.i;
+    if (KISINT(a) && KISINT(b)) return kwide(a) < kwide(b) ? -1 : kwide(a) > kwide(b);
     if (a.tag == T_F64 && b.tag == T_F64) return a.u.f < b.u.f ? -1 : a.u.f > b.u.f ? 1 : a.u.f == b.u.f ? 0 : 2;
     if (a.tag == T_F32 && b.tag == T_F32) return a.u.g < b.u.g ? -1 : a.u.g > b.u.g ? 1 : a.u.g == b.u.g ? 0 : 2;
     if (a.tag == T_CHAR && b.tag == T_CHAR) return a.u.c < b.u.c ? -1 : a.u.c > b.u.c;
@@ -1297,10 +1362,10 @@ static kv kbin(int op, int k, kv a, kv b) {
         int c = kcmp(a, b);
         r = kbool(op == O_LT ? c == -1 : op == O_LE ? c == -1 || c == 0 : op == O_GT ? c == 1 : c == 1 || c == 0);
     } else if (op >= O_AND) {
-        if (a.tag == T_INT && b.tag == T_INT) r = kint(op == O_AND ? a.u.i & b.u.i : op == O_OR ? a.u.i | b.u.i : a.u.i ^ b.u.i);
+        if (KISINT(a) && KISINT(b)) r = kint(op == O_AND ? kwide(a) & kwide(b) : op == O_OR ? kwide(a) | kwide(b) : kwide(a) ^ kwide(b));
         else if (a.tag == T_BOOL && b.tag == T_BOOL) r = kbool(op == O_AND ? a.u.t & b.u.t : op == O_OR ? a.u.t | b.u.t : a.u.t ^ b.u.t);
         else kinternal("a bit operator applied to the wrong kind of value");
-    } else if (a.tag == T_INT && b.tag == T_INT && k >= 0) r = kint(kint_op(op, k, a.u.i, b.u.i));
+    } else if (KISINT(a) && KISINT(b) && k >= 0) r = kint(kint_op(op, k, kwide(a), kwide(b)));
     else if (a.tag == T_F64 && b.tag == T_F64) r = kf64(kfloat_op(op, a.u.f, b.u.f));
     else if (a.tag == T_F32 && b.tag == T_F32) r = kf32((float)kfloat_op(op, (double)a.u.g, (double)b.u.g));
     else kinternal("an arithmetic operator applied to the wrong kind of value");
@@ -1312,16 +1377,16 @@ static kv kbin(int op, int k, kv a, kv b) {
 enum { U_NEG, U_NOT, U_BITNOT };
 
 static kv kun(int op, int k, kv v) {
-    if (op == U_NEG && v.tag == T_INT && k >= 0) return kint(kint_op(O_SUB, k, 0, v.u.i));
+    if (op == U_NEG && KISINT(v) && k >= 0) return kint(kint_op(O_SUB, k, 0, ktakei(v)));
     if (op == U_NEG && v.tag == T_F64) return kf64(-v.u.f);
     if (op == U_NEG && v.tag == T_F32) return kf32(-v.u.g);
     if (op == U_NOT && v.tag == T_BOOL) return kbool(!v.u.t);
-    if (op == U_BITNOT && v.tag == T_INT && k >= 0) {
-        i128 lo, hi;
+    if (op == U_BITNOT && KISINT(v) && k >= 0) {
+        i128 lo, hi, w = ktakei(v);
         kbounds(k, &lo, &hi);
-        if (lo < 0) return kint(~v.u.i);
+        if (lo < 0) return kint(~w);
         if (k == K_U128) kpanic(U128_LIMIT);
-        return kint(hi - v.u.i);
+        return kint(hi - w);
     }
     kinternal("a unary operator applied to the wrong kind of value");
     return v;
@@ -1337,7 +1402,7 @@ static kv kcast_int(kv v, int k) {
     kbounds(k, &lo, &hi);
     bool fits = true;
     switch (v.tag) {
-    case T_INT: i = v.u.i; break;
+    case T_INT: case T_BIG: i = kwide(v); break;
     case T_CHAR: i = v.u.c; break;
     case T_BOOL: return kint(v.u.t);
     case T_F64: case T_F32: {
@@ -1357,12 +1422,13 @@ static kv kcast_int(kv v, int k) {
         ksb_str(&sb, "`");
         kpanic(sb.p);
     }
+    krelease(v);
     return kint(i);
 }
 
 static kv kcast_float(kv v, bool single) {
     double f = 0;
-    if (v.tag == T_INT) f = (double)v.u.i;
+    if (KISINT(v)) f = (double)ktakei(v);
     else if (v.tag == T_F64) f = v.u.f;
     else if (v.tag == T_F32) f = (double)v.u.g;
     else kinternal("a cast of a value that is not a number");
@@ -1391,11 +1457,11 @@ static kv kconv_at(const char **s, kv v) {
         int k = *(*s)++ - 'a';
         i128 lo, hi;
         kbounds(k, &lo, &hi);
-        if (v.tag != T_INT) break;
-        if (v.u.i < lo || v.u.i > hi) {
+        if (!KISINT(v)) break;
+        if (kwide(v) < lo || kwide(v) > hi) {
             ksb sb = {0};
             ksb_str(&sb, "the value ");
-            ksb_i128(&sb, v.u.i);
+            ksb_i128(&sb, kwide(v));
             ksb_str(&sb, " is out of range for `");
             ksb_str(&sb, KKIND[k]);
             ksb_str(&sb, "`");
@@ -1481,9 +1547,9 @@ static kv klength(kv v) {
 }
 
 static kv krepeat(kv v, kv n) {
-    if (n.tag != T_INT) kinternal("an array length that is not an integer");
-    if (n.u.i < 0 || n.u.i > 100000000) kpanicf("an array of length ", n, " cannot be created");
-    int64_t len = (int64_t)n.u.i;
+    if (!KISINT(n)) kinternal("an array length that is not an integer");
+    if (kwide(n) < 0 || kwide(n) > 100000000) kpanicf("an array of length ", n, " cannot be created");
+    int64_t len = n.u.i;
     kv r = karray_new(kpack_of(v), len);
     if (r.u.o->pack == P_BOOL) memset(r.u.o + 1, v.u.t, (size_t)len);
     else
@@ -1500,9 +1566,9 @@ static kv krange_part(kv r, int which) {
 static int64_t kbound(kv part, int64_t fallback) {
     if (part.tag != T_SOME) return fallback;
     kv i = ITEMS(part.u.o)[0];
-    if (i.tag != T_INT) kinternal("a range bound that is not an integer");
-    if (i.u.i < 0) kpanicf("the range bound ", i, " is negative");
-    return i.u.i > INT64_MAX - 1 ? INT64_MAX - 1 : (int64_t)i.u.i;
+    if (!KISINT(i)) kinternal("a range bound that is not an integer");
+    if (kwide(i) < 0) kpanicf("the range bound ", i, " is negative");
+    return kwide(i) > INT64_MAX - 1 ? INT64_MAX - 1 : i.u.i;
 }
 
 static kv kslice(kv base, kv range) {
@@ -1579,15 +1645,15 @@ static bool krange_has_int(const kv *r, i128 i) {
     kv hi = krange_part(*r, 1);
     if (hi.tag != T_SOME) return true;
     kv bound = ITEMS(hi.u.o)[0];
-    if (bound.tag != T_INT) kinternal("a range bound that is not an integer");
-    return i < bound.u.i || (i == bound.u.i && ktruth(krange_part(*r, 2)));
+    if (!KISINT(bound)) kinternal("a range bound that is not an integer");
+    return i < kwide(bound) || (i == kwide(bound) && ktruth(krange_part(*r, 2)));
 }
 
 static bool krange_last_int(const kv *r, i128 i) {
     kv hi = krange_part(*r, 1);
     if (hi.tag != T_SOME || !ktruth(krange_part(*r, 2))) return false;
     kv bound = ITEMS(hi.u.o)[0];
-    return bound.tag == T_INT && bound.u.i == i;
+    return KISINT(bound) && kwide(bound) == i;
 }
 
 static kv krange_last(kv r, kv i) {
@@ -1599,7 +1665,7 @@ static kv krange_last(kv r, kv i) {
 }
 
 static kv ksucc(kv v, int k) {
-    if (v.tag == T_INT && k >= 0) return kint(kint_op(O_ADD, k, v.u.i, 1));
+    if (KISINT(v) && k >= 0) return kint(kint_op(O_ADD, k, ktakei(v), 1));
     if (v.tag == T_CHAR) {
         uint32_t next = v.u.c == 0xD7FF ? 0xE000 : v.u.c + 1;
         if (next > 0x10FFFF) kpanic("there is no character after the last one");
@@ -2007,7 +2073,7 @@ static kv kraw_hash(kv text) {
 }
 
 static kv kraw_mix(kv n) {
-    uint64_t z = (uint64_t)(int64_t)n.u.i + 0x9e3779b97f4a7c15u;
+    uint64_t z = (uint64_t)ktakei(n) + 0x9e3779b97f4a7c15u;
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9u;
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebu;
     return kint((int64_t)(z ^ (z >> 31)));
@@ -2040,7 +2106,7 @@ static kv KOC_box(struct KOC s) { return s.has ? kbox(T_SOME, kchar(s.v)) : KNON
 static struct KOB KOB_get(kv v) { return v.tag == T_SOME ? (struct KOB){true, ITEMS(v.u.o)[0].u.t} : (struct KOB){0}; }
 static struct KOI KOI_get(kv v) { return v.tag == T_SOME ? (struct KOI){true, (int64_t)ITEMS(v.u.o)[0].u.i} : (struct KOI){0}; }
 static struct KOF KOF_get(kv v) { return v.tag == T_SOME ? (struct KOF){true, ITEMS(v.u.o)[0].u.f} : (struct KOF){0}; }
-static struct KOU KOU_get(kv v) { return v.tag == T_SOME ? (struct KOU){true, (uint64_t)ITEMS(v.u.o)[0].u.i} : (struct KOU){0}; }
+static struct KOU KOU_get(kv v) { return v.tag == T_SOME ? (struct KOU){true, (uint64_t)kwide(ITEMS(v.u.o)[0])} : (struct KOU){0}; }
 static struct KOB KOB_take(kv v) { struct KOB r = KOB_get(v); krelease(v); return r; }
 static struct KOI KOI_take(kv v) { struct KOI r = KOI_get(v); krelease(v); return r; }
 static struct KOF KOF_take(kv v) { struct KOF r = KOF_get(v); krelease(v); return r; }
@@ -2077,7 +2143,7 @@ static void *kptr_c_opt(kv v) { return v.tag == T_NONE ? NULL : (void *)(uintptr
 
 /* `n as char`: the character with that code. */
 static kv kraw_to_char(kv n) {
-    i128 i = n.u.i;
+    i128 i = ktakei(n);
     if (i < 0 || i > 0x10FFFF || (i >= 0xD800 && i <= 0xDFFF)) {
         ksb sb = {0};
         ksb_str(&sb, "`as`: the value ");
@@ -2509,12 +2575,12 @@ static void *kbuf_make(kv a, int kind) {
         switch (kind) {
         case KB_F64: { double x = v.u.f; memcpy(at, &x, sizeof x); break; }
         case KB_F32: { float x = v.u.g; memcpy(at, &x, sizeof x); break; }
-        case KB_I8: case KB_U8: { uint8_t x = (uint8_t)v.u.i; memcpy(at, &x, sizeof x); break; }
-        case KB_I16: case KB_U16: { uint16_t x = (uint16_t)v.u.i; memcpy(at, &x, sizeof x); break; }
-        case KB_I32: case KB_U32: { uint32_t x = (uint32_t)v.u.i; memcpy(at, &x, sizeof x); break; }
-        case KB_ISIZE: { ptrdiff_t x = (ptrdiff_t)v.u.i; memcpy(at, &x, sizeof x); break; }
-        case KB_USIZE: { size_t x = (size_t)v.u.i; memcpy(at, &x, sizeof x); break; }
-        default: { uint64_t x = (uint64_t)v.u.i; memcpy(at, &x, sizeof x); break; }
+        case KB_I8: case KB_U8: { uint8_t x = (uint8_t)kwide(v); memcpy(at, &x, sizeof x); break; }
+        case KB_I16: case KB_U16: { uint16_t x = (uint16_t)kwide(v); memcpy(at, &x, sizeof x); break; }
+        case KB_I32: case KB_U32: { uint32_t x = (uint32_t)kwide(v); memcpy(at, &x, sizeof x); break; }
+        case KB_ISIZE: { ptrdiff_t x = (ptrdiff_t)kwide(v); memcpy(at, &x, sizeof x); break; }
+        case KB_USIZE: { size_t x = (size_t)kwide(v); memcpy(at, &x, sizeof x); break; }
+        default: { uint64_t x = (uint64_t)kwide(v); memcpy(at, &x, sizeof x); break; }
         }
     }
     return buf;
@@ -2539,8 +2605,8 @@ static kv kbuf_back(const void *buf, int64_t n, int kind) {
         case KB_U32: { uint32_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
         case KB_I64: { int64_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
         case KB_ISIZE: { ptrdiff_t x; memcpy(&x, at, sizeof x); v.u.i = x; break; }
-        case KB_USIZE: { size_t x; memcpy(&x, at, sizeof x); v.u.i = (i128)x; break; }
-        default: { uint64_t x; memcpy(&x, at, sizeof x); v.u.i = (i128)x; break; }
+        case KB_USIZE: { size_t x; memcpy(&x, at, sizeof x); v = kint((i128)x); break; }
+        default: { uint64_t x; memcpy(&x, at, sizeof x); v = kint((i128)x); break; }
         }
         items[i] = v;
     }

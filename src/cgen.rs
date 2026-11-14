@@ -997,7 +997,7 @@ impl Cx<'_> {
             return Ok(known);
         }
         match op {
-            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.i", self.at(p.local))),
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("kwide(L[{}])", self.at(p.local))),
             Operand::Place(p) => {
                 if let Some((base, i)) = self.item(p, false)? {
                     return Ok(format!("kitem_int({base}, {i})"));
@@ -1006,11 +1006,11 @@ impl Cx<'_> {
                     return Ok(format!("kitem_field_int({base}, {i}, {f})"));
                 }
                 match self.ptr(p.local, &p.proj, false) {
-                    Some(ptr) => Ok(format!("{ptr}->u.i")),
-                    None => Ok(format!("({}).u.i", operand(self, op)?)),
+                    Some(ptr) => Ok(format!("kwide(*{ptr})")),
+                    None => Ok(format!("ktakei({})", operand(self, op)?)),
                 }
             }
-            _ => Ok(format!("({}).u.i", operand(self, op)?)),
+            _ => Ok(format!("ktakei({})", operand(self, op)?)),
         }
     }
 
@@ -1037,7 +1037,7 @@ impl Cx<'_> {
     /// An rvalue as a C integer of kind `k`.
     fn int_rvalue(&self, rv: &Rvalue, k: &'static str) -> Result<String, String> {
         let t = ctype(k);
-        let unboxed = |boxed: String| format!("({t})({boxed}).u.i");
+        let unboxed = |boxed: String| format!("({t})ktakei({boxed})");
         let slow = |cx: &Cx| Ok::<String, String>(unboxed(rvalue(cx, rv)?));
         Ok(match rv {
             Rvalue::Use(a) => format!("({t})({})", self.int(a)?),
@@ -1275,7 +1275,7 @@ impl Cx<'_> {
     /// Stores a tagged value the runtime produced.
     fn take(&self, place: &Place, value: &str) -> Result<String, String> {
         match self.rep(place) {
-            Rep::Int(k) => Ok(format!("{} = ({})({value}).u.i;", self.name(place), ctype(k))),
+            Rep::Int(k) => Ok(format!("{} = ({})ktakei({value});", self.name(place), ctype(k))),
             Rep::Bool => Ok(format!("{} = ktruth({value});", self.name(place))),
             Rep::F64 => Ok(format!("{} = ({value}).u.f;", self.name(place))),
             Rep::Char => Ok(format!("{} = ({value}).u.c;", self.name(place))),
@@ -1352,7 +1352,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     for (l, rep) in cx.reps.iter().enumerate() {
         match rep {
             _ if l < f.params && mine.is_some() => {}
-            Rep::Int(k) if l < f.params => writeln!(out, "    {} s{l} = ({})a[{l}].u.i;", ctype(k), ctype(k)).unwrap(),
+            Rep::Int(k) if l < f.params => writeln!(out, "    {} s{l} = ({})kwide(a[{l}]);", ctype(k), ctype(k)).unwrap(),
             Rep::Int(k) => writeln!(out, "    {} s{l} = 0;", ctype(k)).unwrap(),
             Rep::Bool if l < f.params => writeln!(out, "    bool s{l} = a[{l}].u.t;").unwrap(),
             Rep::Bool => writeln!(out, "    bool s{l} = false;").unwrap(),
@@ -1513,11 +1513,11 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                             continue;
                         }
                         parts.push(match *t {
-                            "ptr" => format!("(void *)(uintptr_t)({v}).u.i"),
+                            "ptr" => format!("(void *)(uintptr_t)ktakei({v})"),
                             "bool" => format!("({v}).u.t"),
                             "f64" => format!("({v}).u.f"),
                             "f32" => format!("({v}).u.g"),
-                            int => format!("({})({v}).u.i", c_int(int)),
+                            int => format!("({})ktakei({v})", c_int(int)),
                         });
                     }
                     // A value of the header is read, not called.
@@ -1642,7 +1642,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                 .iter()
                 .enumerate()
                 .map(|(l, r)| match r {
-                    Rep::Int(k) => format!("({})a[{l}].u.i", ctype(k)),
+                    Rep::Int(k) => format!("({})kwide(a[{l}])", ctype(k)),
                     Rep::F64 => format!("a[{l}].u.f"),
                     Rep::Char => format!("a[{l}].u.c"),
                     Rep::Boxed => format!("a[{l}]"),
@@ -1752,7 +1752,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
                 1 => format!("it[{f}].u.t"),
                 3 => format!("it[{f}].u.f"),
                 4 => format!("it[{f}].u.c"),
-                5 => format!("(uint64_t)it[{f}].u.i"),
+                5 => format!("(uint64_t)kwide(it[{f}])"),
                 _ => format!("(int64_t)it[{f}].u.i"),
             })
             .collect();
@@ -1779,7 +1779,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
                 1 => format!("it[{}].u.t", f - 1),
                 3 => format!("it[{}].u.f", f - 1),
                 4 => format!("it[{}].u.c", f - 1),
-                5 => format!("(uint64_t)it[{}].u.i", f - 1),
+                5 => format!("(uint64_t)kwide(it[{}])", f - 1),
                 _ => format!("(int64_t)it[{}].u.i", f - 1),
             };
             writeln!(out, "    if (n > {}) r.f{f} = {read};", f - 1).unwrap();
@@ -1843,9 +1843,9 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
             "bool" => Some("r.u.t".to_string()),
             "f64" => Some("r.u.f".to_string()),
             "f32" => Some("r.u.g".to_string()),
-            "ptr" => Some("(void *)(uintptr_t)r.u.i".to_string()),
+            "ptr" => Some("(void *)(uintptr_t)kwide(r)".to_string()),
             "ptr?" => Some("kptr_c_opt(r)".to_string()),
-            int => Some(format!("({})r.u.i", c_int(int))),
+            int => Some(format!("({})kwide(r)", c_int(int))),
         };
         match back {
             Some(value) => {
@@ -1872,9 +1872,9 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
                 "bool" => (format!("it[{k}].u.t"), format!("kbool(c.{f})")),
                 "f64" => (format!("it[{k}].u.f"), format!("kf64(c.{f})")),
                 "f32" => (format!("it[{k}].u.g"), format!("kf32(c.{f})")),
-                "ptr" => (format!("(void *)(uintptr_t)it[{k}].u.i"), format!("kptr_v(c.{f}, {})", quote(f))),
+                "ptr" => (format!("(void *)(uintptr_t)kwide(it[{k}])"), format!("kptr_v(c.{f}, {})", quote(f))),
                 "ptr?" => (format!("kptr_c_opt(it[{k}])"), format!("kptr_v_opt(c.{f})")),
-                int => (format!("({})it[{k}].u.i", c_int(int)), format!("kint((i128)(c.{f}))")),
+                int => (format!("({})kwide(it[{k}])", c_int(int)), format!("kint((i128)(c.{f}))")),
             };
             writeln!(out, "    c.{f} = {read};").unwrap();
             made.push(back);
