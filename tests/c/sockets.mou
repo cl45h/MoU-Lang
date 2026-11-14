@@ -79,6 +79,6 @@ fn main() ! io.Error {
     let lines = run() catch e { [show(e)] }
     for line in lines { io.print(line)? }
     // What cannot work says why.
-    io.print("{reach("localhost", 80)}; {reach("1.2.3", 80)}; {reach("127.0.0.1", 70000)}; {reach("127.0.0.1", 1)}")?
+    io.print("{reach("not a host", 80)}; {reach("1.2.3", 80)}; {reach("127.0.0.1", 70000)}; {reach("127.0.0.1", 1)}")?
     io.print("{text.bytes("aé€😀")} {text.from_bytes(text.bytes("aé€😀"))} {text.from_bytes([255])} {text.from_bytes([192, 128])} {text.from_bytes([226, 130])}")?
 }

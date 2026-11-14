@@ -5510,6 +5510,7 @@ fn native(module: str, name: str) -> Native? {
         if name == "fread" { return Some(Native("io.fread", types.Sig([param("file", int), param("max", int)], fails_io(bytes)))) }
         if name == "fwrite" { return Some(Native("io.fwrite", types.Sig([param("file", int), param("data", bytes)], fails_io(types.Ty.Unit)))) }
         if name == "fclose" { return Some(Native("io.fclose", types.Sig([param("file", int)], fails_io(types.Ty.Unit)))) }
+        if name == "resolve" { return Some(Native("io.resolve", types.Sig([param("host", types.Ty.Str)], fails_io(types.Ty.Slice(types.Ty.Str))))) }
         if name == "fmath" { return Some(Native("raw.fmath", types.Sig([param("op", int), param("x", types.Ty.Float("f64")), param("y", types.Ty.Float("f64"))], types.Ty.Float("f64")))) }
         if name == "char_class" { return Some(Native("raw.char_class", types.Sig([param("c", types.Ty.Char)], int))) }
         if name == "char_case" { return Some(Native("raw.char_case", types.Sig([param("c", types.Ty.Char), param("upper", types.Ty.Bool)], types.Ty.Char))) }

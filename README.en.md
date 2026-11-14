@@ -34,7 +34,7 @@ fn main() ! io.Error {
 - Constants and `comptime` expressions computed at compile time, and `comptime` parameters for integers and types: `fn power(comptime n: int, x: int)` gives one copy of the function per value of `n`, and `fn empty(comptime T: type) -> [T]` is called as `empty(int)`.
 - Calls to C functions with numbers, `bool`, strings and opaque pointers (`ptr`). `import c "math.h" as m` reads the header at compile time, with nothing declared by hand.
 - Tasks on threads with structured concurrency: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. A task reads the variables outside it and cannot modify them, so there are no data races.
-- Networking: `std.net` gives TCP (listen, connect, read and write), written in Mou on top of C sockets. A server handles each connection in a task. Linux, IPv4 and compiled programs only.
+- Networking: `std.net` gives TCP (listen, connect, read and write), UDP and name lookup, written in Mou on top of C sockets. A server handles each connection in a task. Linux, IPv4 and compiled programs only.
 - A standard library written in Mou: lists, maps, hash tables, text with Unicode, math, files and directories (`std.fs`), and `std.pool` with `Pool[T]` and `Handle[T]` for graphs and cyclic structures.
 - Python inside the program with `std.py`: `py.module("math")?.method("sqrt", [py.from_float(2.0)])?`. It is a library on top of the C interface of CPython; exceptions arrive as errors.
 - Integer conversions that never lose anything silently: `as` keeps the value or panics, and `u8.truncate(x)`, `u8.saturate(x)` and `u8.try_from(x)` say what to do when it does not fit.

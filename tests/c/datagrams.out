@@ -1,0 +1,5 @@
+true 127.0.0.1 ["127.0.0.1"]
+Some("by name") 7
+Some("ping") 127.0.0.1 true Some("pong ñ") true [1, 2, 3, 4]
+not a name
+BadAddress("127.0.0.1:70000")

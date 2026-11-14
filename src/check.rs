@@ -1540,6 +1540,7 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
         ("std.raw", "fread") => ("io.fread", vec![param("file", int.clone()), param("max", int.clone())], fails(list(Ty::Int("u8")))),
         ("std.raw", "fwrite") => ("io.fwrite", vec![param("file", int.clone()), param("data", list(Ty::Int("u8")))], fails(Ty::Unit)),
         ("std.raw", "fclose") => ("io.fclose", vec![param("file", int.clone())], fails(Ty::Unit)),
+        ("std.raw", "resolve") => ("io.resolve", vec![param("host", Ty::Str)], fails(list(Ty::Str))),
         ("std.raw", "fmath") => ("raw.fmath", vec![param("op", int.clone()), param("x", Ty::Float("f64")), param("y", Ty::Float("f64"))], Ty::Float("f64")),
         ("std.raw", "char_class") => ("raw.char_class", vec![param("c", Ty::Char)], int),
         ("std.raw", "char_case") => ("raw.char_case", vec![param("c", Ty::Char), param("upper", Ty::Bool)], Ty::Char),

@@ -413,6 +413,23 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             let dir = std::fs::symlink_metadata(&*path).is_ok_and(|m| m.is_dir());
             done(if dir { std::fs::remove_dir(&*path) } else { std::fs::remove_file(&*path) }.map(|()| Value::Unit))
         }
+        "io.resolve" => {
+            use std::net::ToSocketAddrs;
+            let host = text(0)?;
+            done((&*host, 0).to_socket_addrs().map(|found| {
+                // The addresses of IPv4, each one once, in the order given.
+                let mut names: Vec<String> = Vec::new();
+                for a in found {
+                    if let std::net::SocketAddr::V4(v4) = a {
+                        let name = v4.ip().to_string();
+                        if !names.contains(&name) {
+                            names.push(name);
+                        }
+                    }
+                }
+                Value::Array(Rc::new(names.into_iter().map(|n| Value::Str(n.into())).collect()))
+            }))
+        }
         "io.rename" => done(std::fs::rename(&*text(0)?, &*text(1)?).map(|()| Value::Unit)),
         "io.fopen" => {
             let path = text(0)?;

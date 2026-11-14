@@ -3363,6 +3363,38 @@ static kv kio_rename(kv from, kv to) {
     return r;
 }
 
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <sys/socket.h>
+
+/* The addresses of IPv4 a name stands for, as text, each one once. */
+static kv kio_resolve(kv host) {
+    struct addrinfo hints, *found = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int code = getaddrinfo(kbytes(host), NULL, &hints, &found);
+    krelease(host);
+    if (code != 0) {
+        char buf[300];
+        snprintf(buf, sizeof buf, "failed to lookup address information: %s", gai_strerror(code));
+        return kfailed(buf);
+    }
+    kv v = karray_new(P_NONE, 0);
+    for (struct addrinfo *a = found; a; a = a->ai_next) {
+        char name[INET_ADDRSTRLEN];
+        if (a->ai_family != AF_INET || !inet_ntop(AF_INET, &((struct sockaddr_in *)a->ai_addr)->sin_addr, name, sizeof name)) continue;
+        bool seen = false;
+        for (int64_t i = 0; i < klen(v) && !seen; i++) {
+            kv had = kelem(v.u.o, i);
+            seen = (size_t)klen(had) == strlen(name) && !memcmp(kbytes(had), name, strlen(name));
+        }
+        if (!seen) kpush(&v, 0, NULL, kstr(name, strlen(name)));
+    }
+    freeaddrinfo(found);
+    return kbox(T_OK, v);
+}
+
 /* The files the program has open. A file is its place here, and a closed
    one leaves its place to the next that is opened. */
 static FILE **kfiles;

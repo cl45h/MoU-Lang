@@ -1,4 +1,4 @@
-// TCP connections over IPv4.
+// TCP connections and UDP datagrams over IPv4.
 //
 // Every function here waits until it is done. To serve several
 // connections at once, each one goes in a task (a task that waits does
@@ -8,11 +8,13 @@
 // It is made of functions of C, so a program that uses it runs compiled
 // (`mou build`), not with `mou run`. For now it only works on Linux.
 
+import std.raw
 import std.socket
 import std.text
 
 pub enum Error {
-    /// The address is not four numbers from 0 to 255 with dots between.
+    /// The address is not four numbers from 0 to 255 with dots between,
+    /// nor a name that anyone answers for.
     BadAddress(str)
     /// The system said no: what was being done.
     Failed(str)
@@ -26,21 +28,60 @@ pub struct Listener { fd: int }
 /// A connection: bytes go in both directions.
 pub struct Conn { fd: int }
 
-/// The address as the system takes it: 16 bytes.
-fn address(host: str, port: int) -> [u8] ! Error {
-    if port < 0 || port > 65535 { return Error.BadAddress("{host}:{port}") }
-    var out: [u8] = [2, 0, (port / 256) as u8, (port % 256) as u8]
+/// The four numbers of an address written with dots, or nothing when the
+/// text is not that.
+fn numbers(host: str) -> [u8]? {
     let parts = text.split(host, '.')
-    if parts.len != 4 { return Error.BadAddress(host) }
+    if parts.len != 4 { return None }
+    var out: [u8] = []
     for part in parts {
         match text.parse_int(part) {
             Some(n) => {
-                if n < 0 || n > 255 { return Error.BadAddress(host) }
+                if n < 0 || n > 255 { return None }
                 out.push(n as u8)
             }
+            None => return None
+        }
+    }
+    Some(out)
+}
+
+/// The addresses a name stands for, as the system finds them (its file of
+/// hosts, DNS): each one written with dots. A name written with dots
+/// already gives itself.
+pub fn resolve(host: str) -> [str] ! Error {
+    // Numbers and dots are an address, well written or not: never a name.
+    var name = false
+    for c in host {
+        if c != '.' && !text.is_digit(c) { name = true }
+    }
+    if !name {
+        match numbers(host) {
+            Some(_) => return [host]
             None => return Error.BadAddress(host)
         }
     }
+    let found = raw.resolve(host) catch e { return Error.BadAddress(host) }
+    if found.len == 0 { return Error.BadAddress(host) }
+    found
+}
+
+/// The address as the system takes it: 16 bytes. A name is looked up, and
+/// the first address it has is the one used.
+fn address(host: str, port: int) -> [u8] ! Error {
+    if port < 0 || port > 65535 { return Error.BadAddress("{host}:{port}") }
+    var out: [u8] = [2, 0, (port / 256) as u8, (port % 256) as u8]
+    var four: [u8] = []
+    match numbers(host) {
+        Some(ns) => { four = ns }
+        None => {
+            match numbers(resolve(host)?[0]) {
+                Some(ns) => { four = ns }
+                None => return Error.BadAddress(host)
+            }
+        }
+    }
+    for n in four { out.push(n) }
     for k in 0..8 { out.push(0) }
     out
 }
@@ -169,6 +210,54 @@ impl Conn {
     /// Says that nothing more will be sent; what the other side sends can
     /// still be read.
     pub fn finish(self) { socket.finish(self.fd) }
+
+    pub fn close(self) { socket.close(self.fd) }
+}
+
+/// A port of this machine that sends and receives datagrams (UDP): each
+/// one goes whole or does not go, and nothing says whether it arrived.
+pub struct Udp { fd: int }
+
+/// A datagram that came, and who sent it.
+pub struct Packet { data: [u8], host: str, port: int }
+
+/// Opens a port for datagrams on an address of this machine. With port 0
+/// the system picks a free one.
+pub fn udp(host: str, port: int) -> Udp ! Error {
+    let addr = address(host, port)?
+    let fd = socket.open_datagram()
+    if fd < 0 { return Error.Failed("open a socket") }
+    if !socket.bind(fd, addr) {
+        socket.close(fd)
+        return Error.Failed("take {host}:{port}")
+    }
+    Udp(fd)
+}
+
+impl Udp {
+    /// The port it has: the one the system picked when it was 0.
+    pub fn port(self) -> int ! Error {
+        var addr: [u8] = [0; 16]
+        var len: [u32] = [16]
+        if !socket.name(self.fd, mut addr, mut len) { return Error.Failed("ask for the port") }
+        (addr[2] as int) * 256 + (addr[3] as int)
+    }
+
+    /// Sends the bytes as one datagram to a port of an address.
+    pub fn send_to(self, host: str, port: int, data: [u8]) ! Error {
+        let addr = address(host, port)?
+        if socket.send_to(self.fd, data, data.len, addr) != data.len as int { return Error.Failed("send a datagram to {host}:{port}") }
+    }
+
+    /// Waits for a datagram: its first `max` bytes at most, and who sent it.
+    pub fn receive(self, max: int) -> Packet ! Error where max > 0 {
+        var data: [u8] = [0; max as usize]
+        var addr: [u8] = [0; 16]
+        var len: [u32] = [16]
+        let n = socket.recv_from(self.fd, mut data, mut addr, mut len)
+        if n < 0 { return Error.Failed("receive a datagram") }
+        Packet(data[..(n as usize)], "{addr[4]}.{addr[5]}.{addr[6]}.{addr[7]}", (addr[2] as int) * 256 + (addr[3] as int))
+    }
 
     pub fn close(self) { socket.close(self.fd) }
 }

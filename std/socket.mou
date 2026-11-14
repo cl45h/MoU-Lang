@@ -16,8 +16,11 @@ import c "sys/socket.h" as sys {
     fn setsockopt(fd: i32, level: i32, name: i32, value: [i32], len: u32) -> i32
     fn getsockname(fd: i32, addr: mut [u8], len: mut [u32]) -> i32
     fn shutdown(fd: i32, how: i32) -> i32
+    fn sendto(fd: i32, data: [u8], n: usize, flags: i32, addr: [u8], len: u32) -> isize
+    fn recvfrom(fd: i32, data: mut [u8], n: usize, flags: i32, addr: mut [u8], len: mut [u32]) -> isize
     @value fn AF_INET() -> i32
     @value fn SOCK_STREAM() -> i32
+    @value fn SOCK_DGRAM() -> i32
     @value fn SOL_SOCKET() -> i32
     @value fn SO_REUSEADDR() -> i32
     @value fn MSG_NOSIGNAL() -> i32
@@ -68,3 +71,16 @@ pub fn readable() -> int { unsafe { pl.POLLIN as int } }
 /// `ms` milliseconds (forever when negative): how many have, or a
 /// negative number. `fds` is what the system takes: 8 bytes per socket.
 pub fn poll(fds: mut [u8], count: int, ms: int) -> int { unsafe { pl.poll(mut fds, count as u64, ms as i32) as int } }
+
+/// A socket for UDP over IPv4, or a negative number.
+pub fn open_datagram() -> int { unsafe { sys.socket(sys.AF_INET, sys.SOCK_DGRAM, 0) as int } }
+
+/// Sends the first `n` bytes as one datagram to an address: how many went
+/// out, or a negative number.
+pub fn send_to(fd: int, data: [u8], n: usize, addr: [u8]) -> int { unsafe { sys.sendto(fd as i32, data, n, 0, addr, 16) as int } }
+
+/// Waits for a datagram and leaves it in `data`, and who sent it in
+/// `addr`: how many bytes came, or a negative number.
+pub fn recv_from(fd: int, data: mut [u8], addr: mut [u8], len: mut [u32]) -> int {
+    unsafe { sys.recvfrom(fd as i32, mut data, data.len, 0, mut addr, mut len) as int }
+}

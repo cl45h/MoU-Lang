@@ -1,0 +1,57 @@
+import std.io
+import std.net
+import std.text
+
+// Names looked up, a connection made by name, and datagrams both ways.
+
+fn echo(server: net.Listener) -> int ! net.Error {
+    let conn = server.accept()?
+    let got = conn.read_all()?
+    conn.write(got)?
+    conn.close()
+    got.len as int
+}
+
+fn talk() ! net.Error {
+    let found = net.resolve("localhost")?
+    let dotted = net.resolve("127.0.0.1")?
+    io.print("{found.len > 0} {found[0]} {dotted}") catch e {}
+
+    let server = net.listen("localhost", 0)?
+    let port = server.port()?
+    scope s {
+        let served = s.spawn(echo(server))
+        let conn = net.connect("localhost", port)?
+        conn.send("by name")?
+        conn.finish()
+        let back = conn.read_all()?
+        conn.close()
+        io.print("{text.from_bytes(back)} {served.wait()?}") catch e {}
+    }
+    server.close()
+
+    let a = net.udp("127.0.0.1", 0)?
+    let b = net.udp("localhost", 0)?
+    let (pa, pb) = (a.port()?, b.port()?)
+    a.send_to("127.0.0.1", pb, text.bytes("ping"))?
+    let first = b.receive(100)?
+    b.send_to(first.host, first.port, text.bytes("pong ñ"))?
+    let second = a.receive(100)?
+    a.send_to("localhost", pb, [1, 2, 3, 4, 5, 6])?
+    let cut = b.receive(4)?
+    io.print("{text.from_bytes(first.data)} {first.host} {first.port == pa} {text.from_bytes(second.data)} {second.port == pb} {cut.data}") catch e {}
+    a.close()
+    b.close()
+}
+
+fn main() ! io.Error {
+    talk() catch e { io.print("failed: {e}")? }
+    let nobody = net.resolve("no such host, with spaces") catch e {
+        io.print("not a name")?
+        []
+    }
+    let bad = net.udp("127.0.0.1", 70000) catch e {
+        io.print("{e}")?
+        net.Udp(-1)
+    }
+}
