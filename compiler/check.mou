@@ -637,7 +637,13 @@ impl Checker {
             types.Ty.Enum(_, args) => self.with_args(self.key(t), args)
             types.Ty.Tuple(ts) => "({self.show_all(ts)})"
             types.Ty.Slice(x) => "[{self.show(x)}]"
-            types.Ty.Array(x) => "[{self.show(x)}; _]"
+            types.Ty.Array(x, n) => {
+                match n {
+                    types.Ty.Value(v) => "[{self.show(x)}; {v}]"
+                    types.Ty.Param(name) => "[{self.show(x)}; {name}]"
+                    _ => "[{self.show(x)}; _]"
+                }
+            }
             types.Ty.Value(v) => "{v}"
             types.Ty.Range(x) => "range of {self.show(x)}"
             types.Ty.Task(x) => "Task[{self.show(x)}]"
@@ -1123,10 +1129,29 @@ impl Checker {
             }
             parser.Type.Slice(x) => types.Ty.Slice(self.resolve(x, at))
             parser.Type.Soa(x) => types.Ty.Slice(self.resolve(x, at))
-            parser.Type.Array(x, _) => {
-                // The length is a value known when compiling; it is not worked out yet.
-                self.skipped_exprs += 1
-                types.Ty.Array(self.resolve(x, at))
+            parser.Type.Array(x, len) => {
+                // The length is known when compiling: a number, a constant,
+                // or a `comptime` parameter, which each copy gives a number.
+                var n = types.Ty.Unknown
+                match self.const_int(len, 0) {
+                    Some(v) => {
+                        if v >= 0 { n = types.Ty.Value(v) } else { self.err(at_expr(len), "the length of an array cannot be {v}") }
+                    }
+                    None => {
+                        var named = false
+                        match len.kind {
+                            parser.Kind.Name(name) => {
+                                if let Some(t) = types.lookup(self.tenv, name) {
+                                    n = t
+                                    named = true
+                                }
+                            }
+                            _ => {}
+                        }
+                        if !named { self.err(at_expr(len), "the length of an array type has to be known when compiling: a number, a constant or a `comptime` parameter") }
+                    }
+                }
+                types.Ty.Array(self.resolve(x, at), n)
             }
             parser.Type.Tuple(ts) => {
                 if ts.len == 0 { return types.Ty.Unit }
@@ -2745,7 +2770,7 @@ impl Checker {
             types.Ty.Slice(t) => {
                 elem = types.concretize(t)
             }
-            types.Ty.Array(t) => {
+            types.Ty.Array(t, _) => {
                 elem = types.concretize(t)
                 fixed = true
             }
@@ -3221,7 +3246,7 @@ impl Checker {
                 if args.len == 1 {
                     let array = match self.types.get(self.slot(base)) {
                         Some(types.Ty.Slice(_)) => true
-                        Some(types.Ty.Array(_)) => true
+                        Some(types.Ty.Array(_, _)) => true
                         _ => false
                     }
                     let range = match self.types.get(self.slot(args[0])) {
@@ -3342,7 +3367,7 @@ impl Checker {
                         }
                         if mutable && listed {
                             match t {
-                                types.Ty.Array(item) => {
+                                types.Ty.Array(item, _) => {
                                     t = types.Ty.Slice(item)
                                 }
                                 _ => {}
@@ -3730,7 +3755,7 @@ impl Checker {
                     types.Ty.Slice(t) => {
                         elem = t
                     }
-                    types.Ty.Array(t) => {
+                    types.Ty.Array(t, _) => {
                         elem = t
                     }
                     types.Ty.Unknown => {}
@@ -4227,12 +4252,16 @@ impl Checker {
                         }
                     }
                 }
-                types.Ty.Array(elem)
+                types.Ty.Array(elem, types.Ty.Value(items.len as int))
             }
             parser.Kind.Repeat(value, count) => {
                 let t = self.expr(value)
                 self.expect(count, types.Ty.Int("usize"), "array length")
-                types.Ty.Array(t)
+                // With a length that is only known when running, it is a slice.
+                match self.const_int(count, 0) {
+                    Some(n) => if n >= 0 { types.Ty.Array(t, types.Ty.Value(n)) } else { types.Ty.Slice(t) }
+                    None => types.Ty.Slice(t)
+                }
             }
             parser.Kind.Blk(b) => self.block(b)
             parser.Kind.If(cond, then, otherwise) => {
@@ -4297,7 +4326,7 @@ impl Checker {
                     types.Ty.Slice(t) => {
                         elem = types.concretize(t)
                     }
-                    types.Ty.Array(t) => {
+                    types.Ty.Array(t, _) => {
                         elem = types.concretize(t)
                     }
                     types.Ty.Range(t) => {
@@ -4638,8 +4667,17 @@ impl Checker {
                         if ranged { return types.Ty.Slice(t) }
                         t
                     }
-                    types.Ty.Array(t) => {
+                    types.Ty.Array(t, len) => {
                         if ranged { return types.Ty.Slice(t) }
+                        // A position that is known is checked against a length that is.
+                        match len {
+                            types.Ty.Value(n) => {
+                                if let Some(i) = self.const_int(args[0], 0) {
+                                    if i < 0 || i >= n { self.err(at_expr(args[0]), "index {i} is out of range for an array of {n} items") }
+                                }
+                            }
+                            _ => {}
+                        }
                         t
                     }
                     types.Ty.Str => {
@@ -4907,7 +4945,7 @@ impl Checker {
                     found = Some(types.Ty.Int("usize"))
                 }
             }
-            types.Ty.Array(_) => {
+            types.Ty.Array(_, _) => {
                 if name == "len" {
                     self.set_res(e, Res.Len)
                     found = Some(types.Ty.Int("usize"))
@@ -5615,7 +5653,7 @@ impl Checker {
                 self.args_unchecked(args)
                 self.skip()
             }
-            types.Ty.Array(_) => {
+            types.Ty.Array(_, _) => {
                 if name == "push" || name == "pop" || name == "get" { return self.array_method(e, base, bt, name, args, at) }
                 self.args_unchecked(args)
                 self.skip()

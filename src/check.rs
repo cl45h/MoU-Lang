@@ -36,7 +36,8 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     Slice(Box<Ty>),
     /// Fixed-size array. The length is not tracked until `comptime` exists.
-    Array(Box<Ty>),
+    /// `[T; N]`: the items, and how many: a `Value` when it is known.
+    Array(Box<Ty>, Box<Ty>),
     Range(Box<Ty>),
     Optional(Box<Ty>),
     Result(Box<Ty>, Box<Ty>),
@@ -766,7 +767,11 @@ fn plain_text(t: &Ty) -> String {
         Dyn(i, ts) => format!("dyn{i}[{}]", list(ts)),
         Tuple(ts) => format!("({})", list(ts)),
         Slice(t) => format!("[{}]", text(t)),
-        Array(t) => format!("[{}; _]", text(t)),
+        Array(t, n) => match &**n {
+            Value(v) => format!("[{}; {v}]", text(t)),
+            Param(name) => format!("[{}; {name}]", text(t)),
+            _ => format!("[{}; _]", text(t)),
+        },
         Value(v) => format!("={v}"),
         Range(t) => format!("range {}", text(t)),
         Task(t) => format!("task {}", text(t)),
@@ -839,8 +844,10 @@ pub fn join(a: &Ty, b: &Ty) -> Option<Ty> {
         (Tuple(x), Tuple(y)) if x.len() == y.len() => {
             Tuple(x.iter().zip(y).map(|(p, q)| join(p, q)).collect::<Option<Vec<_>>>()?)
         }
-        (Slice(x), Slice(y)) | (Array(x), Slice(y)) | (Slice(x), Array(y)) => Slice(boxed(join(x, y))?),
-        (Array(x), Array(y)) => Array(boxed(join(x, y))?),
+        (Slice(x), Slice(y)) | (Array(x, _), Slice(y)) | (Slice(x), Array(y, _)) => Slice(boxed(join(x, y))?),
+        (Array(x, n), Array(y, m)) if n == m => Array(boxed(join(x, y))?, n.clone()),
+        // Two arrays of different lengths are, together, a slice.
+        (Array(x, _), Array(y, _)) => Slice(boxed(join(x, y))?),
         (Range(x), Range(y)) => Range(boxed(join(x, y))?),
         (Result(x, e), Result(y, f)) => Result(boxed(join(x, y))?, boxed(join(e, f))?),
         (Fn(x), Fn(y)) if fn_compatible(x, y) => a.clone(),
@@ -871,9 +878,9 @@ pub fn assignable(exp: &Ty, act: &Ty) -> bool {
         (Optional(e), Optional(a)) => assignable(e, a),
         (Optional(e), a) => assignable(e, a),
         (Tuple(e), Tuple(a)) => e.len() == a.len() && e.iter().zip(a).all(|(p, q)| assignable(p, q)),
-        (Slice(e), Slice(a)) | (Slice(e), Array(a)) | (Array(e), Array(a)) | (Range(e), Range(a)) => {
-            assignable(e, a)
-        }
+        (Slice(e), Slice(a)) | (Slice(e), Array(a, _)) | (Range(e), Range(a)) => assignable(e, a),
+        // Two lengths that are both known have to be the same.
+        (Array(e, n), Array(a, m)) => assignable(e, a) && !matches!((&**n, &**m), (Value(x), Value(y)) if x != y),
         (Result(e, x), Result(a, y)) => assignable(e, a) && assignable(x, y),
         (Fn(e), Fn(a)) => fn_compatible(e, a),
         (Struct(i, e), Struct(j, a)) | (Enum(i, e), Enum(j, a)) => i == j && same_args(e, a),
@@ -890,7 +897,8 @@ fn same(a: &Ty, b: &Ty) -> bool {
         (Never | Unknown, _) | (_, Never | Unknown) => true,
         (Struct(i, x), Struct(j, y)) | (Enum(i, x), Enum(j, y)) => i == j && same_args(x, y),
         (Tuple(x), Tuple(y)) => same_args(x, y),
-        (Slice(x), Slice(y)) | (Array(x), Array(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) | (Task(x), Task(y)) | (Chan(x), Chan(y)) | (Mutex(x), Mutex(y)) => same(x, y),
+        (Array(x, n), Array(y, m)) => same(x, y) && n == m,
+        (Slice(x), Slice(y)) | (Range(x), Range(y)) | (Optional(x), Optional(y)) | (Task(x), Task(y)) | (Chan(x), Chan(y)) | (Mutex(x), Mutex(y)) => same(x, y),
         (Result(x, e), Result(y, f)) => same(x, y) && same(e, f),
         _ => a == b,
     }
@@ -910,7 +918,7 @@ fn fill_one(a: &Ty, b: &Ty) -> Ty {
         (Enum(i, x), Enum(_, y)) => Enum(*i, fill(x, y)),
         (Tuple(x), Tuple(y)) => Tuple(fill(x, y)),
         (Slice(x), Slice(y)) => Slice(bx(x, y)),
-        (Array(x), Array(y)) => Array(bx(x, y)),
+        (Array(x, n), Array(y, _)) => Array(bx(x, y), n.clone()),
         (Range(x), Range(y)) => Range(bx(x, y)),
         (Optional(x), Optional(y)) => Optional(bx(x, y)),
         (Result(x, e), Result(y, f)) => Result(bx(x, y), bx(e, f)),
@@ -928,7 +936,7 @@ fn open(t: &Ty) -> bool {
     match t {
         Never | Unknown => true,
         Struct(_, ts) | Enum(_, ts) | Tuple(ts) => ts.iter().any(open),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => open(t),
+        Slice(t) | Array(t, _) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => open(t),
         Result(t, e) => open(t) || open(e),
         _ => false,
     }
@@ -950,7 +958,7 @@ fn concretize(t: &Ty) -> Ty {
         FloatLit => Float("f64"),
         Tuple(ts) => Tuple(ts.iter().map(concretize).collect()),
         Slice(t) => Slice(Box::new(concretize(t))),
-        Array(t) => Array(Box::new(concretize(t))),
+        Array(t, n) => Array(Box::new(concretize(t)), n.clone()),
         Range(t) => Range(Box::new(concretize(t))),
         Task(t) => Task(Box::new(concretize(t))),
         Chan(t) => Chan(Box::new(concretize(t))),
@@ -970,7 +978,7 @@ pub fn subst(t: &Ty, env: &HashMap<String, Ty>) -> Ty {
         Param(n) => env.get(n).cloned().unwrap_or_else(|| t.clone()),
         Tuple(ts) => Tuple(ts.iter().map(|t| subst(t, env)).collect()),
         Slice(t) => Slice(b(t)),
-        Array(t) => Array(b(t)),
+        Array(t, n) => Array(b(t), b(n)),
         Range(t) => Range(b(t)),
         Task(t) => Task(b(t)),
         Chan(t) => Chan(b(t)),
@@ -1011,7 +1019,7 @@ fn bind(pat: &Ty, actual: &Ty, env: &mut HashMap<String, Ty>) {
         (Struct(i, ps), Struct(j, ts)) | (Enum(i, ps), Enum(j, ts)) | (Dyn(i, ps), Dyn(j, ts)) if i == j => {
             ps.iter().zip(ts).for_each(|(p, t)| bind(p, t, env))
         }
-        (Slice(p) | Array(p), Slice(t) | Array(t)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) | (Task(p), Task(t)) | (Chan(p), Chan(t)) | (Mutex(p), Mutex(t)) => bind(p, t, env),
+        (Slice(p) | Array(p, _), Slice(t) | Array(t, _)) | (Range(p), Range(t)) | (Optional(p), Optional(t)) | (Task(p), Task(t)) | (Chan(p), Chan(t)) | (Mutex(p), Mutex(t)) => bind(p, t, env),
         (Optional(p), t) => bind(p, t, env),
         (Result(p, pe), Result(t, te)) => {
             bind(p, t, env);
@@ -1058,7 +1066,7 @@ fn undecided(t: &Ty) -> bool {
     match t {
         Struct(_, ts) | Enum(_, ts) => ts.iter().any(open),
         Tuple(ts) => ts.iter().any(undecided),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => undecided(t),
+        Slice(t) | Array(t, _) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => undecided(t),
         Result(t, e) => undecided(t) || undecided(e),
         _ => false,
     }
@@ -1070,7 +1078,7 @@ fn concrete(t: &Ty) -> bool {
     match t {
         Param(_) | Unknown => false,
         Tuple(ts) | Struct(_, ts) | Enum(_, ts) | Dyn(_, ts) => ts.iter().all(concrete),
-        Slice(t) | Array(t) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => concrete(t),
+        Slice(t) | Array(t, _) | Range(t) | Optional(t) | Task(t) | Chan(t) | Mutex(t) => concrete(t),
         Result(t, e) => concrete(t) && concrete(e),
         Fn(sig) => sig.params.iter().all(|p| concrete(&p.ty)) && concrete(&sig.ret),
         _ => true,
@@ -1119,8 +1127,8 @@ pub fn types_selftest() -> String {
         Tuple(vec![Int("u8"), Str]),
         Slice(b(int.clone())),
         Slice(b(IntLit)),
-        Array(b(IntLit)),
-        Array(b(Never)),
+        Array(b(IntLit), b(Value(2))),
+        Array(b(Never), b(Value(0))),
         Range(b(IntLit)),
         Range(b(Int("i32"))),
         Optional(b(int.clone())),
@@ -1655,7 +1663,11 @@ impl<'a> Checker<'a> {
             }),
             Tuple(ts) => format!("({})", ts.iter().map(|t| self.show(t)).collect::<Vec<_>>().join(", ")),
             Slice(t) => format!("[{}]", self.show(t)),
-            Array(t) => format!("[{}; _]", self.show(t)),
+            Array(t, n) => match &**n {
+                Value(v) => format!("[{}; {v}]", self.show(t)),
+                Param(name) => format!("[{}; {name}]", self.show(t)),
+                _ => format!("[{}; _]", self.show(t)),
+            },
             Value(v) => v.to_string(),
             Range(t) => format!("range of {}", self.show(t)),
             Task(t) => format!("Task[{}]", self.show(t)),
@@ -2972,7 +2984,7 @@ impl<'a> Checker<'a> {
     /// The methods the language itself gives to `[T]`.
     fn array_method(&mut self, e: &Expr, base: &Expr, bt: &Ty, name: &str, args: &[Arg], span: Span) -> Ty {
         let elem = match bt {
-            Ty::Slice(t) | Ty::Array(t) => concretize(t),
+            Ty::Slice(t) | Ty::Array(t, _) => concretize(t),
             _ => Ty::Unknown,
         };
         let name: &'static str = match name {
@@ -2981,7 +2993,7 @@ impl<'a> Checker<'a> {
             _ => "get",
         };
         if name != "get" {
-            if matches!(bt, Ty::Array(_)) {
+            if matches!(bt, Ty::Array(..)) {
                 self.args_unchecked(args);
                 self.err(span, format!("a fixed-size array cannot change its length: give the variable the type `[{}]`", self.show(&elem)));
                 return Ty::Unknown;
@@ -3213,10 +3225,22 @@ impl<'a> Checker<'a> {
                 self.named(name, targs, span)
             }
             Type::Slice(t) | Type::Soa(t) => Ty::Slice(Box::new(self.resolve(t, span))),
-            Type::Array(t, _) => {
-                // The length is a compile-time expression; it is not evaluated yet.
-                self.report.skipped_exprs += 1;
-                Ty::Array(Box::new(self.resolve(t, span)))
+            Type::Array(t, len) => {
+                // The length is known when compiling: a number, a constant,
+                // or a `comptime` parameter, which each copy gives a number.
+                let n = match (self.const_int(len, 0), &len.kind) {
+                    (Some(v), _) if v >= 0 => Ty::Value(v),
+                    (Some(v), _) => {
+                        self.err(len.span, format!("the length of an array cannot be {v}"));
+                        Ty::Unknown
+                    }
+                    (None, ExprKind::Path(name)) if self.tenv.contains_key(name) => self.tenv[name].clone(),
+                    (None, _) => {
+                        self.err(len.span, "the length of an array type has to be known when compiling: a number, a constant or a `comptime` parameter");
+                        Ty::Unknown
+                    }
+                };
+                Ty::Array(Box::new(self.resolve(t, span)), Box::new(n))
             }
             Type::Tuple(ts) if ts.is_empty() => Ty::Unit,
             Type::Tuple(ts) => Ty::Tuple(ts.iter().map(|t| self.resolve(t, span)).collect()),
@@ -3486,7 +3510,7 @@ impl<'a> Checker<'a> {
             ExprKind::Path(_) => self.var_of.get(&key) == Some(&var),
             ExprKind::Field { base, .. } if matches!(self.res.get(&key), Some(Res::Field(_))) => return self.ref_tail(base, var, mutable, name),
             ExprKind::Index { base, args } if args.len() == 1 => {
-                let array = matches!(self.types.get(&(self.inst, id(base))), Some(Ty::Slice(_) | Ty::Array(_)));
+                let array = matches!(self.types.get(&(self.inst, id(base))), Some(Ty::Slice(_) | Ty::Array(..)));
                 let range = matches!(self.types.get(&(self.inst, id(&args[0]))), Some(Ty::Range(_)));
                 if array && !range {
                     return self.ref_tail(base, var, mutable, name);
@@ -3583,7 +3607,7 @@ impl<'a> Checker<'a> {
                     }
                     // A variable that starts as a list of items can grow.
                     (None, Some((v, a))) => match (concretize(&a), &v.kind) {
-                        (Ty::Array(item), ExprKind::Array(_) | ExprKind::ArrayRepeat(..)) if *mutable => Ty::Slice(item),
+                        (Ty::Array(item, _), ExprKind::Array(_) | ExprKind::ArrayRepeat(..)) if *mutable => Ty::Slice(item),
                         (t, _) => t,
                     },
                     (None, None) => {
@@ -3844,7 +3868,7 @@ impl<'a> Checker<'a> {
             },
             Pattern::Slice(ps) => {
                 let elem = match ty {
-                    Ty::Slice(t) | Ty::Array(t) => (**t).clone(),
+                    Ty::Slice(t) | Ty::Array(t, _) => (**t).clone(),
                     Ty::Unknown => Ty::Unknown,
                     _ => {
                         let shown = self.show(ty);
@@ -4054,12 +4078,16 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                Ty::Array(Box::new(elem))
+                Ty::Array(Box::new(elem), Box::new(Ty::Value(items.len() as i128)))
             }
             ExprKind::ArrayRepeat(value, len) => {
                 let t = self.expr(value);
                 self.expect(len, &Ty::Int("usize"), "array length");
-                Ty::Array(Box::new(t))
+                // With a length that is only known when running, it is a slice.
+                match self.const_int(len, 0) {
+                    Some(n) if n >= 0 => Ty::Array(Box::new(t), Box::new(Ty::Value(n))),
+                    _ => Ty::Slice(Box::new(t)),
+                }
             }
             ExprKind::Block(b) => self.block(b),
             ExprKind::If { cond, then, els } => {
@@ -4112,7 +4140,7 @@ impl<'a> Checker<'a> {
             ExprKind::For { pat, iter, body } => {
                 let it = self.expr(iter);
                 let elem = match &it {
-                    Ty::Slice(t) | Ty::Array(t) | Ty::Range(t) => concretize(t),
+                    Ty::Slice(t) | Ty::Array(t, _) | Ty::Range(t) => concretize(t),
                     Ty::Str => Ty::Char,
                     Ty::Unknown => Ty::Unknown,
                     other => {
@@ -4357,9 +4385,17 @@ impl<'a> Checker<'a> {
                         return Ty::Unknown;
                     }
                 };
+                // A position that is known is checked against a length that is.
+                if let (Ty::Array(_, n), false) = (&bt, ranged) {
+                    if let (Ty::Value(n), Some(i)) = (&**n, self.const_int(&args[0], 0)) {
+                        if i < 0 || i >= *n {
+                            self.err(args[0].span, format!("index {i} is out of range for an array of {n} items"));
+                        }
+                    }
+                }
                 match bt {
-                    Ty::Slice(t) | Ty::Array(t) if ranged => Ty::Slice(t),
-                    Ty::Slice(t) | Ty::Array(t) => *t,
+                    Ty::Slice(t) | Ty::Array(t, _) if ranged => Ty::Slice(t),
+                    Ty::Slice(t) | Ty::Array(t, _) => *t,
                     Ty::Str if ranged => Ty::Str,
                     Ty::Str => {
                         self.err(span, "a `str` is UTF-8 and can only be indexed with a range");
@@ -4562,7 +4598,7 @@ impl<'a> Checker<'a> {
                 self.res.insert((self.inst, id(e)), Res::Field(i));
                 ts.get(i).cloned()
             }),
-            Ty::Slice(_) | Ty::Array(_) | Ty::Str if name == "len" => {
+            Ty::Slice(_) | Ty::Array(..) | Ty::Str if name == "len" => {
                 self.res.insert((self.inst, id(e)), Res::Len);
                 Some(Ty::Int("usize"))
             }
@@ -5048,7 +5084,7 @@ impl<'a> Checker<'a> {
                         self.args_unchecked(args);
                         Ty::Unknown
                     }
-                    Ty::Slice(_) | Ty::Array(_) if matches!(name.as_str(), "push" | "pop" | "get") => {
+                    Ty::Slice(_) | Ty::Array(..) if matches!(name.as_str(), "push" | "pop" | "get") => {
                         self.array_method(e, base, &bt, name, args, span)
                     }
                     Ty::Builtin("scope") if name == "spawn" => self.spawn(e, args, span),
@@ -5216,6 +5252,18 @@ mod tests {
         bad(&format!("{p}fn f() {{\n let p = P.new()\n p.inc()\n}}"), "not mutable");
         bad(&format!("{p}fn f(p: P) {{ p.nope() }}"), "no method `nope`");
         bad(&format!("{p}impl P {{ fn bad(self) {{ self.x = 1 }} }}"), "immutable");
+    }
+
+    #[test]
+    fn array_lengths() {
+        ok("fn f(xs: [int; 3]) -> int { xs[2] }\nfn g() -> int { f([1, 2, 3]) }");
+        ok("fn f(comptime n: int, xs: [int; n]) -> int { xs[0] }\nfn g() -> int { f(2, [1, 2]) }");
+        ok("let N = 2\nfn f() -> [int] { let a: [int; N] = [0; 2]\n a }");
+        bad("fn f() { let a: [int; 3] = [1, 2] }", "expected `[i64; 3]`");
+        bad("fn f(xs: [int; 3]) -> int { xs[3] }", "index 3 is out of range for an array of 3 items");
+        bad("fn f(comptime n: int, xs: [int; n]) -> int { xs[0] }\nfn g() -> int { f(3, [1, 2]) }", "expected `[i64; 3]`");
+        bad("fn f(n: int) { let a: [int; n] = [] }", "has to be known when compiling");
+        bad("fn f(s: [int]) { let a: [int; 2] = s }", "expected `[i64; 2]`, found `[i64]`");
     }
 
     #[test]

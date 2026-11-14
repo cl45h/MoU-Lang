@@ -1,0 +1,15 @@
+fn total(xs: [int; 3]) -> int { xs[3] }
+fn sum(comptime n: int, xs: [int; n]) -> int { xs[0] }
+fn main() {
+    let a: [int; 3] = [1, 2]
+    let n = 2
+    let b: [int; n] = [1, 2]
+    let c: [int; 2] = [0; 3]
+    let d = [1, 2, 3]
+    let e = d[5] + d[0 - 1]
+    total([1, 2, 3, 4])
+    sum(2, d)
+    let s: [int] = [1, 2]
+    let f: [int; 2] = s
+    let g: [int; 0 - 1] = []
+}

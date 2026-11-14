@@ -491,7 +491,7 @@ fn holds(info: &Info, t: &Ty, target: (bool, usize), seen: &mut Vec<(bool, usize
             }
             inner.into_iter().any(|t| holds(info, t, target, seen))
         }
-        Ty::Optional(t) | Ty::Array(t) => holds(info, t, target, seen),
+        Ty::Optional(t) | Ty::Array(t, _) => holds(info, t, target, seen),
         Ty::Tuple(ts) => ts.iter().any(|t| holds(info, t, target, seen)),
         Ty::Result(a, b) => holds(info, a, target, seen) || holds(info, b, target, seen),
         _ => false,
@@ -726,7 +726,7 @@ pub fn conv(from: &Ty, to: &Ty) -> Option<Conv> {
             let cs: Vec<Option<Conv>> = a.iter().zip(b).map(|(x, y)| conv(x, y)).collect();
             cs.iter().any(|c| c.is_some()).then_some(Conv::Tuple(cs))
         }
-        (Slice(a) | Array(a), Slice(b) | Array(b)) => conv(a, b).map(|c| Conv::Elems(Box::new(c))),
+        (Slice(a) | Array(a, _), Slice(b) | Array(b, _)) => conv(a, b).map(|c| Conv::Elems(Box::new(c))),
         (Result(a, x), Result(b, y)) => {
             let (ok, err) = (conv(a, b), conv(x, y));
             (ok.is_some() || err.is_some()).then(|| Conv::Res(ok.map(Box::new), err.map(Box::new)))
@@ -1114,7 +1114,7 @@ impl<'a> Lower<'a> {
         }
         match t {
             Ty::Slice(_) => true,
-            Ty::Array(t) | Ty::Optional(t) => self.holds_array(t, seen),
+            Ty::Array(t, _) | Ty::Optional(t) => self.holds_array(t, seen),
             Ty::Tuple(ts) => ts.iter().any(|t| self.holds_array(t, seen)),
             Ty::Result(a, b) => self.holds_array(a, seen) || self.holds_array(b, seen),
             Ty::Struct(i, args) => {
@@ -1727,7 +1727,7 @@ impl<'a> Lower<'a> {
                 }
             }
             ExprKind::Index { base, args } if args.len() == 1 => {
-                let indexable = matches!(self.ty(base), Ty::Slice(_) | Ty::Array(_));
+                let indexable = matches!(self.ty(base), Ty::Slice(_) | Ty::Array(..));
                 if indexable && !matches!(self.ty(&args[0]), Ty::Range(_)) {
                     let p = self.place(base);
                     let i = self.expr(&args[0]);
@@ -1957,7 +1957,7 @@ impl<'a> Lower<'a> {
                 }
             }
             Pattern::Slice(ps) => {
-                let (Ty::Slice(elem) | Ty::Array(elem)) = ty else {
+                let (Ty::Slice(elem) | Ty::Array(elem, _)) = ty else {
                     self.unsupported(self.span, "patterns on values whose type is not checked");
                     return;
                 };
@@ -2113,7 +2113,7 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Array(items) => {
                 let elem = match self.ty(e) {
-                    Ty::Array(t) => *t,
+                    Ty::Array(t, _) => *t,
                     _ => Ty::Unknown,
                 };
                 let mut ops = Vec::new();
@@ -2255,7 +2255,7 @@ impl<'a> Lower<'a> {
                         self.emit(Place::local(i), Rvalue::RangeStart(v.clone(), num));
                         (Place::local(i), (**t).clone(), num)
                     }
-                    Ty::Slice(t) | Ty::Array(t) => {
+                    Ty::Slice(t) | Ty::Array(t, _) => {
                         self.set(i, Operand::Const(Value::Int(0)));
                         (self.stash(v.clone()).index(cursor.clone()), (**t).clone(), Num::Int("usize"))
                     }
@@ -2470,7 +2470,7 @@ impl<'a> Lower<'a> {
                     self.span = span;
                     return self.tmp(Rvalue::Slice(b, r));
                 }
-                if !matches!(self.ty(base), Ty::Slice(_) | Ty::Array(_)) {
+                if !matches!(self.ty(base), Ty::Slice(_) | Ty::Array(..)) {
                     return self.unsupported(span, "indexing a value of this type");
                 }
                 let place = self.place(e);

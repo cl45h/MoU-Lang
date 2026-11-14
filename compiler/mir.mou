@@ -436,7 +436,7 @@ fn holds(c: check.Checker, t: types.Ty, target: Kind, seen: mut [Kind]) -> bool 
             false
         }
         types.Ty.Optional(x) => holds(c, x, target, mut seen)
-        types.Ty.Array(x) => holds(c, x, target, mut seen)
+        types.Ty.Array(x, _) => holds(c, x, target, mut seen)
         types.Ty.Tuple(ts) => {
             for x in ts {
                 if holds(c, x, target, mut seen) { return true }
@@ -509,9 +509,9 @@ pub fn conv(source: types.Ty, target: types.Ty) -> Conv? {
             None
         }
         (types.Ty.Slice(a), types.Ty.Slice(b)) => elems_conv(a, b)
-        (types.Ty.Slice(a), types.Ty.Array(b)) => elems_conv(a, b)
-        (types.Ty.Array(a), types.Ty.Slice(b)) => elems_conv(a, b)
-        (types.Ty.Array(a), types.Ty.Array(b)) => elems_conv(a, b)
+        (types.Ty.Slice(a), types.Ty.Array(b, _)) => elems_conv(a, b)
+        (types.Ty.Array(a, _), types.Ty.Slice(b)) => elems_conv(a, b)
+        (types.Ty.Array(a, _), types.Ty.Array(b, _)) => elems_conv(a, b)
         (types.Ty.Result(a, x), types.Ty.Result(b, y)) => {
             let ok = conv(a, b)
             let failed = conv(x, y)
@@ -1113,7 +1113,7 @@ impl Lower {
         }
         match t {
             types.Ty.Slice(_) => true
-            types.Ty.Array(x) => self.holds_array(x, mut seen)
+            types.Ty.Array(x, _) => self.holds_array(x, mut seen)
             types.Ty.Optional(x) => self.holds_array(x, mut seen)
             types.Ty.Tuple(ts) => {
                 for x in ts {
@@ -1937,7 +1937,7 @@ impl Lower {
                 if args.len == 1 {
                     let indexable = match self.ty(base) {
                         types.Ty.Slice(_) => true
-                        types.Ty.Array(_) => true
+                        types.Ty.Array(_, _) => true
                         _ => false
                     }
                     let ranged = match self.ty(args[0]) {
@@ -2253,7 +2253,7 @@ impl Lower {
                     types.Ty.Slice(x) => {
                         elem = x
                     }
-                    types.Ty.Array(x) => {
+                    types.Ty.Array(x, _) => {
                         elem = x
                     }
                     _ => {
@@ -2444,7 +2444,7 @@ impl Lower {
             parser.Kind.Array(items) => {
                 var elem = types.Ty.Unknown
                 match self.ty(e) {
-                    types.Ty.Array(t) => {
+                    types.Ty.Array(t, _) => {
                         elem = t
                     }
                     _ => {}
@@ -2772,7 +2772,7 @@ impl Lower {
                 item = with_index(held, cursor)
                 elem = t
             }
-            types.Ty.Array(t) => {
+            types.Ty.Array(t, _) => {
                 self.set(i, int_op(0))
                 let held = self.stash(v)
                 item = with_index(held, cursor)
@@ -3008,7 +3008,7 @@ impl Lower {
         }
         let indexable = match self.ty(base) {
             types.Ty.Slice(_) => true
-            types.Ty.Array(_) => true
+            types.Ty.Array(_, _) => true
             _ => false
         }
         if !indexable { return self.unsupported(at, "indexing a value of this type") }

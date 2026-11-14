@@ -45,7 +45,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - Referencias guardadas en structs y regiones explícitas.
 - Entrada y salida con un bucle de eventos armado: hoy `std.net` da TCP con funciones que esperan, y varias conexiones a la vez se atienden con una tarea (un hilo) por conexión, o desde un solo hilo con `net.wait`, que dice cuáles tienen algo para leer; solo Linux e IPv4. Tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden.
 - El resto del contexto (un `io` reemplazable entero; `with alloc = arena` y `with io = lineas`, que captura lo que se imprime, ya están) y los efectos escritos en los tipos de función (hoy una llamada a un valor función toma los efectos de las funciones que el programa usa como valor).
-- Funciones que devuelven un tipo (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y de tipos (`empty(int)`) y la reflexión con `meta.info(T)` ya están.
+- Funciones que devuelven un tipo (`fn Matrix(comptime T: type) -> type`); los parámetros `comptime` de enteros y de tipos (`empty(int)`), los arrays de largo fijo `[T; N]` y la reflexión con `meta.info(T)` ya están.
 - Leer y escribir a través de un puntero de C (las funciones, los números con nombre y los structs de un header ya se leen: `import c "math.h" as m` sin bloque los trae al compilar, y `mou bind header.h` los escribe).
 - Backend LLVM, SIMD y `soa`; `import cpp` e `import py`.
 
