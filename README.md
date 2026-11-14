@@ -1,5 +1,7 @@
 # Mou
 
+Español | [English](README.en.md)
+
 Mou es un lenguaje de programación de sistemas en desarrollo. Busca combinar seguridad de memoria, efectos inferidos por el compilador y binarios nativos, con menos anotaciones que Rust y sin las trampas de C y C++.
 
 Estado: experimental. El lenguaje cambia y todavía no sirve para producción.
