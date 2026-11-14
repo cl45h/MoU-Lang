@@ -414,7 +414,8 @@ fn build_file(path: &str, src: &str, print: bool, output: Option<String>, libs: 
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     // `CFLAGS` replaces the default `-O2`: `-O1` builds a large program much faster.
     let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O2".to_string());
-    match std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-pthread", "-o", &output, &c_path, "-lm"]).args(libs).status() {
+    let (compile, link) = cgen::header_flags(&program);
+    match std::process::Command::new(&cc).args(flags.split_whitespace()).args(compile).args(["-pthread", "-o", &output, &c_path, "-lm"]).args(libs).args(link).status() {
         Ok(status) if status.success() => {
             println!("built {output} (C source in {c_path})");
             ExitCode::SUCCESS
@@ -615,7 +616,8 @@ fn test_program(program: &mut mir::Program, paths: &[String], tests: &[usize]) -
     std::fs::write(&source, c).map_err(|e| format!("cannot write {}: {e}", source.display()))?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O1".to_string());
-    let built = std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-w", "-pthread", "-o"]).arg(&exe).arg(&source).arg("-lm").output();
+    let (compile, link) = cgen::header_flags(program);
+    let built = std::process::Command::new(&cc).args(flags.split_whitespace()).args(compile).args(["-w", "-pthread", "-o"]).arg(&exe).arg(&source).arg("-lm").args(link).output();
     match built {
         Ok(b) if b.status.success() => Ok(exe),
         Ok(b) => Err(format!("the C compiler `{cc}` failed on the tests: {}", String::from_utf8_lossy(&b.stderr).lines().next().unwrap_or_default())),

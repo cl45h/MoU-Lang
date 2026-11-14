@@ -1,0 +1,195 @@
+// Python from Mou: its modules, its functions and its values.
+//
+//     let math = py.module("math")?
+//     let root = math.method("sqrt", [py.from_float(2.0)])?.as_float()?
+//
+// It is CPython inside the program, so it only works compiled (`mou build`),
+// with the headers and the library of Python 3.12 or later on the machine.
+
+import std.cpython as c
+
+/// A value of Python: a number, a text, a list, a module, a function.
+pub struct Object { p: ptr }
+
+/// What Python said when something failed: the exception, as text.
+pub struct Error { message: str }
+
+// The exception the last call left, as an error of Mou.
+fn raised() -> Error {
+    match c.raised() {
+        Some(e) => {
+            var message = "an exception without text"
+            match c.shown(e) {
+                Some(s) => {
+                    if let Some(t) = c.to_text(s) { message = t }
+                    c.release(s)
+                }
+                None => { c.forget() }
+            }
+            c.release(e)
+            Error(message)
+        }
+        None => Error("Python failed without saying why")
+    }
+}
+
+fn made(p: ptr?) -> Object ! Error {
+    match p {
+        Some(o) => Object(o)
+        None => return raised()
+    }
+}
+
+// A value Python always can make: without memory the program stops.
+fn must(p: ptr?) -> Object {
+    match p {
+        Some(o) => Object(o)
+        None => panic("Python could not create a value")
+    }
+}
+
+/// A module of Python, as `import name` gives it.
+pub fn module(name: str) -> Object ! Error {
+    c.start()
+    made(c.module(name))?
+}
+
+/// Runs statements of Python, in its module `__main__`.
+pub fn run(code: str) ! Error {
+    c.start()
+    if !c.run(code) { return Error("the code raised an exception, which Python printed") }
+}
+
+pub fn from_int(n: int) -> Object {
+    c.start()
+    must(c.from_int(n))
+}
+
+pub fn from_float(x: f64) -> Object {
+    c.start()
+    must(c.from_float(x))
+}
+
+pub fn from_bool(b: bool) -> Object {
+    c.start()
+    must(c.from_bool(b))
+}
+
+pub fn from_str(s: str) -> Object {
+    c.start()
+    must(c.from_text(s))
+}
+
+pub fn none() -> Object {
+    c.start()
+    must(c.none())
+}
+
+/// A list of Python with these values.
+pub fn list(items: [Object]) -> Object {
+    c.start()
+    let l = must(c.list(items.len as int))
+    for i in 0..(items.len as int) {
+        if !c.list_set(l.p, i, items[i].p) { panic("Python could not fill a list") }
+    }
+    l
+}
+
+/// A tuple of Python with these values.
+pub fn tuple(items: [Object]) -> Object {
+    c.start()
+    let t = must(c.tuple(items.len as int))
+    for i in 0..(items.len as int) {
+        if !c.tuple_set(t.p, i, items[i].p) { panic("Python could not fill a tuple") }
+    }
+    t
+}
+
+/// A dictionary of Python with these keys and values, one for one.
+pub fn dict(keys: [Object], values: [Object]) -> Object ! Error where keys.len == values.len {
+    c.start()
+    let d = must(c.dict())
+    for i in 0..(keys.len as int) {
+        if !c.dict_set(d.p, keys[i].p, values[i].p) { return raised() }
+    }
+    d
+}
+
+impl Object {
+    /// `self.name`.
+    pub fn attr(self, name: str) -> Object ! Error { made(c.attr(self.p, name))? }
+
+    /// `self(args...)`.
+    pub fn call(self, args: [Object]) -> Object ! Error {
+        let packed = tuple(args)
+        let result = c.call(self.p, packed.p)
+        c.release(packed.p)
+        made(result)?
+    }
+
+    /// `self.name(args...)`.
+    pub fn method(self, name: str, args: [Object]) -> Object ! Error {
+        let f = self.attr(name)?
+        let result = f.call(args)
+        c.release(f.p)
+        result?
+    }
+
+    /// `self[i]`, for a list, a tuple or a text.
+    pub fn item(self, i: int) -> Object ! Error { made(c.item(self.p, i))? }
+
+    /// `self[key]`, for a dictionary or anything else that takes a key.
+    pub fn get(self, key: Object) -> Object ! Error { made(c.lookup(self.p, key.p))? }
+
+    /// `len(self)`.
+    pub fn len(self) -> int ! Error {
+        let n = c.length(self.p)
+        if n < 0 { return raised() }
+        n
+    }
+
+    pub fn as_int(self) -> int ! Error {
+        let n = c.to_int(self.p)
+        if n == -1 && c.failed() { return raised() }
+        n
+    }
+
+    pub fn as_float(self) -> f64 ! Error {
+        let x = c.to_float(self.p)
+        if x == -1.0 && c.failed() { return raised() }
+        x
+    }
+
+    /// The text, when the value is one.
+    pub fn as_str(self) -> str ! Error {
+        match c.to_text(self.p) {
+            Some(s) => s
+            None => return raised()
+        }
+    }
+
+    /// Whether Python takes the value as true.
+    pub fn truthy(self) -> bool ! Error {
+        let t = c.truth(self.p)
+        if t < 0 { return raised() }
+        t == 1
+    }
+
+    /// `str(self)`: the value as Python shows it.
+    pub fn show(self) -> str ! Error {
+        let s = made(c.shown(self.p))?
+        let shown = s.as_str()
+        c.release(s.p)
+        shown?
+    }
+
+    /// The items of a list or a tuple, each one a value.
+    pub fn items(self) -> [Object] ! Error {
+        var out: [Object] = []
+        for i in 0..self.len()? { out.push(self.item(i)?) }
+        out
+    }
+
+    /// Lets Python free the value. The object must not be used after this.
+    pub fn release(self) { c.release(self.p) }
+}

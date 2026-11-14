@@ -305,7 +305,7 @@ fuente -> lexer/parser -> AST
 | M6 | `comptime` y reflexión. Hecho (en `src/comptime.rs`): las constantes globales y las expresiones `comptime` se calculan al compilar. Parámetros `comptime` de enteros y de tipos (`comptime T: type`), `meta.info(T)` y arrays de largo fijo `[T; N]` con el largo verificado (hechos). Pendiente: funciones que devuelven tipos |
 | M7 | `import c`. Hecho: llamar a funciones de C declaradas a mano, con números, `bool` y strings. Structs con layout de C, arrays de números como buffers y callbacks por nombre (hechos). `mou bind header.h` escribe las declaraciones a partir del header, y un `import c` sin bloque lee el header al compilar (hechos). Los números con nombre y los structs del header también se leen, y a través de un puntero se lee y se escribe con `T.load(p)` y `T.store(p, v)` (hechos) |
 | M8 | Backend LLVM, SIMD, `soa` |
-| M9 | Autoalojamiento del compilador: hecho. El compilador entero está escrito en Mou (`compiler/`), da el mismo C que el de Rust y se compila a sí mismo; `./bootstrap.sh` lo construye solo con un compilador de C, a partir de `seed/mouc.c.gz`. Pendiente: `import cpp`, `import py` |
+| M9 | Autoalojamiento del compilador: hecho. El compilador entero está escrito en Mou (`compiler/`), da el mismo C que el de Rust y se compila a sí mismo; `./bootstrap.sh` lo construye solo con un compilador de C, a partir de `seed/mouc.c.gz`. Python se usa por librería, con `std.py` (hecho). Pendiente: `import cpp`, y la forma `import py` del lenguaje |
 
 Hay dos implementaciones del compilador que dan lo mismo: la primera, en Rust (`src/`), y la escrita en Mou (`compiler/`), que se compila a sí misma. Los tests exigen que coincidan etapa por etapa, así que cada cambio del lenguaje se hace en las dos.
 
@@ -364,6 +364,8 @@ Un archivo es un módulo. `import geo.shapes` carga `geo/shapes.mou`, buscado ju
 |---|---|
 | `std.io` | Del compilador: `io.print`, `io.eprint` (a la salida de errores), `io.read_line` (devuelve `None` al terminar la entrada), `io.read_file`, `io.write_file`, `io.args` (los argumentos del programa), `io.env(nombre)` (una variable de entorno, o `None`), `io.run(programa, argumentos, entrada)` (corre un programa hasta que termina, sin pasar por un shell, y da lo que escribió; si termina con un estado distinto de 0 es un error que cita la primera línea de su salida de errores) e `io.Error` |
 | `std.pool` | `Pool[T]` y `Handle[T]`: valores que se nombran entre sí (grafos, listas dobles, árboles con puntero al padre). `add` da el `Handle` de un valor, `at(h)` lo lee, `slot(h)` lo deja modificar en el lugar (`pool.slot(h).next = otro`), `get(h)` da `None` si ya no está, `remove(h)` lo saca y deja el lugar libre, y `has`, `len`, `handles` y `values`. Un `Handle` es un lugar y un número de turno: el de un valor que se sacó no sirve para el que ocupó su lugar después |
+| `std.py` | Python dentro del programa: `py.module(nombre)` da un módulo, y un `Object` tiene `attr`, `call`, `method`, `item`, `get`, `len`, `items`, `show`, `as_int`, `as_float`, `as_str`, `truthy` y `release`. Los valores van con `py.from_int`, `py.from_float`, `py.from_bool`, `py.from_str`, `py.none`, `py.list`, `py.tuple` y `py.dict`; `py.run(código)` corre sentencias. Una excepción de Python es un `py.Error` con su texto |
+| `std.cpython` | Soporte de `std.py`: un módulo `system` con las funciones de CPython envueltas una por una |
 | `std.raw` | Del compilador, pensado como soporte del resto de la librería: `raw.concat`, `raw.from_chars`, `raw.hash` (FNV-1a de un string), `raw.mix` (dispersa los bits de un entero), `raw.fmath` (las funciones de `std.math` sobre `f64`, por número), `raw.char_class` y `raw.char_case` (qué dice Unicode de un carácter) |
 | `std.fs` | Archivos y directorios: `read_bytes`, `write_bytes`, `append_bytes`, `append` (texto al final), `list` (los nombres de un directorio, en orden), `exists`, `is_file`, `is_dir`, `make_dir`, `remove` (un archivo o un directorio vacío) y `rename`. Por partes: `open`, `create` y `extend` dan un `File` con `read(max)` (un array vacío es el final), `write`, `write_text` y `close`. Todo falla con `io.Error` |
 | `std.hash` | `Table[K, V]` con `K: Key`: tabla hash de direccionamiento abierto con sondeo lineal, ocupada como mucho en tres cuartos; borrar cierra el hueco sin dejar marcas. El trait `Key` (`hash` y `same`) está implementado para todos los enteros, `str`, `char` y `bool`, y cualquier tipo propio puede implementarlo |
@@ -505,7 +507,22 @@ Límites de los structs: si el módulo ya usa el nombre de un struct del header 
 
 Leer y escribir a través de un puntero: con `p` un `ptr`, `T.load(p)` da una copia de lo que hay en esa dirección y `T.store(p, v)` lo escribe, donde `T` es un struct `@c` (`tm.load(p)`) o el tipo de un número de hasta 64 bits (`i32.load(p)`, `f64.store(p, 2.5)`). Solo dentro de `unsafe`, y por lo tanto solo en un módulo `system`: que la dirección sea buena y que ahí haya un `T` es responsabilidad de quien lo escribe. Con eso se usa lo que C devuelve por puntero: `gmtime` da un `ptr?`, y `tm.load(p)` da la fecha. `store` de un struct escribe solo los miembros que el programa conoce, así que los que Mou no lee quedan como estaban. Probado en `tests/c/memory.mou` (`gmtime`, y números y un struct escritos y leídos en memoria de `malloc`), que la suite compila y ejecuta. Límites: no hay cuentas con direcciones (no se puede leer el segundo elemento de un array de C sin que C dé su dirección), un `ptr?` hay que desarmarlo con `match` antes, y si el programa declara una función asociada `load` o `store` en un struct `@c`, gana la del lenguaje.
 
-Faltan: `import cpp` e `import py`.
+### Python: qué hay
+
+```mou
+import std.py
+
+fn root() -> f64 ! py.Error {
+    let math = py.module("math")?
+    math.method("sqrt", [py.from_float(2.0)])?.as_float()?
+}
+```
+
+`std.py` está escrito en Mou sobre la interfaz de C de CPython, con el `import c` de arriba: el intérprete de Python corre dentro del programa y arranca solo la primera vez que se lo usa. Cualquier módulo instalado se importa por su nombre (`math`, `json`, `numpy` si está). Un valor de Python es un `py.Object`; se le piden atributos, se lo llama, se le sacan elementos, y se convierte a `int`, `f64`, `str` o `bool` cuando es eso. Todo lo que puede levantar una excepción devuelve `! py.Error`, con el texto de la excepción. `mou build` le pregunta a `python3-config` qué pasarle al compilador de C, así que no hay que escribir opciones. Probado en `tests/c/python.mou`, que la suite compila y ejecuta cuando la máquina tiene `python3-config`: `math`, `builtins`, métodos de `str`, listas, diccionarios, `json`, y cuatro excepciones atrapadas como errores.
+
+Límites: es una librería, no la forma `import py "numpy" as np` de la sección 10 (los nombres de Python van como texto, `np.method("array", [...])`, y nada se comprueba al compilar). Pide Python 3.12 o posterior, con sus headers. Solo corre compilado. Mou no tiene destructores, así que un `Object` no suelta su valor solo: Python lo libera cuando se llama `release()`, y si no, cuando el programa termina. No hay argumentos por nombre, ni se le puede pasar a Python una función de Mou. Python tiene un solo hilo a la vez y `std.py` no toma su candado: usarlo desde varias tareas no es seguro.
+
+Falta: `import cpp`.
 
 ### Tareas: qué hay
 

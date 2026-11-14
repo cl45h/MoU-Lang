@@ -1,0 +1,118 @@
+// The functions of CPython that `std.py` is made of. An object of Python
+// is an address here, and nothing in this module creates a value of Mou.
+@profile(system)
+
+import c "Python.h" as cp {
+    fn Py_IsInitialized() -> i32
+    fn Py_Initialize()
+    fn PyImport_ImportModule(name: str) -> ptr?
+    fn PyObject_GetAttrString(o: ptr, name: str) -> ptr?
+    fn PyObject_CallObject(f: ptr, args: ptr?) -> ptr?
+    fn PyTuple_New(n: isize) -> ptr?
+    fn PyTuple_SetItem(t: ptr, i: isize, o: ptr) -> i32
+    fn PyList_New(n: isize) -> ptr?
+    fn PyList_SetItem(l: ptr, i: isize, o: ptr) -> i32
+    fn PyDict_New() -> ptr?
+    fn PyDict_SetItem(d: ptr, key: ptr, value: ptr) -> i32
+    fn PyLong_FromLongLong(n: i64) -> ptr?
+    fn PyLong_AsLongLong(o: ptr) -> i64
+    fn PyFloat_FromDouble(x: f64) -> ptr?
+    fn PyFloat_AsDouble(o: ptr) -> f64
+    fn PyBool_FromLong(n: i64) -> ptr?
+    fn PyObject_IsTrue(o: ptr) -> i32
+    fn PyUnicode_FromString(s: str) -> ptr?
+    fn PyUnicode_AsUTF8(o: ptr) -> str?
+    fn PyObject_Str(o: ptr) -> ptr?
+    fn PyObject_Length(o: ptr) -> isize
+    fn PySequence_GetItem(o: ptr, i: isize) -> ptr?
+    fn PyObject_GetItem(o: ptr, key: ptr) -> ptr?
+    fn PyErr_Occurred() -> ptr?
+    fn PyErr_Clear()
+    fn PyErr_GetRaisedException() -> ptr?
+    fn Py_IncRef(o: ptr)
+    fn Py_DecRef(o: ptr)
+    fn Py_BuildValue(format: str) -> ptr?
+    fn PyRun_SimpleString(code: str) -> i32
+}
+
+/// Starts Python the first time it is called.
+pub fn start() {
+    unsafe {
+        if cp.Py_IsInitialized() == 0 { cp.Py_Initialize() }
+    }
+}
+
+pub fn module(name: str) -> ptr? { unsafe { cp.PyImport_ImportModule(name) } }
+
+pub fn attr(o: ptr, name: str) -> ptr? { unsafe { cp.PyObject_GetAttrString(o, name) } }
+
+pub fn call(f: ptr, args: ptr) -> ptr? { unsafe { cp.PyObject_CallObject(f, Some(args)) } }
+
+pub fn tuple(n: int) -> ptr? { unsafe { cp.PyTuple_New(n as isize) } }
+
+/// Puts an object in a tuple, which keeps it: the caller still has its own.
+pub fn tuple_set(t: ptr, i: int, o: ptr) -> bool {
+    unsafe {
+        cp.Py_IncRef(o)
+        cp.PyTuple_SetItem(t, i as isize, o) == 0
+    }
+}
+
+pub fn list(n: int) -> ptr? { unsafe { cp.PyList_New(n as isize) } }
+
+pub fn list_set(l: ptr, i: int, o: ptr) -> bool {
+    unsafe {
+        cp.Py_IncRef(o)
+        cp.PyList_SetItem(l, i as isize, o) == 0
+    }
+}
+
+pub fn dict() -> ptr? { unsafe { cp.PyDict_New() } }
+
+pub fn dict_set(d: ptr, key: ptr, value: ptr) -> bool { unsafe { cp.PyDict_SetItem(d, key, value) == 0 } }
+
+pub fn from_int(n: int) -> ptr? { unsafe { cp.PyLong_FromLongLong(n) } }
+
+pub fn to_int(o: ptr) -> int { unsafe { cp.PyLong_AsLongLong(o) } }
+
+pub fn from_float(x: f64) -> ptr? { unsafe { cp.PyFloat_FromDouble(x) } }
+
+pub fn to_float(o: ptr) -> f64 { unsafe { cp.PyFloat_AsDouble(o) } }
+
+pub fn from_bool(b: bool) -> ptr? { unsafe { cp.PyBool_FromLong(if b { 1 } else { 0 }) } }
+
+/// 1 when the object counts as true, 0 when it does not, -1 when asking failed.
+pub fn truth(o: ptr) -> int { unsafe { cp.PyObject_IsTrue(o) as int } }
+
+pub fn from_text(s: str) -> ptr? { unsafe { cp.PyUnicode_FromString(s) } }
+
+pub fn to_text(o: ptr) -> str? { unsafe { cp.PyUnicode_AsUTF8(o) } }
+
+pub fn shown(o: ptr) -> ptr? { unsafe { cp.PyObject_Str(o) } }
+
+pub fn length(o: ptr) -> int { unsafe { cp.PyObject_Length(o) as int } }
+
+pub fn item(o: ptr, i: int) -> ptr? { unsafe { cp.PySequence_GetItem(o, i as isize) } }
+
+pub fn lookup(o: ptr, key: ptr) -> ptr? { unsafe { cp.PyObject_GetItem(o, key) } }
+
+pub fn none() -> ptr? { unsafe { cp.Py_BuildValue("") } }
+
+/// Whether the last call left an exception.
+pub fn failed() -> bool {
+    unsafe {
+        match cp.PyErr_Occurred() {
+            Some(_) => true
+            None => false
+        }
+    }
+}
+
+/// The exception the last call left, which is taken away.
+pub fn raised() -> ptr? { unsafe { cp.PyErr_GetRaisedException() } }
+
+pub fn forget() { unsafe { cp.PyErr_Clear() } }
+
+pub fn release(o: ptr) { unsafe { cp.Py_DecRef(o) } }
+
+pub fn run(code: str) -> bool { unsafe { cp.PyRun_SimpleString(code) == 0 } }

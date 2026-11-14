@@ -1,0 +1,10 @@
+1.4142135623730951 2432902008176640000 true
+[1, 3, 5, 9] 18 4 [1, 3, 5, 9]
+ÑANDÚ ['a', 'b', 'c'] b 5
+27 2 None true false
+2.5 tres {"ana": 31, "luis": 27}
+missing: No module named 'no_such_module_here'
+wrong: 'str' object cannot be interpreted as an integer
+div: division by zero
+far: list index out of range
+done

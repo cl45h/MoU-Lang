@@ -1,0 +1,52 @@
+import std.io
+import std.py
+
+fn work() ! py.Error {
+    let math = py.module("math")?
+    let root = math.method("sqrt", [py.from_float(2.0)])?.as_float()?
+    let big = math.method("factorial", [py.from_int(20)])?.as_int()?
+    let pi = math.attr("pi")?.as_float()?
+    io.print("{root} {big} {pi > 3.14 && pi < 3.15}") catch e {}
+
+    let builtins = py.module("builtins")?
+    let numbers = py.list([py.from_int(5), py.from_int(3), py.from_int(9), py.from_int(1)])
+    let sorted = builtins.method("sorted", [numbers])?
+    let total = builtins.method("sum", [numbers])?.as_int()?
+    var seen: [int] = []
+    for o in sorted.items()? { seen.push(o.as_int()?) }
+    io.print("{seen} {total} {sorted.len()?} {sorted.show()?}") catch e {}
+
+    let name = py.from_str("ñandú")
+    let upper = name.method("upper", [])?.as_str()?
+    let parts = py.from_str("a,b,c").method("split", [py.from_str(",")])?
+    io.print("{upper} {parts.show()?} {parts.item(1)?.as_str()?} {name.len()?}") catch e {}
+
+    let ages = py.dict([py.from_str("ana"), py.from_str("luis")], [py.from_int(31), py.from_int(27)])?
+    io.print("{ages.get(py.from_str("luis"))?.as_int()?} {ages.len()?} {py.none().show()?} {py.from_bool(true).truthy()?} {py.list([]).truthy()?}") catch e {}
+
+    let json = py.module("json")?
+    let data = json.method("loads", [py.from_str("[1, 2.5, \"tres\", null, true]")])?
+    io.print("{data.item(1)?.as_float()?} {data.item(2)?.as_str()?} {json.method("dumps", [ages])?.as_str()?}") catch e {}
+}
+
+fn main() ! io.Error {
+    work() catch e { io.print("failed: {e.message}")? }
+    let missing = py.module("no_such_module_here") catch e {
+        io.print("missing: {e.message}")?
+        py.none()
+    }
+    let wrong = py.from_str("x").as_int() catch e {
+        io.print("wrong: {e.message}")?
+        0
+    }
+    let zero = py.module("operator") catch e { py.none() }
+    let div = zero.method("truediv", [py.from_int(1), py.from_int(0)]) catch e {
+        io.print("div: {e.message}")?
+        py.none()
+    }
+    let far = py.list([py.from_int(1)]).item(5) catch e {
+        io.print("far: {e.message}")?
+        py.none()
+    }
+    io.print("done")?
+}
