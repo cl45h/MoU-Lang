@@ -1,0 +1,23 @@
+import std.io
+
+fn show(n: int) ! io.Error {
+    io.print("{n}: {u8.truncate(n)} {i8.truncate(n)} {u8.saturate(n)} {i8.saturate(n)} {u8.try_from(n)} {i8.try_from(n)} {u16.truncate(n)} {i32.saturate(n)} {u64.truncate(n)} {u64.saturate(n)} {u64.try_from(n)}")?
+}
+
+fn main() ! io.Error {
+    for n in [0, 1, -1, 127, 128, 255, 256, -128, -129, 300, 65535, 65536, 2147483648, -2147483649, 9223372036854775807, -9223372036854775807 - 1] {
+        show(n)?
+    }
+    let wide: i128 = 170141183460469231731687303715884105727
+    let big: u64 = 18446744073709551615
+    let small: i8 = -5
+    io.print("{u8.truncate(wide)} {int.saturate(wide)} {int.try_from(wide)} {i128.try_from(big)} {int.try_from(big)} {int.saturate(big)} {int.truncate(big)}")?
+    io.print("{u8.truncate(small)} {u32.truncate(small)} {u64.saturate(small)} {usize.try_from(small)} {i128.truncate(small)} {u128.saturate(small)} {u128.try_from(small)} {i16.try_from(small)}")?
+    io.print("{u8.truncate(1000)} {i8.saturate(-1000)} {u8.try_from(7)}")?
+    let byte: u8 = 200
+    let neg: i16 = -300
+    io.print("{i8.truncate(byte)} {i8.saturate(byte)} {i8.try_from(byte)} {i128.truncate(big)} {u128.truncate(byte)} {u8.truncate(neg)} {i8.truncate(neg)} {i8.saturate(neg)} {u64.truncate(neg)} {i64.truncate(big)} {u32.truncate(big)}")?
+    let total: u8 = u8.saturate(200 + 100)
+    let opt: u8? = u8.try_from(300)
+    io.print("{total} {opt}")?
+}

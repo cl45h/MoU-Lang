@@ -821,6 +821,16 @@ fn prim(name: &str) -> Option<Ty> {
     })
 }
 
+/// The conversions the types of whole numbers give, as later stages know them.
+fn int_conversion(name: &str) -> Option<&'static str> {
+    match name {
+        "truncate" => Some("int.truncate"),
+        "saturate" => Some("int.saturate"),
+        "try_from" => Some("int.try_from"),
+        _ => None,
+    }
+}
+
 fn is_int(t: &Ty) -> bool {
     matches!(t, Ty::Int(_) | Ty::IntLit | Ty::Unknown)
 }
@@ -4986,6 +4996,22 @@ impl<'a> Checker<'a> {
             ExprKind::Field { base, name } => {
                 if let ExprKind::Path(b) = &base.kind {
                     if self.lookup(b).is_none() {
+                        // `u8.truncate(n)`, `u8.saturate(n)`, `u8.try_from(n)`: a whole
+                        // number as one of another type, when it may not fit.
+                        if let (Some(Ty::Int(kind)), Some(native)) = (prim(b).filter(|_| self.global(b).is_none()), int_conversion(name)) {
+                            let [arg] = args else {
+                                self.args_unchecked(args);
+                                self.err(span, format!("`{b}.{name}` takes one whole number"));
+                                return Ty::Unknown;
+                            };
+                            let t = self.expr(&arg.value);
+                            if !is_int(&t) {
+                                let shown = self.show(&t);
+                                self.err(arg.value.span, format!("`{b}.{name}` takes a whole number, found `{shown}`"));
+                            }
+                            self.res.insert((self.inst, id(e)), Res::Builtin(native));
+                            return if native == "int.try_from" { Ty::Optional(Box::new(Ty::Int(kind))) } else { Ty::Int(kind) };
+                        }
                         // `tm.load(p)`, `i32.store(p, v)`: through an address of C.
                         if let Some(x) = self.pointer_op(b, name) {
                             if self.unsafe_depth == 0 {

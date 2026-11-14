@@ -484,6 +484,19 @@ fn in_bounds(kind: str, v: i128) -> bool {
     v >= 0 && v <= pow2(bits) - 1
 }
 
+// The least and the greatest value of an integer kind, the same way.
+fn least(kind: str) -> i128 {
+    if kind == "i128" { return (0 - pow2(126)) * 2 }
+    if text.starts_with(kind, "u") { return 0 }
+    0 - pow2(kind_bits(kind) - 1)
+}
+
+fn greatest(kind: str) -> i128 {
+    if kind == "i128" || kind == "u128" { return pow2(126) - 1 + pow2(126) }
+    if text.starts_with(kind, "u") { return pow2(kind_bits(kind)) - 1 }
+    pow2(kind_bits(kind) - 1) - 1
+}
+
 fn has_conv(c: Conv?) -> bool {
     match c {
         Some(_) => true
@@ -3385,6 +3398,60 @@ impl Lower {
                 if name == "io.print" {
                     let ops = self.arg_ops(args)
                     return self.finish_call(Callee.Print, ops, [], at)
+                }
+                // `u8.truncate(n)` keeps the low bits, `u8.saturate(n)` stops at
+                // the ends of the type, and `u8.try_from(n)` is `None` outside them.
+                if text.starts_with(name, "int.") {
+                    var kind = ""
+                    match self.ty(e) {
+                        types.Ty.Int(k) => { kind = k }
+                        types.Ty.Optional(t) => {
+                            match t {
+                                types.Ty.Int(k) => { kind = k }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                    if kind == "" || args.len == 0 { return self.unsupported(at, "this conversion") }
+                    let given = self.expr(args[0].value)
+                    let v = Operand.At(self.stash(given))
+                    self.at = at
+                    if name == "int.truncate" {
+                        let got = self.tmp(Rvalue.Binary("+%", Num.Int(kind), v, int_op(0)))
+                        return self.typed(e, got)
+                    }
+                    // Below the type, inside it, or above it.
+                    let exact = name == "int.try_from"
+                    let lo = least(kind)
+                    let hi = greatest(kind)
+                    let res = self.temp()
+                    let above = self.new_block()
+                    let under = self.new_block()
+                    let fits = self.new_block()
+                    let over = self.new_block()
+                    let end = self.new_block()
+                    let low = self.tmp(Rvalue.Binary(">=", Num.Dyn, v, Operand.Const(Value.Int(lo))))
+                    self.terminate(Term.Branch(low, above, under))
+                    self.switch_to(under)
+                    self.set(res, if exact { Operand.Const(Value.None) } else { Operand.Const(Value.Int(lo)) })
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(above)
+                    let high = self.tmp(Rvalue.Binary("<=", Num.Dyn, v, Operand.Const(Value.Int(hi))))
+                    self.terminate(Term.Branch(high, fits, over))
+                    self.switch_to(over)
+                    self.set(res, if exact { Operand.Const(Value.None) } else { Operand.Const(Value.Int(hi)) })
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(fits)
+                    let same = self.tmp(Rvalue.CastInt(v, kind))
+                    if exact {
+                        self.emit(at_local(res), Rvalue.Some(same))
+                    } else {
+                        self.set(res, same)
+                    }
+                    self.terminate(Term.Goto(end))
+                    self.switch_to(end)
+                    return self.typed(e, local_op(res))
                 }
                 if name == "task.spawn" {
                     if args.len == 0 { return unit() }

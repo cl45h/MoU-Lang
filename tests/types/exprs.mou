@@ -178,3 +178,11 @@ fn opt() -> int? {
 }
 
 fn main() { }
+
+fn conversions(n: int, x: f64) {
+    let a = u8.truncate(n, 2)
+    let b = u8.saturate(x)
+    let c: u8 = u8.try_from(n)
+    let d: i8 = i8.truncate(n)
+    let e = f64.truncate(n)
+}

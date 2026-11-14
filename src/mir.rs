@@ -2821,6 +2821,57 @@ impl<'a> Lower<'a> {
                 ops.extend(args.iter().map(|a| self.expr(&a.value)));
                 self.finish_call(Callee::Native(name), ops, Vec::new(), span)
             }
+            // `u8.truncate(n)` keeps the low bits, `u8.saturate(n)` stops at
+            // the ends of the type, and `u8.try_from(n)` is `None` outside them.
+            Some(Res::Builtin(name)) if name.starts_with("int.") => {
+                let kind = match self.ty(e) {
+                    Ty::Int(k) => k,
+                    Ty::Optional(t) => match *t {
+                        Ty::Int(k) => k,
+                        _ => return self.unsupported(span, "this conversion"),
+                    },
+                    _ => return self.unsupported(span, "this conversion"),
+                };
+                let Some(a) = args.first() else { return self.unsupported(span, "this conversion") };
+                let v = self.expr(&a.value);
+                let v = Operand::Place(self.stash(v));
+                self.span = span;
+                let zero = Operand::Const(Value::Int(0));
+                match *name {
+                    "int.truncate" => {
+                        let got = self.tmp(Rvalue::Binary(BinOp::AddWrap, Num::Int(kind), v, zero));
+                        self.typed(e, got)
+                    }
+                    _ => {
+                        // Below the type, inside it, or above it.
+                        let exact = *name == "int.try_from";
+                        let (lo, hi) = bounds(kind);
+                        let res = self.temp();
+                        let (above, under, fits, over, end) = (self.new_block(), self.new_block(), self.new_block(), self.new_block(), self.new_block());
+                        let low = self.tmp(Rvalue::Binary(BinOp::Ge, Num::Dyn, v.clone(), Operand::Const(Value::Int(lo))));
+                        self.terminate(Term::Branch(low, above, under));
+                        self.switch_to(under);
+                        self.set(res, Operand::Const(if exact { Value::None } else { Value::Int(lo) }));
+                        self.terminate(Term::Goto(end));
+                        self.switch_to(above);
+                        let high = self.tmp(Rvalue::Binary(BinOp::Le, Num::Dyn, v.clone(), Operand::Const(Value::Int(hi))));
+                        self.terminate(Term::Branch(high, fits, over));
+                        self.switch_to(over);
+                        self.set(res, Operand::Const(if exact { Value::None } else { Value::Int(hi) }));
+                        self.terminate(Term::Goto(end));
+                        self.switch_to(fits);
+                        let same = self.tmp(Rvalue::CastInt(v, kind));
+                        if exact {
+                            self.emit(Place::local(res), Rvalue::Some(same));
+                        } else {
+                            self.set(res, same);
+                        }
+                        self.terminate(Term::Goto(end));
+                        self.switch_to(end);
+                        self.typed(e, Operand::Place(Place::local(res)))
+                    }
+                }
+            }
             Some(Res::Builtin(name)) if name.contains('.') && *name != "io.print" => {
                 let ops = args.iter().map(|a| self.expr(&a.value)).collect();
                 self.finish_call(Callee::Native(name), ops, Vec::new(), span)

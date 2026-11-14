@@ -68,7 +68,7 @@ fn main() ! io.Error {
 
 Reglas:
 - Un literal entero toma el tipo que pide el contexto (`let x: f64 = 0` es válido) y se verifica que entre en ese tipo. Sin contexto es `int`; un literal flotante es `f64`.
-- Sin conversiones implícitas entre tipos numéricos. `x as i32` solo cuando no pierde información; lo demás con `x.truncate()`, `x.saturate()`, `x.try_into[i32]()`.
+- Entre tipos numéricos solo se convierte solo lo que no puede perder información (`u8` a `int`). Lo demás se escribe: `x as i32` conserva el valor o hace panic si no entra; `i32.truncate(x)` se queda con los bits bajos, `i32.saturate(x)` con el extremo más cercano del tipo, e `i32.try_from(x)` da un `i32?` que es `None` cuando no entra.
 - Toda variable se inicializa antes de leerse (verificado en compilación).
 - Aritmética entera: `+ - *` atrapan overflow (panic). Operadores explícitos: `+%` envolvente, `+|` saturante.
 - Indexado `xs[i]` verifica límites salvo que el compilador pruebe que es válido. `xs.get(i)` devuelve `T?`.
@@ -316,13 +316,13 @@ Hay dos implementaciones del compilador que dan lo mismo: la primera, en Rust (`
 1. Alcance exacto del probador de rangos: qué se prueba en compilación y qué cae a check de runtime. Hay que fijarlo en la especificación para que sea predecible.
 2. Estrategia de memoria automática del perfil `script`: conteo de referencias con elisión (propuesto) contra inferencia de regiones pura.
 3. Modelo formal de aliasing para `unsafe`.
-4. `as` sin pérdida: la sección 3 dice que `as` solo vale cuando no pierde información, pero los ejemplos usan `xs.len as f64` y `len as int`. El verificador acepta hoy cualquier conversión entre numéricos; hay que decidir la regla exacta y aplicarla.
+4. Resuelta. `as` entre numéricos se acepta siempre y nunca cambia el valor en silencio: si el valor no entra en el tipo de destino es un panic (y un error de compilación cuando es un número escrito). De un número con fracción a un entero se descarta la fracción (`2.7 as int` es 2, `-2.7 as int` es -2). Para lo demás están `T.truncate(x)`, `T.saturate(x)` y `T.try_from(x)`, con `T` un tipo entero y `x` un entero de cualquier tipo. Están en los dos compiladores; probado en `tests/native/convert.mou`. Límite: no toman números con fracción.
 5. Indexar un `str`: el verificador solo acepta rangos (`s[..i]`), no un entero, porque `str` es UTF-8. Falta confirmarlo como regla del lenguaje.
 
-6. `as` fuera de rango: el intérprete hace panic cuando el valor no entra en el tipo destino (`300 as u8`, o un flotante enorme a entero). Es la lectura más segura de la decisión 4, pero sigue abierta.
+6. Resuelta junto con la 4: `as` fuera de rango es un panic, en el intérprete y en el binario.
 7. `io.print` escribe una línea (agrega el salto). Falta decidir si habrá una variante sin salto.
 8. Un `int` devuelto por `main` es el código de salida del proceso; un error devuelto por `main` se informa y sale con 1; un panic sale con 101.
-9. Literales en operaciones: `x + 300` con `x: u8` compila y hace panic al ejecutar. Debería rechazarse en compilación, igual que `let x: u8 = 300`.
+9. Resuelta: `x + 300` con `x: u8` es un error de compilación, igual que `let x: u8 = 300`.
 10. `[T]` como buffer que crece: la sección 3 dice que `[T]` es una vista, pero hoy un `[T]` es dueño de sus datos y tiene `push` y `pop`, porque hacía falta una primitiva para escribir `List[T]` en el propio lenguaje. Cuando existan referencias y regiones, la primitiva debería ser un buffer aparte y `[T]` volver a ser solo una vista. El código que usa `std.list` no cambia.
 11. Un `impl` para un tipo primitivo vale para todo el programa: si dos módulos escriben `impl Ord for int`, el segundo es un error. Falta decidir la regla de coherencia (quién puede implementar qué trait para qué tipo).
 12. Privacidad: `pub` se exige a funciones, tipos, constantes, traits y métodos usados desde otro módulo. Los campos de un struct son visibles desde cualquier módulo; falta decidir si llevan `pub`.

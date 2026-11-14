@@ -5646,6 +5646,38 @@ impl Checker {
         }
         if named {
             let b = base_name
+            // `u8.truncate(n)`, `u8.saturate(n)`, `u8.try_from(n)`: a whole
+            // number as one of another type, when it may not fit.
+            var conv = ""
+            if name == "truncate" { conv = "int.truncate" }
+            if name == "saturate" { conv = "int.saturate" }
+            if name == "try_from" { conv = "int.try_from" }
+            var target = ""
+            if conv != "" {
+                match self.global(b) {
+                    Some(_) => {}
+                    None => {
+                        if let Some(p) = types.prim(b) {
+                            match p {
+                                types.Ty.Int(k) => { target = k }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            if target != "" {
+                if args.len != 1 {
+                    self.args_unchecked(args)
+                    self.err(at, "`{b}.{name}` takes one whole number")
+                    return types.Ty.Unknown
+                }
+                let t = self.expr(args[0].value)
+                if !types.is_int(t) { self.err(at_expr(args[0].value), "`{b}.{name}` takes a whole number, found `{self.show(t)}`") }
+                self.set_res(e, Res.Builtin(conv))
+                if conv == "int.try_from" { return types.Ty.Optional(types.Ty.Int(target)) }
+                return types.Ty.Int(target)
+            }
             // `tm.load(p)`, `i32.store(p, v)`: through an address of C.
             let op = self.pointer_op(b, name)
             if op >= 0 {
