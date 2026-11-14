@@ -1,0 +1,105 @@
+import std.io
+import std.pool
+
+// A list that goes both ways, and a graph with a cycle.
+struct Node { name: str, prev: pool.Handle[Node]?, next: pool.Handle[Node]? }
+
+struct Chain { nodes: pool.Pool[Node], head: pool.Handle[Node]?, tail: pool.Handle[Node]? }
+
+impl Chain {
+    fn push(mut self, name: str) -> pool.Handle[Node] {
+        let h = self.nodes.add(Node(name, self.tail, None))
+        match self.tail {
+            Some(t) => { self.nodes.slot(t).next = Some(h) }
+            None => { self.head = Some(h) }
+        }
+        self.tail = Some(h)
+        h
+    }
+
+    fn unlink(mut self, h: pool.Handle[Node]) {
+        let node = match self.nodes.remove(h) {
+            Some(n) => n
+            None => return
+        }
+        match node.prev {
+            Some(p) => { self.nodes.slot(p).next = node.next }
+            None => { self.head = node.next }
+        }
+        match node.next {
+            Some(n) => { self.nodes.slot(n).prev = node.prev }
+            None => { self.tail = node.prev }
+        }
+    }
+
+    fn forward(self) -> [str] {
+        var out: [str] = []
+        var at = self.head
+        while true {
+            match at {
+                Some(h) => {
+                    let n = self.nodes.at(h)
+                    out.push(n.name)
+                    at = n.next
+                }
+                None => { break }
+            }
+        }
+        out
+    }
+
+    fn backward(self) -> [str] {
+        var out: [str] = []
+        var at = self.tail
+        while true {
+            match at {
+                Some(h) => {
+                    let n = self.nodes.at(h)
+                    out.push(n.name)
+                    at = n.prev
+                }
+                None => { break }
+            }
+        }
+        out
+    }
+}
+
+struct City { name: str, roads: [pool.Handle[City]] }
+
+fn main() ! io.Error {
+    var chain = Chain(pool.Pool.new(), None, None)
+    let a = chain.push("a")
+    let b = chain.push("b")
+    let c = chain.push("c")
+    let d = chain.push("d")
+    io.print("{chain.forward()} {chain.backward()} {chain.nodes.len()}")?
+    chain.unlink(b)
+    chain.unlink(d)
+    io.print("{chain.forward()} {chain.backward()} {chain.nodes.len()} {chain.nodes.has(b)} {chain.nodes.has(c)}")?
+    let e = chain.push("e")
+    io.print("{chain.forward()} {chain.nodes.get(d)} {chain.nodes.get(e)} {e.same(d)} {a.same(a)}")?
+    chain.unlink(b)
+    io.print("{chain.nodes.values().len} {chain.nodes.handles().len} {chain.nodes.is_empty()}")?
+
+    var cities: pool.Pool[City] = pool.Pool.new()
+    let rome = cities.add(City("Rome", []))
+    let oslo = cities.add(City("Oslo", []))
+    let lima = cities.add(City("Lima", []))
+    cities.slot(rome).roads.push(oslo)
+    cities.slot(oslo).roads.push(lima)
+    cities.slot(lima).roads.push(rome)
+    cities.slot(lima).name = "LIMA"
+    var at = rome
+    var path: [str] = []
+    for step in 0..7 {
+        path.push(cities.at(at).name)
+        at = cities.at(at).roads[0]
+    }
+    io.print("{path}")?
+    let gone = cities.remove(oslo)
+    io.print("{cities.len()} {cities.get(oslo)}")?
+    let fresh = cities.add(City("Kyiv", []))
+    io.print("{cities.get(oslo)} {cities.at(fresh).name}")?
+    io.print(cities.at(oslo).name)?
+}

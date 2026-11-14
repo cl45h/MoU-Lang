@@ -135,7 +135,7 @@ struct View[region r] { data: ref[r] [u8] }
 
 - `Box[T]`: dueño único. `Rc[T]` / `Arc[T]`: compartido con conteo.
 - `Arena`: alocación por bloques, se libera entera.
-- `Handle[T]` + `Pool[T]`: índices generacionales para grafos, listas dobles y estructuras cíclicas, verificados en runtime con un check barato.
+- `Handle[T]` + `Pool[T]`: índices generacionales para grafos, listas dobles y estructuras cíclicas, verificados en runtime con un check barato. Hechos, en `std/pool.mou`, escritos en el propio lenguaje. Límites: un lugar vaciado conserva el valor viejo hasta que otro lo ocupa, y un `Handle` no sabe de qué `Pool` salió (usarlo en otro del mismo tipo no se detecta).
 - Construcción in-place garantizada: los valores de retorno se escriben directo en su destino. Un move nunca es observable como copia.
 
 ### Sin unwinding
@@ -363,6 +363,7 @@ Un archivo es un módulo. `import geo.shapes` carga `geo/shapes.mou`, buscado ju
 | Módulo | Contenido |
 |---|---|
 | `std.io` | Del compilador: `io.print`, `io.eprint` (a la salida de errores), `io.read_line` (devuelve `None` al terminar la entrada), `io.read_file`, `io.write_file`, `io.args` (los argumentos del programa), `io.env(nombre)` (una variable de entorno, o `None`), `io.run(programa, argumentos, entrada)` (corre un programa hasta que termina, sin pasar por un shell, y da lo que escribió; si termina con un estado distinto de 0 es un error que cita la primera línea de su salida de errores) e `io.Error` |
+| `std.pool` | `Pool[T]` y `Handle[T]`: valores que se nombran entre sí (grafos, listas dobles, árboles con puntero al padre). `add` da el `Handle` de un valor, `at(h)` lo lee, `slot(h)` lo deja modificar en el lugar (`pool.slot(h).next = otro`), `get(h)` da `None` si ya no está, `remove(h)` lo saca y deja el lugar libre, y `has`, `len`, `handles` y `values`. Un `Handle` es un lugar y un número de turno: el de un valor que se sacó no sirve para el que ocupó su lugar después |
 | `std.raw` | Del compilador, pensado como soporte del resto de la librería: `raw.concat`, `raw.from_chars`, `raw.hash` (FNV-1a de un string), `raw.mix` (dispersa los bits de un entero), `raw.fmath` (las funciones de `std.math` sobre `f64`, por número), `raw.char_class` y `raw.char_case` (qué dice Unicode de un carácter) |
 | `std.fs` | Archivos y directorios: `read_bytes`, `write_bytes`, `append_bytes`, `append` (texto al final), `list` (los nombres de un directorio, en orden), `exists`, `is_file`, `is_dir`, `make_dir`, `remove` (un archivo o un directorio vacío) y `rename`. Por partes: `open`, `create` y `extend` dan un `File` con `read(max)` (un array vacío es el final), `write`, `write_text` y `close`. Todo falla con `io.Error` |
 | `std.hash` | `Table[K, V]` con `K: Key`: tabla hash de direccionamiento abierto con sondeo lineal, ocupada como mucho en tres cuartos; borrar cierra el hueco sin dejar marcas. El trait `Key` (`hash` y `same`) está implementado para todos los enteros, `str`, `char` y `bool`, y cualquier tipo propio puede implementarlo |

@@ -1,0 +1,102 @@
+// Values that point at each other: graphs, lists that go both ways, trees
+// whose nodes know their parent. The values live in a `Pool`, and they name
+// each other with a `Handle`, which is a place in the pool and not an
+// address: a handle to a value that was removed is told apart from one to
+// the value that took its place.
+
+/// The name of a value in a `Pool[T]`.
+pub struct Handle[T] { index: int, turn: int }
+
+impl[T] Handle[T] {
+    pub fn same(self, other: Handle[T]) -> bool { self.index == other.index && self.turn == other.turn }
+}
+
+pub struct Pool[T] {
+    items: [T],
+    // Whether each place holds a value. A place that was emptied keeps the
+    // old value until another takes it.
+    live: [bool],
+    // How many times each place was emptied: a handle is good while its
+    // number is the one of its place.
+    turns: [int],
+    free: [int],
+    count: int,
+}
+
+impl[T] Pool[T] {
+    pub fn new() -> Pool[T] { Pool(items: [], live: [], turns: [], free: [], count: 0) }
+
+    /// How many values the pool holds.
+    pub fn len(self) -> int { self.count }
+
+    pub fn is_empty(self) -> bool { self.count == 0 }
+
+    /// Puts a value in the pool and gives its name.
+    pub fn add(mut self, item: T) -> Handle[T] {
+        self.count += 1
+        match self.free.pop() {
+            Some(i) => {
+                self.items[i] = item
+                self.live[i] = true
+                Handle(index: i, turn: self.turns[i])
+            }
+            None => {
+                self.items.push(item)
+                self.live.push(true)
+                self.turns.push(0)
+                Handle(index: self.items.len as int - 1, turn: 0)
+            }
+        }
+    }
+
+    /// Whether the handle still names a value of this pool.
+    pub fn has(self, h: Handle[T]) -> bool {
+        h.index >= 0 && h.index < self.items.len as int && self.live[h.index] && self.turns[h.index] == h.turn
+    }
+
+    fn checked(self, h: Handle[T]) -> int {
+        assert(self.has(h), "this handle names a value that was removed from the pool")
+        h.index
+    }
+
+    /// The value a handle names, or `None` when it was removed.
+    pub fn get(self, h: Handle[T]) -> T? {
+        if self.has(h) { Some(self.items[h.index]) } else { None }
+    }
+
+    /// The value a handle names. Panics when it was removed.
+    pub fn at(self, h: Handle[T]) -> T { self.items[self.checked(h)] }
+
+    /// The value a handle names, to change it where it is:
+    /// `pool.slot(h).next = other`. Panics when it was removed.
+    pub fn slot(mut self, h: Handle[T]) -> ref mut T { self.items[self.checked(h)] }
+
+    /// Takes a value out of the pool. Its handles stop being good, and its
+    /// place is free for the next value.
+    pub fn remove(mut self, h: Handle[T]) -> T? {
+        if !self.has(h) { return None }
+        self.live[h.index] = false
+        self.turns[h.index] += 1
+        self.free.push(h.index)
+        self.count -= 1
+        Some(self.items[h.index])
+    }
+
+    /// The handles of all the values, in the order of their places.
+    pub fn handles(self) -> [Handle[T]] {
+        var out: [Handle[T]] = []
+        for i in 0..(self.items.len as int) {
+            if self.live[i] { out.push(Handle(index: i, turn: self.turns[i])) }
+        }
+        out
+    }
+
+    /// All the values, in the order of their places.
+    pub fn values(self) -> [T] {
+        var out: [T] = []
+        for i in 0..(self.items.len as int) {
+            if self.live[i] { out.push(self.items[i]) }
+        }
+        out
+    }
+}
