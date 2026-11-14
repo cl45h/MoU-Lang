@@ -1414,7 +1414,7 @@ impl<'a> Lower<'a> {
     fn closure(&mut self, e: &'a Expr, params: &'a [Param], body: &'a Block_) -> Operand {
         let span = e.span;
         let Ty::Fn(sig, _) = self.ty(e) else { return self.unsupported(span, "this closure") };
-        if params.iter().any(|p| p.ty.is_none()) {
+        if sig.params.iter().any(|p| p.ty == Ty::Unknown) {
             return self.unsupported(span, "closures whose parameters have no type");
         }
         self.closure_of(span, &sig.ret, params, Ok(body))
@@ -2893,6 +2893,8 @@ impl<'a> Lower<'a> {
     ) -> Operand {
         let mut ops = Vec::new();
         let mut writeback = Vec::new();
+        // The parts of arrays given as `mut`: where each goes back.
+        let mut parts: Vec<(Place, Operand, Place, Operand, Span)> = Vec::new();
         if let Some((op, place)) = receiver {
             if let Some(p) = place {
                 writeback.push((0, p));
@@ -2905,6 +2907,39 @@ impl<'a> Lower<'a> {
             if is_type {
                 // A type is not a value: the copy made for it knows it.
                 ops.push(Operand::Const(Value::Unit));
+            } else if let (true, Some((base, range))) = (sig.params.get(i).is_some_and(|p| p.mode == Mode::Mut), self.part_of(&a.value)) {
+                // A part of an array: the call works on a copy of the part,
+                // which is written over the part when the call is done.
+                let ExprKind::Range { lo, hi, inclusive } = &range.kind else {
+                    return self.unsupported(a.value.span, "a part of an array as `mut` when the range is not written there");
+                };
+                let target = self.place(base);
+                let first = match lo {
+                    Some(b) => {
+                        let v = self.expr(b);
+                        Operand::Place(self.stash(v))
+                    }
+                    None => Operand::Const(Value::Int(0)),
+                };
+                let from = match lo {
+                    Some(_) => self.tmp(Rvalue::Some(first.clone())),
+                    None => Operand::Const(Value::None),
+                };
+                let to = match hi {
+                    Some(b) => {
+                        let v = self.expr(b);
+                        self.tmp(Rvalue::Some(v))
+                    }
+                    None => Operand::Const(Value::None),
+                };
+                let r = self.tmp(Rvalue::Tuple(vec![from, to, Operand::Const(Value::Bool(*inclusive))]));
+                self.span = a.value.span;
+                let part = self.tmp(Rvalue::Slice(Operand::Place(target.clone()), r));
+                let part = self.stash(part);
+                let len = self.tmp(Rvalue::Len(Operand::Place(part.clone())));
+                parts.push((target, first, part.clone(), len, a.value.span));
+                writeback.push((offset + i, part.clone()));
+                ops.push(Operand::Place(part));
             } else if sig.params.get(i).is_some_and(|p| p.mode == Mode::Mut) {
                 let p = self.place(&a.value);
                 writeback.push((offset + i, p.clone()));
@@ -2931,7 +2966,39 @@ impl<'a> Lower<'a> {
                 self.twin_src = writeback.iter().find(|(i, _)| *i == 0).map(|(_, p)| p.clone());
             }
         }
-        self.finish_call(callee, ops, writeback, span)
+        let result = self.finish_call(callee, ops, writeback, span);
+        for (target, first, part, len, at) in parts {
+            self.span = at;
+            let now = self.tmp(Rvalue::Len(Operand::Place(part.clone())));
+            let same = self.tmp(Rvalue::Binary(BinOp::Eq, Num::Dyn, now, len.clone()));
+            let (changed, head, body, exit) = (self.new_block(), self.new_block(), self.new_block(), self.new_block());
+            let i = self.temp();
+            self.set(i, Operand::Const(Value::Int(0)));
+            self.terminate(Term::Branch(same, head, changed));
+            self.switch_to(changed);
+            self.terminate(Term::Panic("a part of an array given as `mut` cannot change its length".into()));
+            self.switch_to(head);
+            let cursor = Operand::Place(Place::local(i));
+            let more = self.tmp(Rvalue::Binary(BinOp::Lt, Num::Dyn, cursor.clone(), len));
+            self.terminate(Term::Branch(more, body, exit));
+            self.switch_to(body);
+            let at_target = self.tmp(Rvalue::Binary(BinOp::Add, Num::Int("usize"), first, cursor.clone()));
+            self.emit(target.index(at_target), Rvalue::Use(Operand::Place(part.index(cursor.clone()))));
+            self.emit(Place::local(i), Rvalue::Binary(BinOp::Add, Num::Int("usize"), cursor, Operand::Const(Value::Int(1))));
+            self.terminate(Term::Goto(head));
+            self.switch_to(exit);
+        }
+        result
+    }
+
+    /// `base[range]` when `base` is an array: its two halves.
+    fn part_of(&self, e: &'a Expr) -> Option<(&'a Expr, &'a Expr)> {
+        let ExprKind::Index { base, args } = &e.kind else { return None };
+        let [range] = args.as_slice() else { return None };
+        if !self.info.types.contains_key(&(self.inst, id(base))) {
+            return None;
+        }
+        (matches!(self.ty(base), Ty::Slice(_) | Ty::Array(..)) && matches!(self.ty(range), Ty::Range(_))).then_some((&**base, range))
     }
 
     fn finish_call(&mut self, callee: Callee, args: Vec<Operand>, writeback: Vec<(usize, Place)>, span: Span) -> Operand {

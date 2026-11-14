@@ -2795,7 +2795,32 @@ impl<'a> Checker<'a> {
                 }
                 (tys, logs)
             }
-            None => self.arg_types(args),
+            None => {
+                // A closure without the types of its parameters takes them
+                // from the parameter it is given to, with what the receiver
+                // and the arguments before it decided.
+                let mut seen = env.clone();
+                let (mut tys, mut logs) = (Vec::new(), Vec::new());
+                for (k, a) in args.iter().enumerate() {
+                    let start = self.mut_log.len();
+                    if let (ExprKind::Closure { params, .. }, Some(p)) = (&a.value.kind, sig.params.get(k)) {
+                        if params.iter().any(|q| q.ty.is_none()) {
+                            let mut decided: HashMap<String, Ty> = seen.iter().map(|(n, t)| (n.clone(), concretize(t))).collect();
+                            for (n, _) in &tparams {
+                                decided.entry(n.clone()).or_insert(Ty::Unknown);
+                            }
+                            self.hint = Some(subst(&p.ty, &decided));
+                        }
+                    }
+                    let t = self.expr(&a.value);
+                    if let Some(p) = sig.params.get(k) {
+                        bind(&p.ty, &t, &mut seen);
+                    }
+                    tys.push(t);
+                    logs.push((start, self.mut_log.len()));
+                }
+                (tys, logs)
+            }
         };
         for (k, name, is_type) in &known {
             if *is_type {
@@ -4283,13 +4308,23 @@ impl<'a> Checker<'a> {
                 Ty::Never
             }
             ExprKind::Closure { params, ret, err, body } => {
+                // A parameter without a type takes the one of the function
+                // type the closure is expected to have.
+                let wanted: Vec<Ty> = match &self.pending {
+                    Some(Ty::Fn(sig, _)) if sig.params.len() == params.len() => sig.params.iter().map(|p| p.ty.clone()).collect(),
+                    _ => Vec::new(),
+                };
                 self.closures.push(self.scopes.len());
                 self.scopes.push(HashMap::new());
                 let mut ps = Vec::new();
-                for p in params {
-                    let ty = match &p.ty {
-                        Some(t) => self.resolve(t, span),
-                        None => self.skip(),
+                for (k, p) in params.iter().enumerate() {
+                    let ty = match (&p.ty, wanted.get(k)) {
+                        (Some(t), _) => self.resolve(t, span),
+                        (None, Some(t)) if *t != Ty::Unknown => t.clone(),
+                        (None, _) => {
+                            self.err(span, format!("the type of the parameter `{}` is not known here: write it, as in `fn({}: int)`", p.name, p.name));
+                            Ty::Unknown
+                        }
                     };
                     self.declare(&p.name, ty.clone(), p.mode == Mode::Mut);
                     self.set_movable(&p.name, p.mode == Mode::Own);
@@ -4777,6 +4812,10 @@ impl<'a> Checker<'a> {
                     // A call learns from the parameter what it must produce.
                     if let (ExprKind::Call { .. }, Some(p)) = (&a.value.kind, sig.params.get(i)) {
                         self.hint = Some(p.ty.clone()).filter(concrete);
+                    }
+                    // A closure learns from it the types of its parameters.
+                    if let (ExprKind::Closure { .. }, Some(p)) = (&a.value.kind, sig.params.get(i)) {
+                        self.hint = Some(p.ty.clone());
                     }
                     self.expr(&a.value)
                 }

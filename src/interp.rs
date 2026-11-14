@@ -1302,7 +1302,7 @@ mod tests {
         fails("fn main() -> int {\n let xs = [1, 2, 3]\n var i = 0\n while true { i += xs[i] }\n i\n}", "index 3 is out of range for length 3");
         fails("fn f(n: int) -> int { f(n + 1) }\nfn main() -> int { f(0) }", "stack overflow");
         fails("fn m(xs: [f64]) -> f64 where xs.len > 0 { xs[0] }\nfn main() { m([]) }", "`where` condition of `m`");
-        fails("fn main() {\n let f = fn(x) { x }\n}", "parameters have no type");
+        fails("fn main() {\n let f = fn(x) { x }\n}", "the type of the parameter `x` is not known here");
         fails("fn main() { panic(\"stop {1 + 1}\") }", "stop 2");
         fails("import std.list\nfn main() {\n var l = list.List.of([1])\n l.insert(3, 0)\n}", "List.insert: position 3 is out of range for length 1");
         fails("import std.text\nfn main() -> int { text.nope(1) }", "the module `std.text` has no `nope`");

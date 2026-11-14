@@ -1,0 +1,31 @@
+import std.io
+import std.cmp
+
+fn zero(xs: mut [int]) { for i in 0..xs.len { xs[i] = 0 } }
+
+fn grow(xs: mut [int]) { xs.push(1) }
+
+struct Grid { rows: [[int]], flat: [int] }
+
+fn lo() -> int { 1 }
+
+fn main() ! io.Error {
+    var xs = [1, 2, 3, 4, 5, 6]
+    zero(mut xs[1..3])
+    io.print("{xs}")?
+    zero(mut xs[..1])
+    zero(mut xs[5..])
+    io.print("{xs}")?
+    var ys = [9, 3, 7, 1, 8, 2]
+    cmp.sort(mut ys[lo()..=4])
+    io.print("{ys}")?
+    cmp.sort(mut ys[0..0])
+    var g = Grid([[5, 4, 3], [2, 1, 0]], [3, 2, 1, 0])
+    cmp.sort(mut g.rows[0][1..])
+    cmp.sort(mut g.flat[..3])
+    io.print("{g.rows} {g.flat}")?
+    var names = ["d", "c", "b", "a"]
+    cmp.sort(mut names[1..])
+    io.print("{names}")?
+    grow(mut xs[2..4])
+}

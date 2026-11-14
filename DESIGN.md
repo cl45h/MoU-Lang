@@ -336,7 +336,11 @@ Ejecuta: todo lo que el verificador de tipos cubre. Aritmética entera con detec
 
 Los parámetros `mut` se pasan por copia de entrada y de salida. La ley de exclusividad, que ya se verifica, hace que eso sea indistinguible de pasar una referencia.
 
-No ejecuta todavía (lo rechaza antes de correr, con el lugar exacto): closures sin tipos en los parámetros, bloques `with`, declaraciones anidadas, las llamadas a funciones de C (solo en el binario), los demás métodos de tipos primitivos y `mut` sobre un rango (`f(mut xs[1..])`).
+Closures sin tipos en los parámetros: `xs.map(fn(x) { x * 2 })`. Un parámetro sin tipo toma el del tipo de función que se espera ahí: el del parámetro al que se pasa la closure, o el de la variable (`let f: fn(int) -> int = fn(x) { x + 1 }`). En una llamada genérica valen los tipos que ya decidieron el receptor y los argumentos anteriores, así que en `fold(xs, 0, fn(acc, x) { acc + x })` los dos se deducen. Donde nada dice el tipo (`let f = fn(x) { x }`, o una closure que va antes que el argumento que lo decide) es un error que pide escribirlo.
+
+Una parte de un array como `mut`: `sort(mut xs[1..4])` ordena esos elementos en el lugar. La llamada trabaja sobre una copia de la parte, que al volver se escribe sobre el original; si la función le cambió el largo (`push`, `pop`) es un panic. El rango tiene que estar escrito ahí (`xs[a..b]`, `xs[..n]`, `xs[n..]`), no venir en una variable.
+
+No ejecuta todavía (lo rechaza antes de correr, con el lugar exacto): las llamadas a funciones de C (solo en el binario) y los demás métodos de tipos primitivos.
 
 Límites conocidos: los enteros se guardan en 128 bits con signo, así que un `u128` de 2^127 o más produce un panic que lo dice en vez de un resultado; un slice es una copia, no una vista; las closures capturan por valor y no pueden modificar lo capturado.
 
@@ -722,4 +726,4 @@ Un método de un trait puede tener parámetros de tipo propios: `fn map[U](self,
 
 A través de un parámetro de tipo se pueden llamar las funciones sin `self` de sus cotas: con `T: From[int]`, `T.from(n)`.
 
-No verifica todavía (lo informa como "not checked" en vez de aceptarlo en silencio): tipos con parámetros de región o de valor, los imports de C++ y Python, los métodos de tipos primitivos que no sean `push`, `pop` y `get` de `[T]`, closures sin tipos en los parámetros, declaraciones anidadas en bloques, longitud de arrays y regiones explícitas.
+No verifica todavía (lo informa como "not checked" en vez de aceptarlo en silencio): tipos con parámetros de región o de valor, los imports de C++ y Python, los métodos de tipos primitivos que no sean `push`, `pop` y `get` de `[T]` y regiones explícitas.

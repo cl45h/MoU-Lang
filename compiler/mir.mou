@@ -1503,10 +1503,10 @@ impl Lower {
             }
             _ => return self.unsupported(at, "this closure")
         }
-        for p in params {
+        for p in sig.params {
             match p.ty {
-                Some(_) => {}
-                None => return self.unsupported(at, "closures whose parameters have no type")
+                types.Ty.Unknown => return self.unsupported(at, "closures whose parameters have no type")
+                _ => {}
             }
         }
         self.closure_of(at, sig.ret, params, Some(body), None)
@@ -3543,6 +3543,8 @@ impl Lower {
     fn invoke(mut self, callee: Callee, receiver: Receiver?, sig: types.Sig, decl: parser.FnDecl?, inst: int, args: [parser.Arg], at: check.Span) -> Operand {
         var ops: [Operand] = []
         var writeback: [Writeback] = []
+        // The parts of arrays given as `mut`: where each goes back.
+        var parts: [Part] = []
         if let Some(r) = receiver {
             if r.back { writeback.push(Writeback(0, r.place)) }
             ops.push(r.op)
@@ -3571,6 +3573,37 @@ impl Lower {
                 continue
             }
             if by_mut {
+                if let Some(halves) = self.part_of(a.value) {
+                    // A part of an array: the call works on a copy of the
+                    // part, which is written over the part when the call is done.
+                    match halves.range.kind {
+                        parser.Kind.Range(lo, hi, inclusive) => {
+                            let target = self.place(halves.base)
+                            var first = int_op(0)
+                            var from = Operand.Const(Value.None)
+                            if let Some(b) = lo {
+                                let v = self.expr(b)
+                                first = Operand.At(self.stash(v))
+                                from = self.tmp(Rvalue.Some(first))
+                            }
+                            var to = Operand.Const(Value.None)
+                            if let Some(b) = hi {
+                                let v = self.expr(b)
+                                to = self.tmp(Rvalue.Some(v))
+                            }
+                            let r = self.tmp(Rvalue.Tuple([from, to, Operand.Const(Value.Bool(inclusive))]))
+                            self.at = span_of(a.value)
+                            let cut = self.tmp(Rvalue.Slice(Operand.At(target), r))
+                            let part = self.stash(cut)
+                            let len = self.tmp(Rvalue.Len(Operand.At(part)))
+                            parts.push(Part(target, first, part, len, span_of(a.value)))
+                            writeback.push(Writeback(offset + i, part))
+                            ops.push(Operand.At(part))
+                        }
+                        _ => return self.unsupported(span_of(a.value), "a part of an array as `mut` when the range is not written there")
+                    }
+                    continue
+                }
                 let p = self.place(a.value)
                 writeback.push(Writeback(offset + i, p))
                 ops.push(Operand.At(p))
@@ -3625,7 +3658,53 @@ impl Lower {
             }
             _ => {}
         }
-        self.finish_call(callee, ops, writeback, at)
+        let result = self.finish_call(callee, ops, writeback, at)
+        for p in parts {
+            self.at = p.at
+            let now = self.tmp(Rvalue.Len(Operand.At(p.part)))
+            let same = self.tmp(Rvalue.Binary("==", Num.Dyn, now, p.len))
+            let changed = self.new_block()
+            let head = self.new_block()
+            let body = self.new_block()
+            let exit = self.new_block()
+            let i = self.temp()
+            self.set(i, int_op(0))
+            self.terminate(Term.Branch(same, head, changed))
+            self.switch_to(changed)
+            self.terminate(Term.Panic("a part of an array given as `mut` cannot change its length"))
+            self.switch_to(head)
+            let cursor = local_op(i)
+            let more = self.tmp(Rvalue.Binary("<", Num.Dyn, cursor, p.len))
+            self.terminate(Term.Branch(more, body, exit))
+            self.switch_to(body)
+            let at_target = self.tmp(Rvalue.Binary("+", Num.Int("usize"), p.first, cursor))
+            self.emit(with_index(p.target, at_target), Rvalue.Use(Operand.At(with_index(p.part, cursor))))
+            self.emit(at_local(i), Rvalue.Binary("+", Num.Int("usize"), cursor, int_op(1)))
+            self.terminate(Term.Goto(head))
+            self.switch_to(exit)
+        }
+        result
+    }
+
+    // `base[range]` when `base` is an array: its two halves.
+    fn part_of(self, e: parser.Expr) -> Halves? {
+        match e.kind {
+            parser.Kind.Index(base, args) => {
+                if args.len != 1 || !self.c.types.has(self.slot(base)) { return None }
+                let indexable = match self.ty(base) {
+                    types.Ty.Slice(_) => true
+                    types.Ty.Array(_, _) => true
+                    _ => false
+                }
+                let ranged = match self.ty(args[0]) {
+                    types.Ty.Range(_) => true
+                    _ => false
+                }
+                if indexable && ranged { return Some(Halves(base, args[0])) }
+                None
+            }
+            _ => None
+        }
     }
 
     fn finish_call(mut self, callee: Callee, args: [Operand], writeback: [Writeback], at: check.Span) -> Operand {
@@ -3637,6 +3716,12 @@ impl Lower {
         local_op(dest)
     }
 }
+
+// A part of an array given as `mut`: the array, where the part starts,
+// the copy the call works on, and how long it was.
+struct Part { target: Place, first: Operand, part: Place, len: Operand, at: check.Span }
+
+struct Halves { base: parser.Expr, range: parser.Expr }
 
 // What a method is called on: `base` in `base.name(...)`.
 fn callee_base(callee: parser.Expr) -> parser.Expr {

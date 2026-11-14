@@ -2499,7 +2499,45 @@ impl Checker {
                     }
                     pre = PreArgs(found, logs)
                 } else {
-                    pre = self.arg_types(args)
+                    // A closure without the types of its parameters takes
+                    // them from the parameter it is given to, with what the
+                    // receiver and the arguments before it decided.
+                    var seen = env
+                    var logs: [LogRange] = []
+                    var found: [types.Ty] = []
+                    for k in 0..args.len {
+                        let start = self.mut_log.len as int
+                        if k < sig.params.len {
+                            match args[k].value.kind {
+                                parser.Kind.Closure(ps, _, _, _) => {
+                                    var untyped = false
+                                    for q in ps {
+                                        match q.ty {
+                                            Some(_) => {}
+                                            None => { untyped = true }
+                                        }
+                                    }
+                                    if untyped {
+                                        var decided: [types.Binding] = []
+                                        for b in seen { decided.push(types.Binding(b.name, types.concretize(b.ty))) }
+                                        for tp in tparams {
+                                            match types.lookup(decided, tp.name) {
+                                                Some(_) => {}
+                                                None => decided.push(types.Binding(tp.name, types.Ty.Unknown))
+                                            }
+                                        }
+                                        self.hint = Some(types.subst(sig.params[k].ty, decided))
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let t = self.expr(args[k].value)
+                        if k < sig.params.len { types.bind(sig.params[k].ty, t, mut seen) }
+                        found.push(t)
+                        logs.push(LogRange(start, self.mut_log.len as int))
+                    }
+                    pre = PreArgs(found, logs)
                 }
             }
         }
@@ -4492,17 +4530,35 @@ impl Checker {
                 types.Ty.Never
             }
             parser.Kind.Closure(params, ret, fails, body) => {
+                // A parameter without a type takes the one of the function
+                // type the closure is expected to have.
+                var wanted: [types.Ty] = []
+                if let Some(h) = self.pending {
+                    match h {
+                        types.Ty.Fn(hs, _) => {
+                            if hs.params.len == params.len {
+                                for q in hs.params { wanted.push(q.ty) }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 self.closures.push(self.scopes.len as int)
                 self.scopes.push([])
                 var ps: [types.ParamSig] = []
-                for p in params {
+                for k in 0..params.len {
+                    let p = params[k]
                     var ty = types.Ty.Unknown
                     match p.ty {
                         Some(t) => {
                             ty = self.resolve(t, at)
                         }
                         None => {
-                            ty = self.skip()
+                            if k < wanted.len { ty = wanted[k] }
+                            match ty {
+                                types.Ty.Unknown => self.err(at, "the type of the parameter `{p.name}` is not known here: write it, as in `fn({p.name}: int)`")
+                                _ => {}
+                            }
                         }
                     }
                     self.declare(p.name, ty, is_mut(p.mode))
@@ -5163,6 +5219,10 @@ impl Checker {
                             parser.Kind.Call(_, _) => {
                                 self.hint = None
                                 if types.concrete(sig.params[i].ty) { self.hint = Some(sig.params[i].ty) }
+                            }
+                            // A closure learns from it the types of its parameters.
+                            parser.Kind.Closure(_, _, _, _) => {
+                                self.hint = Some(sig.params[i].ty)
                             }
                             _ => {}
                         }

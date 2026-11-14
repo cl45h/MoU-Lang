@@ -1,0 +1,20 @@
+// Closures whose parameters have no type: where the type is not known.
+
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+
+fn each[T, U](xs: [T], f: fn(T) -> U) -> [U] {
+    var out: [U] = []
+    for x in xs { out.push(f(x)) }
+    out
+}
+
+fn first[T, U](f: fn(T) -> U, xs: [T]) -> [U] { each(xs, f) }
+
+fn main() {
+    let loose = fn(x) { x }
+    let two = apply(fn(a, b) { a }, 1)
+    let text: int = apply(fn(x) { "{x}" }, 1)
+    let early = first(fn(x) { x }, [1, 2])
+    let fine = each([1, 2], fn(x) { x + 1 })
+    let wrong: fn(str) -> int = fn(s) { s + 1 }
+}

@@ -1,0 +1,33 @@
+import std.io
+import std.list
+
+fn apply(f: fn(int) -> int, x: int) -> int { f(x) }
+
+fn each[T, U](xs: [T], f: fn(T) -> U) -> [U] {
+    var out: [U] = []
+    for x in xs { out.push(f(x)) }
+    out
+}
+
+fn fold[T, A](xs: [T], start: A, f: fn(A, T) -> A) -> A {
+    var acc = start
+    for x in xs { acc = f(acc, x) }
+    acc
+}
+
+struct Op { name: str, run: fn(int, int) -> int }
+
+fn main() ! io.Error {
+    let double: fn(int) -> int = fn(x) { x * 2 }
+    let k = 10
+    io.print("{apply(fn(x) { x + k }, 5)} {double(21)}")?
+    io.print("{each([1, 2, 3], fn(x) { x * x })} {each(["a", "bc"], fn(s) { s.len })} {each([1.5, 2.5], fn(x) { x > 2.0 })}")?
+    io.print("{fold([1, 2, 3, 4], 0, fn(acc, x) { acc + x })} {fold(["x", "yy"], "", fn(acc, s) { "{acc}{s}" })}")?
+    var xs: list.List[int] = list.List.new()
+    for i in 0..6 { xs.push(i) }
+    let evens = xs.filter(fn(x) { x % 2 == 0 })
+    let shown = xs.map(fn(x) { "<{x}>" })
+    io.print("{evens.len()} {shown.get(5)} {xs.fold(100, fn(acc, x) { acc - x })} {xs.any(fn(x) { x == 4 })}")?
+    let mixed = each([1, 2], fn(x: int) { x + 1 })
+    io.print("{mixed}")?
+}
