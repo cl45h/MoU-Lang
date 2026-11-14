@@ -389,7 +389,7 @@ Límites de esta primera librería: concatenar con `"{a}{b}"` dentro de un bucle
 
 ### Tests y `assert`
 
-`assert(condición)` y `assert(condición, mensaje)` detienen el programa con un panic cuando la condición es falsa; el mensaje solo se calcula si falla. `mou test archivo.mou` corre, en el intérprete, cada función sin parámetros del archivo cuyo nombre empieza con `test_`. Un test falla si entra en panic o si devuelve un error; lo que imprime solo se muestra cuando falla. El comando termina con código 1 si alguno falló. Límites: no corre los tests de los módulos importados, no filtra por nombre y no los ejecuta como binario nativo.
+`assert(condición)` y `assert(condición, mensaje)` detienen el programa con un panic cuando la condición es falsa; el mensaje solo se calcula si falla. `mou test archivo.mou` corre, en el intérprete, cada función sin parámetros del archivo cuyo nombre empieza con `test_`. Un test falla si entra en panic o si devuelve un error; lo que imprime solo se muestra cuando falla. El comando termina con código 1 si alguno falló. Una palabra después del archivo deja solo los tests que la tienen en el nombre (`mou test archivo.mou parse`), `--all` agrega los tests de los módulos que el archivo importa (se muestran con su archivo) y `--native` los corre compilados: un solo binario con todos los tests, ejecutado una vez por test, así un panic no corta a los demás y se pueden probar los programas que llaman a C. Límites: los tests corren uno después del otro, y con `--native` no hay límite de tiempo por test.
 
 ### Referencias de retorno: cómo están hechas
 

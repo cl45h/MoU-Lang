@@ -454,6 +454,8 @@ pub struct Program {
     /// The tests of the program's own file: its functions without
     /// parameters whose name starts with `test_`.
     pub tests: Vec<usize>,
+    /// The tests of the modules the program imports, for `mou test --all`.
+    pub module_tests: Vec<usize>,
     pub structs: Vec<(String, Vec<String>)>,
     /// For each struct: how each field is kept when an array holds the
     /// struct in line (1 bool, 2 integer, 3 `f64`, 4 char), or nothing
@@ -897,6 +899,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
     let mut receivers: Vec<(usize, Ty)> = Vec::new();
     let mut main = None;
     let mut tests = Vec::new();
+    let mut module_tests = Vec::new();
     for (i, d) in file.decls.iter().enumerate() {
         match &d.kind {
             DeclKind::Fn(f) => {
@@ -913,6 +916,8 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
                     } else if f.name.starts_with("test_") && info.fns[idx].sig.params.is_empty() {
                         tests.push(jobs.len());
                     }
+                } else if f.name.starts_with("test_") && info.fns[idx].sig.params.is_empty() {
+                    module_tests.push(jobs.len());
                 }
                 let limits = lw.limits(file, d);
                 jobs.push(Job::Fn { name: f.name.clone(), f, sig: &info.fns[idx].sig, self_mode: None, span: d.span, inst: 0, path: false, limits });
@@ -1090,7 +1095,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
         })
         .collect();
     let values = vec![None; lw.const_ids.len()];
-    Ok(Program { fns, consts: lw.const_ids, values, main, tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs, demands: lw.demands, sums: (0..info.enums.len()).map(|e| sum_kinds(info, e).unwrap_or_default()).collect() })
+    Ok(Program { fns, consts: lw.const_ids, values, main, tests, module_tests, structs, records, enums, boxed: (boxed_structs, boxed_enums), dyn_from, externs, cstructs, demands: lw.demands, sums: (0..info.enums.len()).map(|e| sum_kinds(info, e).unwrap_or_default()).collect() })
 }
 
 impl<'a> Lower<'a> {

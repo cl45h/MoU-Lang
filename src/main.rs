@@ -22,7 +22,9 @@ const USAGE: &str = "usage: mou <command> <file.mou> [-o <output>] [-l <library>
 
 commands:
   run      type-check the file and run its `main`; more arguments go to the program
-  test     run the functions of the file whose name starts with `test_`
+  test     run the functions of the file whose name starts with `test_`; a word keeps
+           the ones with it in their name, --all adds the tests of the modules the
+           file imports, --native runs them compiled
   repl     an interactive session: no file
   fuzz     write random programs and compare the interpreter with the native program
   fmt      give the file the standard layout; with --check, only say whether it has it
@@ -95,7 +97,17 @@ fn main() -> ExitCode {
             interp::ARGS.with(|a| *a.borrow_mut() = args[3..].to_vec());
             return run_file(path, &src, cmd == "mir");
         }
-        "test" => return test_file(path, &src),
+        "test" => {
+            // `mou test file.mou [part of a name] [--all] [--native]`
+            let rest = &args[3..];
+            let flag = |f: &str| rest.iter().any(|a| a == f);
+            if let Some(bad) = rest.iter().find(|a| a.starts_with("--") && *a != "--all" && *a != "--native") {
+                eprintln!("mou: `test` does not know `{bad}`: it takes `--all` and `--native`");
+                return ExitCode::from(2);
+            }
+            let filter = rest.iter().find(|a| !a.starts_with("--")).map(|s| s.as_str());
+            return test_file(path, &src, filter, flag("--all"), flag("--native"));
+        }
         "effects" => return effects_file(path, &src),
         "fmt" => {
             let check = args.get(3).is_some_and(|a| a == "--check");
@@ -489,28 +501,76 @@ fn effects_file(path: &str, src: &str) -> ExitCode {
 
 /// Runs the tests of a file: its functions without parameters whose name
 /// starts with `test_`. A test fails when it panics or returns an error.
-fn test_file(path: &str, src: &str) -> ExitCode {
+/// `filter` keeps the tests with that text in their name, `all` adds the
+/// tests of the modules the file imports, and `native` runs each test in
+/// the compiled program instead of the interpreter.
+fn test_file(path: &str, src: &str, filter: Option<&str>, all: bool, native: bool) -> ExitCode {
     let (sources, program) = compile(path, src);
-    let program = match program {
+    let mut program = match program {
         Ok(p) => p,
         Err(errors) => return fail(&sources, &errors),
     };
-    if program.tests.is_empty() {
+    let mut tests = program.tests.clone();
+    if all {
+        tests.extend(&program.module_tests);
+    }
+    if tests.is_empty() {
         eprintln!("mou: {path} has no tests: functions without parameters whose name starts with `test_`");
         return ExitCode::FAILURE;
     }
+    // A test of a module is shown with the file it is in.
+    let paths = sources.paths();
+    let names: Vec<String> = program.fns.iter().map(|f| match (f.span.line >> lexer::FILE_SHIFT) as usize {
+        0 => f.name.clone(),
+        file => format!("{} ({})", f.name, paths.get(file).map_or("?", |p| p.as_str())),
+    }).collect();
+    let found = tests.len();
+    tests.retain(|t| filter.is_none_or(|part| program.fns[*t].name.contains(part)));
+    if tests.is_empty() {
+        eprintln!("mou: none of the {found} tests of {path} has `{}` in its name", filter.unwrap_or_default());
+        return ExitCode::FAILURE;
+    }
+    // The compiled program runs the test whose number it is given.
+    let exe = if native {
+        match test_program(&mut program, &paths, &tests) {
+            Ok(exe) => Some(exe),
+            Err(why) => {
+                eprintln!("mou: {why}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
     let mut failed = 0;
-    for &t in &program.tests {
-        let name = &program.fns[t].name;
+    for (k, &t) in tests.iter().enumerate() {
+        let name = &names[t];
         // What a test prints is only shown when it fails.
         let mut out = Vec::new();
-        let problem = match interp::run(&program, t, &mut out) {
-            Ok(mir::Value::Err(e)) => Some(format!("returned an error: {}", interp::show(&program, &e, false))),
-            Ok(_) => None,
-            Err(p) => {
-                let (source, line) = sources.locate(p.span);
-                Some(format!("{}:{line}:{}: panic: {}", source.path, p.span.col, p.msg))
-            }
+        let problem = match &exe {
+            Some(exe) => match std::process::Command::new(exe).arg(k.to_string()).stdin(std::process::Stdio::null()).output() {
+                Ok(run) if run.status.success() => None,
+                Ok(run) => {
+                    out = run.stdout;
+                    let said = String::from_utf8_lossy(&run.stderr);
+                    // The compiled program calls what it runs `main`.
+                    let said = match said.split_once("`main` returned an error: ") {
+                        Some((_, e)) => format!("returned an error: {e}"),
+                        None => said.into_owned(),
+                    };
+                    let why: Vec<&str> = said.lines().filter(|l| !l.trim().is_empty()).take(3).collect();
+                    Some(if why.is_empty() { format!("ended with {}", run.status) } else { why.join("\n      ") })
+                }
+                Err(e) => Some(format!("cannot run the compiled tests: {e}")),
+            },
+            None => match interp::run(&program, t, &mut out) {
+                Ok(mir::Value::Err(e)) => Some(format!("returned an error: {}", interp::show(&program, &e, false))),
+                Ok(_) => None,
+                Err(p) => {
+                    let (source, line) = sources.locate(p.span);
+                    Some(format!("{}:{line}:{}: panic: {}", source.path, p.span.col, p.msg))
+                }
+            },
         };
         match problem {
             None => println!("ok    {name}"),
@@ -523,9 +583,44 @@ fn test_file(path: &str, src: &str) -> ExitCode {
             }
         }
     }
-    let total = program.tests.len();
+    if let Some(exe) = &exe {
+        let _ = std::fs::remove_file(exe);
+        let _ = std::fs::remove_file(exe.with_extension("c"));
+    }
+    let total = tests.len();
     println!("\n{} passed, {failed} failed", total - failed);
     if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Compiles the tests into one program that runs the test whose place in
+/// `tests` it is given as its argument.
+fn test_program(program: &mut mir::Program, paths: &[String], tests: &[usize]) -> Result<std::path::PathBuf, String> {
+    let main = std::mem::replace(&mut program.main, tests.first().copied());
+    let c = cgen::emit(program, paths);
+    program.main = main;
+    let c = c?;
+    let call = format!("    int status = kfinish(f{}(A, KUNIT));\n", tests[0]);
+    let list: Vec<String> = tests.iter().map(|t| format!("f{t}")).collect();
+    let choose = format!(
+        "    static kv (*const KT[])(kv *, kv) = {{{}}};\n    long which = argc > 1 ? strtol(argv[1], NULL, 10) : 0;\n    if (which < 0 || which >= {}) return 2;\n    int status = kfinish(KT[which](A, KUNIT));\n",
+        list.join(", "),
+        tests.len()
+    );
+    if !c.contains(&call) {
+        return Err("internal error: the compiled tests have no entry point".into());
+    }
+    let c = c.replace(&call, &choose);
+    let exe = std::env::temp_dir().join(format!("mou-test-{}", std::process::id()));
+    let source = exe.with_extension("c");
+    std::fs::write(&source, c).map_err(|e| format!("cannot write {}: {e}", source.display()))?;
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O1".to_string());
+    let built = std::process::Command::new(&cc).args(flags.split_whitespace()).args(["-w", "-pthread", "-o"]).arg(&exe).arg(&source).arg("-lm").output();
+    match built {
+        Ok(b) if b.status.success() => Ok(exe),
+        Ok(b) => Err(format!("the C compiler `{cc}` failed on the tests: {}", String::from_utf8_lossy(&b.stderr).lines().next().unwrap_or_default())),
+        Err(e) => Err(format!("cannot run the C compiler `{cc}`: {e} (set CC to choose another)")),
+    }
 }
 
 /// Reports an error of a loaded program, in the file it belongs to.
