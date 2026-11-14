@@ -5402,6 +5402,9 @@ fn native(module: str, name: str) -> Native? {
         if name == "hash" { return Some(Native("raw.hash", types.Sig([param("text", types.Ty.Str)], int))) }
         if name == "mix" { return Some(Native("raw.mix", types.Sig([param("n", int)], int))) }
         if name == "parse_float" { return Some(Native("raw.parse_float", types.Sig([param("text", types.Ty.Str)], types.Ty.Optional(types.Ty.Float("f64"))))) }
+        if name == "fmath" { return Some(Native("raw.fmath", types.Sig([param("op", int), param("x", types.Ty.Float("f64")), param("y", types.Ty.Float("f64"))], types.Ty.Float("f64")))) }
+        if name == "char_class" { return Some(Native("raw.char_class", types.Sig([param("c", types.Ty.Char)], int))) }
+        if name == "char_case" { return Some(Native("raw.char_case", types.Sig([param("c", types.Ty.Char), param("upper", types.Ty.Bool)], types.Ty.Char))) }
     }
     None
 }

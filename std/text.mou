@@ -56,6 +56,38 @@ pub fn is_digit(c: char) -> bool { c >= '0' && c <= '9' }
 
 pub fn is_alpha(c: char) -> bool { (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
 
+/// A letter of any alphabet: `'a'`, `'ñ'`, `'я'`.
+pub fn is_letter(c: char) -> bool { raw.char_class(c) & 1 != 0 }
+
+/// A digit or another number of any alphabet.
+pub fn is_number(c: char) -> bool { raw.char_class(c) & 2 != 0 }
+
+/// White space of any kind, the ones outside ASCII too.
+pub fn is_blank(c: char) -> bool { raw.char_class(c) & 4 != 0 }
+
+pub fn is_upper(c: char) -> bool { raw.char_class(c) & 8 != 0 }
+
+pub fn is_lower(c: char) -> bool { raw.char_class(c) & 16 != 0 }
+
+/// The character in upper case, when that is one character: `'ß'` stays.
+pub fn to_upper(c: char) -> char { raw.char_case(c, true) }
+
+pub fn to_lower(c: char) -> char { raw.char_case(c, false) }
+
+/// The text with every letter in upper case.
+pub fn upper(s: str) -> str {
+    var out: [char] = []
+    for c in s { out.push(raw.char_case(c, true)) }
+    raw.from_chars(out)
+}
+
+/// The text with every letter in lower case.
+pub fn lower(s: str) -> str {
+    var out: [char] = []
+    for c in s { out.push(raw.char_case(c, false)) }
+    raw.from_chars(out)
+}
+
 /// The value of a decimal digit.
 pub fn digit(c: char) -> int? {
     if is_digit(c) { Some(c as int - '0' as int) } else { None }

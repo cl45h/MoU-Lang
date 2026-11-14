@@ -32,6 +32,68 @@ impl Key for bool {
     fn same(self, other: Self) -> bool { self == other }
 }
 
+impl Key for i8 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for i16 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for i32 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for u8 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for u16 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for u32 {
+    fn hash(self) -> int { raw.mix(self) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for isize {
+    fn hash(self) -> int { raw.mix(self as int) }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+// The types that do not fit in an `int` are hashed by halves.
+impl Key for u64 {
+    fn hash(self) -> int { raw.mix((self / 2) as int) ^ (self % 2) as int }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for usize {
+    fn hash(self) -> int { raw.mix((self / 2) as int) ^ (self % 2) as int }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for i128 {
+    fn hash(self) -> int {
+        let half: i128 = 4611686018427387904
+        raw.mix((self % half) as int) ^ raw.mix(((self / half) % half) as int) ^ ((self / half / half) as int)
+    }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
+impl Key for u128 {
+    fn hash(self) -> int {
+        let half: u128 = 4611686018427387904
+        raw.mix((self % half) as int) ^ raw.mix(((self / half) % half) as int) ^ ((self / half / half) as int)
+    }
+    fn same(self, other: Self) -> bool { self == other }
+}
+
 // Open addressing with linear probing. A key lives in the first free slot
 // at or after the one its hash names, so a search stops at an empty slot.
 // At most three quarters of the slots are in use.

@@ -41,7 +41,21 @@ fn has(list: [str], s: str) -> bool {
     false
 }
 
-fn is_word(c: char) -> bool { text.is_alpha(c) || text.is_digit(c) || c == '_' }
+// A letter of any alphabet. The ones of ASCII are told apart without a table.
+fn is_letter(c: char) -> bool {
+    if (c as int) < 128 { return text.is_alpha(c) }
+    text.is_letter(c)
+}
+
+fn is_blank(c: char) -> bool {
+    if (c as int) < 128 { return c == ' ' || (c >= '\t' && c <= '\r') }
+    text.is_blank(c)
+}
+
+fn is_word(c: char) -> bool {
+    if (c as int) < 128 { return text.is_alpha(c) || text.is_digit(c) || c == '_' }
+    text.is_letter(c) || text.is_number(c)
+}
 
 fn unescape(c: char) -> char {
     match c {
@@ -126,7 +140,7 @@ impl Lexer {
                 out.push(Token(Tok.Newline, line, col))
                 continue
             }
-            if text.is_space(c) {
+            if is_blank(c) {
                 self.bump()
                 continue
             }
@@ -138,7 +152,7 @@ impl Lexer {
                 self.block_comment(line, col)?
                 continue
             }
-            if text.is_alpha(c) || c == '_' {
+            if is_letter(c) || c == '_' {
                 var word: [char] = []
                 while let Some(w) = self.peek(0) {
                     if !is_word(w) { break }

@@ -1283,7 +1283,7 @@ impl Parser {
             // By convention a capitalized or dotted name is a constructor,
             // not a new variable.
             let head = text.chars(path[0])
-            let capital = head.len > 0 && head[0] >= 'A' && head[0] <= 'Z'
+            let capital = head.len > 0 && text.is_upper(head[0])
             let is_ctor = path.len > 1 || capital
             if self.eat_p("(") { return Pattern.Ctor(path, self.patterns(")")?) }
             if is_ctor && self.eat_p("{{") {

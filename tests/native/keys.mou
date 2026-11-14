@@ -1,0 +1,24 @@
+import std.io
+import std.cmp
+import std.hash
+
+fn main() ! io.Error {
+    var small: [u8] = [9, 3, 200, 0]
+    cmp.sort(mut small)
+    var wide: [u64] = [18446744073709551615, 5, 9223372036854775808]
+    cmp.sort(mut wide)
+    var huge: [i128] = [170141183460469231731687303715884105727, -170141183460469231731687303715884105727, 0]
+    cmp.sort(mut huge)
+    var flags = [true, false, true]
+    cmp.sort(mut flags)
+    io.print("{small} {wide} {huge} {flags} {cmp.max(3 as i16, -4 as i16)}")?
+    var t: hash.Table[u64, str] = hash.Table.new()
+    t.set(18446744073709551615, "max")
+    t.set(0, "zero")
+    var u: hash.Table[i128, int] = hash.Table.new()
+    u.set(-170141183460469231731687303715884105727, 1)
+    u.set(170141183460469231731687303715884105727, 2)
+    var b: hash.Table[u8, int] = hash.Table.new()
+    for i in 0..300 { b.set((i % 256) as u8, i) }
+    io.print("{t.get(18446744073709551615)} {t.get(0)} {t.get(7)} {u.get(-170141183460469231731687303715884105727)} {u.get(170141183460469231731687303715884105727)} {b.len()} {b.get(43)}")?
+}

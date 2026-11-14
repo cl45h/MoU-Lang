@@ -1028,6 +1028,24 @@ fn native(name: str, args: [mir.Value]) -> mir.Value ! Oops {
             _ => return internal("`mix` of a value that is not an integer")
         }
     }
+    if name == "raw.fmath" {
+        match (args[0], args[1], args[2]) {
+            (mir.Value.Int(op), mir.Value.Float(x), mir.Value.Float(y)) => return float_value(raw.fmath(op as int, float_of(x)?, float_of(y)?))?
+            _ => return internal("`fmath` of values that are not numbers")
+        }
+    }
+    if name == "raw.char_class" {
+        match args[0] {
+            mir.Value.Char(ch) => return mir.Value.Int(raw.char_class(ch) as i128)
+            _ => return internal("`char_class` of a value that is not a character")
+        }
+    }
+    if name == "raw.char_case" {
+        match (args[0], args[1]) {
+            (mir.Value.Char(ch), mir.Value.Bool(upper)) => return mir.Value.Char(raw.char_case(ch, upper))
+            _ => return internal("`char_case` of a value that is not a character")
+        }
+    }
     quit()
 }
 

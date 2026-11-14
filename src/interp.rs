@@ -344,8 +344,59 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             Some(Value::Int(n)) => Value::Int(mix(*n as i64) as i128),
             _ => return Err(internal("`mix` of a value that is not an integer")),
         },
+        "raw.fmath" => match args {
+            [Value::Int(op), Value::Float(x), Value::Float(y)] => Value::Float(fmath(*op as i64, *x, *y)),
+            _ => return Err(internal("`fmath` of values that are not numbers")),
+        },
+        "raw.char_class" => match args.first() {
+            Some(Value::Char(c)) => Value::Int(char_class(*c)),
+            _ => return Err(internal("`char_class` of a value that is not a character")),
+        },
+        "raw.char_case" => match args {
+            [Value::Char(c), Value::Bool(upper)] => Value::Char(char_case(*c, *upper)),
+            _ => return Err(internal("`char_case` of a value that is not a character")),
+        },
         _ => return Err(internal("an unknown built-in function")),
     })
+}
+
+/// The functions of `std.math` on numbers with a fraction, by number.
+pub fn fmath(op: i64, x: f64, y: f64) -> f64 {
+    match op {
+        0 => x.sqrt(),
+        1 => x.floor(),
+        2 => x.ceil(),
+        3 => x.round(),
+        4 => x.trunc(),
+        5 => x.sin(),
+        6 => x.cos(),
+        7 => x.tan(),
+        8 => x.asin(),
+        9 => x.acos(),
+        10 => x.atan(),
+        11 => x.exp(),
+        12 => x.ln(),
+        13 => x.log10(),
+        14 => x.log2(),
+        15 => x.powf(y),
+        16 => x.atan2(y),
+        _ => x,
+    }
+}
+
+/// What a character is, one bit each: a letter, a digit or other number,
+/// white space, upper case, lower case.
+pub fn char_class(c: char) -> i128 {
+    (c.is_alphabetic() as i128) | (c.is_numeric() as i128) << 1 | (c.is_whitespace() as i128) << 2 | (c.is_uppercase() as i128) << 3 | (c.is_lowercase() as i128) << 4
+}
+
+/// The character in the other case, when that is one character.
+pub fn char_case(c: char, upper: bool) -> char {
+    let mut it: Box<dyn Iterator<Item = char>> = if upper { Box::new(c.to_uppercase()) } else { Box::new(c.to_lowercase()) };
+    match (it.next(), it.next()) {
+        (Some(to), None) => to,
+        _ => c,
+    }
 }
 
 /// Whether a text is a number with an optional sign, fraction and

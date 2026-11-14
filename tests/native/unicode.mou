@@ -1,0 +1,21 @@
+import std.io
+
+struct Año { número: int }
+
+enum Ave { Ñandú, Águila(int) }
+
+fn área(lado: f64) -> f64 { lado * lado }
+
+fn nombre(a: Ave) -> str {
+    match a {
+        Ñandú => "ñandú"
+        Águila(peso) => "águila de {peso} kg"
+    }
+}
+
+fn main() ! io.Error {
+    let año = Año(2026)
+    let переменная = 7
+    io.print("{año.número} {área(1.5)} {nombre(Ave.Ñandú)} {nombre(Ave.Águila(4))} {переменная}")?
+    io.print("{año}")?
+}

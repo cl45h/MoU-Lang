@@ -1516,8 +1516,11 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
         ("std.raw", "concat") => ("raw.concat", vec![param("parts", list(Ty::Str))], Ty::Str),
         ("std.raw", "from_chars") => ("raw.from_chars", vec![param("chars", list(Ty::Char))], Ty::Str),
         ("std.raw", "hash") => ("raw.hash", vec![param("text", Ty::Str)], int),
-        ("std.raw", "mix") => ("raw.mix", vec![param("n", int.clone())], int),
+        ("std.raw", "mix") => ("raw.mix", vec![param("n", int.clone())], int.clone()),
         ("std.raw", "parse_float") => ("raw.parse_float", vec![param("text", Ty::Str)], Ty::Optional(Box::new(Ty::Float("f64")))),
+        ("std.raw", "fmath") => ("raw.fmath", vec![param("op", int.clone()), param("x", Ty::Float("f64")), param("y", Ty::Float("f64"))], Ty::Float("f64")),
+        ("std.raw", "char_class") => ("raw.char_class", vec![param("c", Ty::Char)], int),
+        ("std.raw", "char_case") => ("raw.char_case", vec![param("c", Ty::Char), param("upper", Ty::Bool)], Ty::Char),
         _ => return None,
     };
     Some((native, Sig { params, ret }))

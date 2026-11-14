@@ -31,6 +31,84 @@ impl Ord for char {
     }
 }
 
+impl Ord for i8 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for i16 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for i32 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for i128 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for isize {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for u8 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for u16 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for u32 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for u64 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for u128 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for usize {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for f32 {
+    fn cmp(self, other: Self) -> Order {
+        if self < other { Order.Less } else if self > other { Order.Greater } else { Order.Equal }
+    }
+}
+
+impl Ord for bool {
+    fn cmp(self, other: Self) -> Order {
+        if self == other { Order.Equal } else if other { Order.Less } else { Order.Greater }
+    }
+}
+
 pub fn min[T: Ord](a: T, b: T) -> T {
     if b.cmp(a) == Order.Less { b } else { a }
 }

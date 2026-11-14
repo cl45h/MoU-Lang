@@ -1,5 +1,10 @@
 // Arithmetic helpers.
 
+import std.raw
+
+pub let PI: f64 = 3.141592653589793
+pub let E: f64 = 2.718281828459045
+
 @noalloc @noio
 pub fn abs(n: int) -> int { if n < 0 { 0 - n } else { n } }
 
@@ -44,3 +49,63 @@ pub fn gcd(a: int, b: int) -> int {
     }
     x
 }
+
+/// The square root; of a negative number it is not a number.
+@nopanic @noalloc @noio
+pub fn sqrt(x: f64) -> f64 { raw.fmath(0, x, 0.0) }
+
+/// The nearest whole number that is not above `x`.
+@nopanic @noalloc @noio
+pub fn floor(x: f64) -> f64 { raw.fmath(1, x, 0.0) }
+
+/// The nearest whole number that is not below `x`.
+@nopanic @noalloc @noio
+pub fn ceil(x: f64) -> f64 { raw.fmath(2, x, 0.0) }
+
+/// The nearest whole number; a half goes away from zero.
+@nopanic @noalloc @noio
+pub fn round(x: f64) -> f64 { raw.fmath(3, x, 0.0) }
+
+/// `x` without its fraction.
+@nopanic @noalloc @noio
+pub fn trunc(x: f64) -> f64 { raw.fmath(4, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn sin(x: f64) -> f64 { raw.fmath(5, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn cos(x: f64) -> f64 { raw.fmath(6, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn tan(x: f64) -> f64 { raw.fmath(7, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn asin(x: f64) -> f64 { raw.fmath(8, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn acos(x: f64) -> f64 { raw.fmath(9, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn atan(x: f64) -> f64 { raw.fmath(10, x, 0.0) }
+
+/// `e` to the power `x`.
+@nopanic @noalloc @noio
+pub fn exp(x: f64) -> f64 { raw.fmath(11, x, 0.0) }
+
+/// The natural logarithm.
+@nopanic @noalloc @noio
+pub fn ln(x: f64) -> f64 { raw.fmath(12, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn log10(x: f64) -> f64 { raw.fmath(13, x, 0.0) }
+
+@nopanic @noalloc @noio
+pub fn log2(x: f64) -> f64 { raw.fmath(14, x, 0.0) }
+
+/// `x` to the power `y`, both with a fraction.
+@nopanic @noalloc @noio
+pub fn powf(x: f64, y: f64) -> f64 { raw.fmath(15, x, y) }
+
+/// The angle of the point `(x, y)`, between -PI and PI.
+@nopanic @noalloc @noio
+pub fn atan2(y: f64, x: f64) -> f64 { raw.fmath(16, y, x) }
