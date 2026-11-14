@@ -579,6 +579,9 @@ struct Cx {
     // Temporaries a call takes as an argument and nothing else reads: the
     // call takes the value itself, not a copy of it.
     spent: [bool]
+    // Where each local that is a tagged value is in the array of them, or
+    // -1: the ones kept as values of the machine have no place there.
+    slots: [int]
 }
 
 fn all_fields(proj: [mir.Proj]) -> bool {
@@ -1271,13 +1274,23 @@ impl Cx {
     }
 
     // A C pointer to a value that has parts: it is never a bare item.
+    // The place of a local in the array of tagged values. One that has
+    // none is written as a name C does not know, so that a mistake here
+    // does not compile.
+    fn at(self, l: int) -> str {
+        if l >= 0 && l < (self.slots.len as int) {
+            if self.slots[l] >= 0 { return "{self.slots[l]}" }
+        }
+        "NO_PLACE_{l}"
+    }
+
     fn walk(self, local: int, proj: [mir.Proj], write: bool) -> str? {
         if !is_boxed(self.reps[local]) { return None }
-        var s = "&L[{local}]"
+        var s = "&L[{self.at(local)}]"
         for pr in proj {
             match pr {
                 mir.Proj.Path(l) => {
-                    s = "kpath({s}, &L[{l}], {write})"
+                    s = "kpath({s}, &L[{self.at(l)}], {write})"
                 }
                 mir.Proj.Field(k) => {
                     s = "kfield({s}, {k}, {write})"
@@ -1391,7 +1404,7 @@ impl Cx {
     fn untagged(self, op: mir.Operand, part: str, item: str, field_item: str) -> str ! Fail {
         match op {
             mir.Operand.At(p) => {
-                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{p.local}].{part}" }
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{self.at(p.local)}].{part}" }
                 if let Some(it) = self.item(p, false)? { return "{item}({it.base}, {it.index})" }
                 if let Some(fi) = self.field_item(p, false)? { return "{field_item}({fi.base}, {fi.index}, {fi.field})" }
                 match self.ptr(p.local, p.proj, false) {
@@ -1434,7 +1447,7 @@ impl Cx {
         if let Some(known) = self.known_char(op) { return known }
         match op {
             mir.Operand.At(p) => {
-                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{p.local}].u.c" }
+                if p.proj.len == 0 && is_boxed(self.reps[p.local]) { return "L[{self.at(p.local)}].u.c" }
             }
             _ => {}
         }
@@ -1487,7 +1500,7 @@ impl Cx {
                                 parts.push("{{1, kidxc((i128){self.name(i)})}}")
                             } else {
                                 if i.proj.len > 0 { return Fail("the C backend needs an index to be a local or a constant") }
-                                parts.push("{{1, kidx(&L[{i.local}])}}")
+                                parts.push("{{1, kidx(&L[{self.at(i.local)}])}}")
                             }
                         }
                     }
@@ -1500,9 +1513,9 @@ impl Cx {
 
     // What tells the runtime where a place is.
     fn target(self, p: mir.Place) -> str ! Fail {
-        if p.proj.len == 0 { return "&L[{p.local}], 0, NULL" }
+        if p.proj.len == 0 { return "&L[{self.at(p.local)}], 0, NULL" }
         let s = self.steps(p)?
-        "&L[{p.local}], {s}"
+        "&L[{self.at(p.local)}], {s}"
     }
 
     // An expression that gives a new reference to the value of the operand.
@@ -1512,7 +1525,7 @@ impl Cx {
             mir.Operand.At(p) => {
                 if p.proj.len == 0 {
                     if !is_boxed(self.reps[p.local]) { return self.boxed(p.local) }
-                    return "kretain(L[{p.local}])"
+                    return "kretain(L[{self.at(p.local)}])"
                 }
                 if is_part(self.reps, p) { return tagged(self.rep(p), self.name(p)) }
                 if let Some(it) = self.item(p, false)? { return "kitem({it.base}, {it.index})" }
@@ -1523,12 +1536,12 @@ impl Cx {
                     mir.Proj.Path(l) => {
                         var before: [mir.Proj] = []
                         for k in 0..(n - 1) { before.push(p.proj[k]) }
-                        if let Some(base) = self.walk(p.local, before, false) { return "kpath_get({base}, &L[{l}])" }
+                        if let Some(base) = self.walk(p.local, before, false) { return "kpath_get({base}, &L[{self.at(l)}])" }
                     }
                     _ => {}
                 }
                 let s = self.steps(p)?
-                "kread(&L[{p.local}], {s})"
+                "kread(&L[{self.at(p.local)}], {s})"
             }
         }
     }
@@ -1541,7 +1554,7 @@ impl Cx {
     }
 
     fn store(self, p: mir.Place, value: str) -> str ! Fail {
-        if p.proj.len == 0 { return "kset(&L[{p.local}], {value});" }
+        if p.proj.len == 0 { return "kset(&L[{self.at(p.local)}], {value});" }
         // The value is worked out first: it may read what the place is part of.
         if let Some(it) = self.item(p, true)? { return "{{ kv v_ = {value}; kitem_set({it.base}, {it.index}, v_); }}" }
         if let Some(fi) = self.field_item(p, true)? { return "{{ kv v_ = {value}; kitem_field_set({fi.base}, {fi.index}, {fi.field}, v_); }}" }
@@ -1550,13 +1563,13 @@ impl Cx {
             mir.Proj.Path(l) => {
                 var before: [mir.Proj] = []
                 for k in 0..(n - 1) { before.push(p.proj[k]) }
-                if let Some(base) = self.walk(p.local, before, true) { return "{{ kv v_ = {value}; kpath_set({base}, &L[{l}], v_); }}" }
+                if let Some(base) = self.walk(p.local, before, true) { return "{{ kv v_ = {value}; kpath_set({base}, &L[{self.at(l)}], v_); }}" }
             }
             _ => {}
         }
         if let Some(ptr) = self.ptr(p.local, p.proj, true) { return "{{ kv v_ = {value}; kset({ptr}, v_); }}" }
         let s = self.steps(p)?
-        "kwrite(&L[{p.local}], {s}, {value});"
+        "kwrite(&L[{self.at(p.local)}], {s}, {value});"
     }
 
     fn rvalue(self, rv: mir.Rvalue) -> str ! Fail {
@@ -1788,7 +1801,7 @@ impl Cx {
                         (mir.Operand.At(p), mir.Operand.Const(mir.Value.Char(ch))) => {
                             if p.proj.len == 0 && is_boxed(self.reps[p.local]) {
                                 let l = p.local
-                                return "(L[{l}].tag == T_CHAR ? L[{l}].u.c {op} {ch as int}u : ktruth({self.rvalue(rv)?}))"
+                                return "(L[{self.at(l)}].tag == T_CHAR ? L[{self.at(l)}].u.c {op} {ch as int}u : ktruth({self.rvalue(rv)?}))"
                             }
                         }
                         _ => {}
@@ -1824,7 +1837,7 @@ impl Cx {
         match r {
             mir.Operand.At(p) => {
                 if p.proj.len == 0 && is_boxed(self.reps[p.local]) {
-                    if let Some(x) = self.known_int(i) { return Some("{helper}(&L[{p.local}], (i128)({x}))") }
+                    if let Some(x) = self.known_int(i) { return Some("{helper}(&L[{self.at(p.local)}], (i128)({x}))") }
                 }
                 None
             }
@@ -2019,7 +2032,7 @@ impl Cx {
             Rep.Char => "kchar(s{l})"
             Rep.Rec(i) => "KS{i}_box(s{l})"
             Rep.Opt(k) => "{agg(Rep.Opt(k))}_box(s{l})"
-            _ => "L[{l}]"
+            _ => "L[{self.at(l)}]"
         }
     }
 }
@@ -2069,7 +2082,18 @@ fn safe_name(name: str) -> str {
 }
 
 fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.Extern], direct: [Direct?], recs: [[int]]) -> bool ! Fail {
-    let cx = Cx(recs, infer(f, fns, recs), spent(f))
+    let reps = infer(f, fns, recs)
+    var slots: [int] = []
+    var places = 0
+    for r in reps {
+        if is_boxed(r) {
+            slots.push(places)
+            places += 1
+        } else {
+            slots.push(-1)
+        }
+    }
+    let cx = Cx(recs, reps, spent(f), slots)
     var n = f.locals
     if n < 1 { n = 1 }
     let mine = direct[i]
@@ -2088,7 +2112,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
     var owned: [str] = []
     for l in f.params..n {
         if l < (cx.reps.len as int) {
-            if is_boxed(cx.reps[l]) { owned.push("{l}") }
+            if is_boxed(cx.reps[l]) { owned.push(cx.at(l)) }
         }
     }
     let listed = owned.len > 3
@@ -2098,7 +2122,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
     } else {
         line(mut out, "static kv f{i}(kv *a, kv env) {{")
     }
-    line(mut out, "    kv L[{n}];")
+    line(mut out, "    kv L[{if places > 0 { places } else { 1 }}];")
     for l in 0..(cx.reps.len as int) {
         if l < f.params && is_direct { continue }
         match cx.reps[l] {
@@ -2154,9 +2178,9 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
         }
         // Lent by the caller: it is not let go of here.
         if is_direct {
-            line(mut out, "    L[{l}] = s{l};")
+            line(mut out, "    L[{cx.at(l)}] = s{l};")
         } else {
-            line(mut out, "    L[{l}] = a[{l}];")
+            line(mut out, "    L[{cx.at(l)}] = a[{l}];")
         }
     }
     line(mut out, "    goto b0;")
@@ -2227,7 +2251,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                                     // A tagged local is lent as it is.
                                     if p.proj.len == 0 && is_boxed(cx.reps[p.local]) {
                                         lent = true
-                                        values.push("L[{p.local}]")
+                                        values.push("L[{cx.at(p.local)}]")
                                         if cx.spent[p.local] { done.push(p.local) }
                                     }
                                 }
@@ -2244,7 +2268,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                     }
                     line(mut out, "        {rep_type(ret)} r = g{target}({text.join(values, ", ")});")
                     for k in temps { line(mut out, "        krelease(t{k});") }
-                    for l in done { line(mut out, "        kset(&L[{l}], KUNIT);") }
+                    for l in done { line(mut out, "        kset(&L[{cx.at(l)}], KUNIT);") }
                     line(mut out, "        {cx.take_machine(dest, ret, "r")?}")
                     line(mut out, "    }}")
                     line(mut out, "    goto b{next};")
@@ -2417,7 +2441,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                             match args[k] {
                                 mir.Operand.At(p) => {
                                     if p.proj.len == 0 && is_boxed(cx.reps[p.local]) && cx.spent[p.local] {
-                                        part = "ktake(&L[{p.local}])"
+                                        part = "ktake(&L[{cx.at(p.local)}])"
                                         given = true
                                     }
                                 }
@@ -2468,7 +2492,7 @@ fn function(out: mut [str], i: int, f: mir.Func, fns: [mir.Func], externs: [mir.
                         if !is_agg(cx.reps[l]) { line(mut out, "        a[{l}] = {cx.boxed(l)};") }
                     } else {
                         if l < (cx.reps.len as int) {
-                            if is_boxed(cx.reps[l]) && !listed { line(mut out, "        krelease(L[{l}]);") }
+                            if is_boxed(cx.reps[l]) && !listed { line(mut out, "        krelease(L[{cx.at(l)}]);") }
                         }
                     }
                 }

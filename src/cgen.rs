@@ -123,7 +123,7 @@ fn steps(cx: &Cx, p: &Place) -> Result<(usize, String), String> {
             Proj::Field(k) => format!("{{0, {k}}}"),
             Proj::Index(Operand::Const(Value::Int(i))) => format!("{{1, kidxc({i})}}"),
             Proj::Index(Operand::Place(i)) if matches!(cx.rep(i), Rep::Int(_)) => format!("{{1, kidxc((i128){})}}", cx.name(i)),
-            Proj::Index(Operand::Place(i)) if i.proj.is_empty() => format!("{{1, kidx(&L[{}])}}", i.local),
+            Proj::Index(Operand::Place(i)) if i.proj.is_empty() => format!("{{1, kidx(&L[{}])}}", cx.at(i.local)),
             Proj::Index(_) => return Err("the C backend needs an index to be a local or a constant".into()),
             Proj::Path(_) => return Err("the C backend cannot follow the result of a `ref mut` function here".into()),
         });
@@ -134,10 +134,10 @@ fn steps(cx: &Cx, p: &Place) -> Result<(usize, String), String> {
 /// The arguments that tell the runtime where a place is.
 fn target(cx: &Cx, p: &Place) -> Result<String, String> {
     if p.proj.is_empty() {
-        return Ok(format!("&L[{}], 0, NULL", p.local));
+        return Ok(format!("&L[{}], 0, NULL", cx.at(p.local)));
     }
     let (n, s) = steps(cx, p)?;
-    Ok(format!("&L[{}], {n}, {s}", p.local))
+    Ok(format!("&L[{}], {n}, {s}", cx.at(p.local)))
 }
 
 /// An expression that yields a new reference to the operand's value.
@@ -146,7 +146,7 @@ fn operand(cx: &Cx, op: &Operand) -> Result<String, String> {
         Operand::Const(v) => constant(v),
         Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] != Rep::Boxed => Ok(cx.boxed(p.local)),
         Operand::Place(p) if part(&cx.reps, cx.recs, p).is_some() => Ok(tagged(cx.rep(p), &cx.name(p))),
-        Operand::Place(p) if p.proj.is_empty() => Ok(format!("kretain(L[{}])", p.local)),
+        Operand::Place(p) if p.proj.is_empty() => Ok(format!("kretain(L[{}])", cx.at(p.local))),
         Operand::Place(p) => {
             if let Some((base, i)) = cx.item(p, false)? {
                 return Ok(format!("kitem({base}, {i})"));
@@ -159,11 +159,11 @@ fn operand(cx: &Cx, op: &Operand) -> Result<String, String> {
             }
             if let Some((Proj::Path(l), before)) = p.proj.split_last() {
                 if let Some(base) = cx.walk(p.local, before, false) {
-                    return Ok(format!("kpath_get({base}, &L[{l}])"));
+                    return Ok(format!("kpath_get({base}, &L[{}])", cx.at(*l)));
                 }
             }
             let (n, s) = steps(cx, p)?;
-            Ok(format!("kread(&L[{}], {n}, {s})", p.local))
+            Ok(format!("kread(&L[{}], {n}, {s})", cx.at(p.local)))
         }
     }
 }
@@ -178,7 +178,7 @@ fn list(cx: &Cx, ops: &[Operand]) -> Result<String, String> {
 
 fn store(cx: &Cx, p: &Place, value: &str) -> Result<String, String> {
     if p.proj.is_empty() {
-        return Ok(format!("kset(&L[{}], {value});", p.local));
+        return Ok(format!("kset(&L[{}], {value});", cx.at(p.local)));
     }
     // The value is computed first: it may read what the place is part of.
     if let Some((base, i)) = cx.item(p, true)? {
@@ -189,14 +189,14 @@ fn store(cx: &Cx, p: &Place, value: &str) -> Result<String, String> {
     }
     if let Some((Proj::Path(l), before)) = p.proj.split_last() {
         if let Some(base) = cx.walk(p.local, before, true) {
-            return Ok(format!("{{ kv v_ = {value}; kpath_set({base}, &L[{l}], v_); }}"));
+            return Ok(format!("{{ kv v_ = {value}; kpath_set({base}, &L[{}], v_); }}", cx.at(*l)));
         }
     }
     if let Some(ptr) = cx.ptr(p.local, &p.proj, true) {
         return Ok(format!("{{ kv v_ = {value}; kset({ptr}, v_); }}"));
     }
     let (n, s) = steps(cx, p)?;
-    Ok(format!("kwrite(&L[{}], {n}, {s}, {value});", p.local))
+    Ok(format!("kwrite(&L[{}], {n}, {s}, {value});", cx.at(p.local)))
 }
 
 fn binop(op: BinOp) -> &'static str {
@@ -388,6 +388,26 @@ struct Cx<'a> {
     /// Temporaries a call takes as an argument and nothing else reads:
     /// the call takes the value itself, not a copy of it.
     spent: Vec<bool>,
+    /// Where each local that is a tagged value is in the array of them.
+    /// The ones kept as values of the machine have no place there.
+    slots: Vec<usize>,
+}
+
+/// The place of each local in the array of tagged values, and how many
+/// places there are.
+fn slots(reps: &[Rep]) -> (Vec<usize>, usize) {
+    let mut n = 0;
+    let at = reps
+        .iter()
+        .map(|r| {
+            if *r != Rep::Boxed {
+                return usize::MAX;
+            }
+            n += 1;
+            n - 1
+        })
+        .collect();
+    (at, n)
 }
 
 /// The temporaries that are given a value once and read once, by a call
@@ -823,14 +843,24 @@ impl Cx<'_> {
     }
 
     /// A C pointer to a value that has parts: it is never a bare item.
+    /// The place of a local in the array of tagged values. One that has
+    /// none is written as a name C does not know, so that a mistake here
+    /// does not compile.
+    fn at(&self, l: usize) -> String {
+        match self.slots.get(l) {
+            Some(&k) if k != usize::MAX => k.to_string(),
+            _ => format!("NO_PLACE_{l}"),
+        }
+    }
+
     fn walk(&self, local: usize, proj: &[Proj], write: bool) -> Option<String> {
         if self.reps[local] != Rep::Boxed {
             return None;
         }
-        let mut s = format!("&L[{local}]");
+        let mut s = format!("&L[{}]", self.at(local));
         for pr in proj {
             match pr {
-                Proj::Path(l) => s = format!("kpath({s}, &L[{l}], {write})"),
+                Proj::Path(l) => s = format!("kpath({s}, &L[{}], {write})", self.at(*l)),
                 Proj::Field(k) => s = format!("kfield({s}, {k}, {write})"),
                 Proj::Index(i) => match self.int(i) {
                     Ok(i) => s = format!("kitemp({s}, (i128)({i}), {write})"),
@@ -911,7 +941,7 @@ impl Cx<'_> {
             return Ok(known);
         }
         match op {
-            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.c", p.local)),
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.c", self.at(p.local))),
             _ => Ok(format!("({}).u.c", operand(self, op)?)),
         }
     }
@@ -922,7 +952,7 @@ impl Cx<'_> {
             return Ok(known);
         }
         match op {
-            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.f", p.local)),
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.f", self.at(p.local))),
             Operand::Place(p) => {
                 if let Some((base, i)) = self.item(p, false)? {
                     return Ok(format!("kitem_f64({base}, {i})"));
@@ -967,7 +997,7 @@ impl Cx<'_> {
             return Ok(known);
         }
         match op {
-            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.i", p.local)),
+            Operand::Place(p) if p.proj.is_empty() && self.reps[p.local] == Rep::Boxed => Ok(format!("L[{}].u.i", self.at(p.local))),
             Operand::Place(p) => {
                 if let Some((base, i)) = self.item(p, false)? {
                     return Ok(format!("kitem_int({base}, {i})"));
@@ -1084,7 +1114,7 @@ impl Cx<'_> {
                     _ => ">=",
                 };
                 let l = p.local;
-                format!("(L[{l}].tag == T_CHAR ? L[{l}].u.c {cmp} {}u : ktruth({}))", *c as u32, rvalue(self, rv)?)
+                format!("(L[{l}].tag == T_CHAR ? L[{l}].u.c {cmp} {}u : ktruth({}))", *c as u32, rvalue(self, rv)?, l = self.at(l))
             }
             // Two characters kept as numbers.
             Rvalue::Binary(op, _, a, b) if is_cmp(*op) && self.known_char(a).is_some() && self.known_char(b).is_some() => {
@@ -1130,7 +1160,7 @@ impl Cx<'_> {
                 if r.proj.is_empty() && self.reps[r.local] == Rep::Boxed && self.known_int(i).is_some() =>
             {
                 let helper = if matches!(rv, Rvalue::RangeHas(..)) { "krange_has_int" } else { "krange_last_int" };
-                format!("{helper}(&L[{}], (i128)({}))", r.local, self.known_int(i).unwrap_or_default())
+                format!("{helper}(&L[{}], (i128)({}))", self.at(r.local), self.known_int(i).unwrap_or_default())
             }
             _ => format!("ktruth({})", rvalue(self, rv)?),
         })
@@ -1287,7 +1317,7 @@ impl Cx<'_> {
             Rep::F64 => format!("kf64(s{l})"),
             Rep::Char => format!("kchar(s{l})"),
             r @ (Rep::Rec(_) | Rep::Opt(_)) => format!("{}_box(s{l})", agg(r).unwrap_or_default()),
-            _ => format!("L[{l}]"),
+            _ => format!("L[{}]", self.at(l)),
         }
     }
 }
@@ -1299,7 +1329,9 @@ fn direct_head(i: usize, params: &[Rep], ret: Rep) -> String {
 }
 
 fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>], recs: &[Vec<u8>]) -> Result<(), String> {
-    let cx = &Cx { recs, reps: infer(f, fns, recs), spent: spent(f) };
+    let reps = infer(f, fns, recs);
+    let (slots, places) = slots(&reps);
+    let cx = &Cx { recs, reps, spent: spent(f), slots };
     let n = f.locals.max(1);
     let mine = direct[i].as_ref();
     // The name of the function in the program, for whoever reads the C.
@@ -1309,14 +1341,14 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
     let owned: Vec<usize> = (f.params..n).filter(|l| cx.reps.get(*l) == Some(&Rep::Boxed)).collect();
     let listed = owned.len() > 3;
     if listed {
-        let list: Vec<String> = owned.iter().map(|l| l.to_string()).collect();
+        let list: Vec<String> = owned.iter().map(|l| cx.at(*l)).collect();
         writeln!(out, "static const int D{i}[] = {{{}}};", list.join(", ")).unwrap();
     }
     match mine {
         Some((params, ret)) => writeln!(out, "{} {{", direct_head(i, params, *ret)).unwrap(),
         None => writeln!(out, "static kv f{i}(kv *a, kv env) {{").unwrap(),
     }
-    writeln!(out, "    kv L[{n}];").unwrap();
+    writeln!(out, "    kv L[{}];", places.max(1)).unwrap();
     for (l, rep) in cx.reps.iter().enumerate() {
         match rep {
             _ if l < f.params && mine.is_some() => {}
@@ -1354,7 +1386,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
         }
         // Lent by the caller: it is not released here.
         let init = if mine.is_some() { format!("s{l}") } else { format!("a[{l}]") };
-        writeln!(out, "    L[{l}] = {init};").unwrap();
+        writeln!(out, "    L[{}] = {init};", cx.at(l)).unwrap();
     }
     writeln!(out, "    goto b0;").unwrap();
     for (b, block) in f.blocks.iter().enumerate() {
@@ -1403,7 +1435,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         match (r, a) {
                             // A tagged local is lent as it is.
                             (Rep::Boxed, Operand::Place(p)) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed => {
-                                values.push(format!("L[{}]", p.local));
+                                values.push(format!("L[{}]", cx.at(p.local)));
                                 if cx.spent[p.local] {
                                     done.push(p.local);
                                 }
@@ -1421,7 +1453,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                         writeln!(out, "        krelease(t{k});").unwrap();
                     }
                     for l in done {
-                        writeln!(out, "        kset(&L[{l}], KUNIT);").unwrap();
+                        writeln!(out, "        kset(&L[{}], KUNIT);", cx.at(l)).unwrap();
                     }
                     writeln!(out, "        {}", cx.take_machine(dest, *ret, "r")?).unwrap();
                     writeln!(out, "    }}").unwrap();
@@ -1535,7 +1567,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     for (k, a) in args.iter().enumerate() {
                         if lent(k).is_none() {
                             parts[k] = match a {
-                                Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed && cx.spent[p.local] => format!("ktake(&L[{}])", p.local),
+                                Operand::Place(p) if p.proj.is_empty() && cx.reps[p.local] == Rep::Boxed && cx.spent[p.local] => format!("ktake(&L[{}])", cx.at(p.local)),
                                 _ => operand(cx, a)?,
                             };
                         }
@@ -1583,7 +1615,7 @@ fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Exter
                     } else if l < f.params {
                         writeln!(out, "        a[{l}] = {};", cx.boxed(l)).unwrap();
                     } else if cx.reps.get(l) == Some(&Rep::Boxed) && !listed {
-                        writeln!(out, "        krelease(L[{l}]);").unwrap();
+                        writeln!(out, "        krelease(L[{}]);", cx.at(l)).unwrap();
                     }
                 }
                 if listed {
