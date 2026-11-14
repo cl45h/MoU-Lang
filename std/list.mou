@@ -12,6 +12,9 @@ impl[T] List[T] {
 
     pub fn len(self) -> int { self.items.len as int }
 
+    /// The items as an array: what a `for` over the list goes through.
+    pub fn iter(self) -> [T] { self.items }
+
     pub fn is_empty(self) -> bool { self.items.len == 0 }
 
     /// The items, to iterate over: `for x in list.all() { ... }`.

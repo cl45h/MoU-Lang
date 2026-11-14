@@ -186,3 +186,16 @@ fn conversions(n: int, x: f64) {
     let d: i8 = i8.truncate(n)
     let e = f64.truncate(n)
 }
+
+struct Odd { n: int }
+
+impl Odd {
+    fn iter(mut self) -> [int] { [self.n] }
+}
+
+struct Plain { n: int }
+
+fn loops(o: Odd, p: Plain) {
+    for x in o {}
+    for x in p {}
+}

@@ -2236,7 +2236,30 @@ impl<'a> Lower<'a> {
                 Operand::Place(Place::local(res))
             }
             ExprKind::For { pat, iter, body } => {
-                let it = self.ty(iter);
+                // A value with a method `iter` is gone over through what the
+                // method gives: the call was noted on the loop.
+                let through = match info.res.get(&(self.inst, id(e))) {
+                    Some(Res::Method(t, n)) => {
+                        let key = (t.clone(), n.clone());
+                        match (self.method_ids.get(&key).copied(), info.methods.get(&key)) {
+                            (Some(f), Some(m)) => Some((f, m.sig.clone(), 0)),
+                            _ => return self.unsupported(span, "this `for`"),
+                        }
+                    }
+                    Some(Res::Generic(k)) => match self.instance_ids.get(*k).copied() {
+                        Some(f) => Some((f, info.instances[*k].sig.clone(), k + 1)),
+                        None => return self.unsupported(span, "this `for`"),
+                    },
+                    _ => None,
+                };
+                let (it, given) = match through {
+                    Some((f, sig, inst)) => {
+                        let receiver = self.expr(iter);
+                        let got = self.invoke(Callee::Fn(f), Some((receiver, None)), &sig, self.fn_decls.get(&f).copied(), inst, &[], span);
+                        (sig.ret.clone(), Some(got))
+                    }
+                    None => (self.ty(iter), None),
+                };
                 // `for i in a..b` over integers counts in two locals; no
                 // range value is built.
                 if let (Ty::Range(t), ExprKind::Range { lo: Some(lo), hi: Some(hi), inclusive }) = (&it, &iter.kind) {
@@ -2279,7 +2302,10 @@ impl<'a> Lower<'a> {
                         return unit;
                     }
                 }
-                let v = self.expr(iter);
+                let v = match given {
+                    Some(v) => v,
+                    None => self.expr(iter),
+                };
                 let (head, body_bb, step, exit) = (self.new_block(), self.new_block(), self.new_block(), self.new_block());
                 let i = self.temp();
                 let cursor = Operand::Place(Place::local(i));

@@ -2924,6 +2924,31 @@ impl Checker {
         self.generic_call(e, Target.Method(b, chosen), env, None, hint, None, args, at)
     }
 
+    // `for x in v` where the type of `v` has a method `iter(self)`: the call
+    // the loop makes, noted on the loop itself, and what it gives.
+    fn iter_call(mut self, e: parser.Expr, bt: types.Ty, at: Span) -> types.Ty? {
+        let key = self.key(types.concretize(bt))
+        let mi = self.method_index(key, "iter")
+        if mi < 0 { return None }
+        let m = self.methods[mi].m
+        var by_let = false
+        if let Some(mode) = m.self_mode { by_let = is_let(mode) }
+        if !by_let || m.sig.params.len != 0 {
+            self.err(at, "to go over a `{key}` with `for`, its method `iter` has to take `self` and nothing else")
+            return Some(types.Ty.Unknown)
+        }
+        let _ = self.method_visible(m, "iter", at)
+        var plain = m.tparams.len == 0
+        if let Some(_) = m.default { plain = false }
+        if plain {
+            self.set_res(e, Res.Method(key, "iter"))
+            return Some(self.apply(m.sig, [], at))
+        }
+        var env: [types.Binding] = []
+        types.bind(m.self_ty, types.concretize(bt), mut env)
+        Some(self.generic_call(e, Target.Method(key, "iter"), env, None, None, None, [], at))
+    }
+
     // Whether the module being checked may call a method. Reports it when not.
     fn method_visible(mut self, m: Method, name: str, at: Span) -> bool {
         let module = self.module_of[m.at_decl]
@@ -4437,7 +4462,17 @@ impl Checker {
                 result
             }
             parser.Kind.For(pat, iter, body) => {
-                let it = self.expr(iter)
+                var it = self.expr(iter)
+                // A value of a type with a method `iter` is gone over through
+                // what the method gives: `for x in list` is `for x in list.iter()`.
+                let custom = match it {
+                    types.Ty.Struct(_, _) => true
+                    types.Ty.Enum(_, _) => true
+                    _ => false
+                }
+                if custom {
+                    if let Some(given) = self.iter_call(e, it, at) { it = given }
+                }
                 var elem = types.Ty.Unknown
                 var ranged = false
                 match it {

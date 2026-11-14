@@ -3077,6 +3077,25 @@ impl<'a> Checker<'a> {
         }))
     }
 
+    /// `for x in v` where the type of `v` has a method `iter(self)`: the call
+    /// the loop makes, noted on the loop itself, and what it gives.
+    fn iter_call(&mut self, e: &Expr, bt: &Ty, span: Span) -> Option<Ty> {
+        let key = (self.key(&concretize(bt)), "iter".to_string());
+        let m = self.methods.get(&key).cloned()?;
+        if m.self_mode != Some(Mode::Let) || !m.sig.params.is_empty() {
+            self.err(span, format!("to go over a `{}` with `for`, its method `iter` has to take `self` and nothing else", key.0));
+            return Some(Ty::Unknown);
+        }
+        self.method_visible(&m, "iter", span);
+        if m.tparams.is_empty() && m.default.is_none() {
+            self.res.insert((self.inst, id(e)), Res::Method(key.0.clone(), key.1.clone()));
+            return Some(self.apply(&m.sig, &[], span));
+        }
+        let mut env = HashMap::new();
+        bind(&m.self_ty, &concretize(bt), &mut env);
+        Some(self.generic_call(e, Target::Method(key.0, key.1), env, None, None, None, &[], span))
+    }
+
     /// The methods the language itself gives to `[T]`.
     fn array_method(&mut self, e: &Expr, base: &Expr, bt: &Ty, name: &str, args: &[Arg], span: Span) -> Ty {
         let elem = match bt {
@@ -4255,7 +4274,14 @@ impl<'a> Checker<'a> {
                 result
             }
             ExprKind::For { pat, iter, body } => {
-                let it = self.expr(iter);
+                let mut it = self.expr(iter);
+                // A value of a type with a method `iter` is gone over through
+                // what the method gives: `for x in list` is `for x in list.iter()`.
+                if matches!(it, Ty::Struct(..) | Ty::Enum(..)) {
+                    if let Some(given) = self.iter_call(e, &it, span) {
+                        it = given;
+                    }
+                }
                 let elem = match &it {
                     Ty::Slice(t) | Ty::Array(t, _) | Ty::Range(t) => concretize(t),
                     Ty::Str => Ty::Char,

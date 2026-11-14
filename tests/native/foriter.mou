@@ -1,0 +1,99 @@
+import std.io
+import std.list
+import std.hash
+import std.map
+import std.pool
+
+struct Countdown { from: int }
+
+impl Countdown {
+    fn iter(self) -> [int] {
+        var out: [int] = []
+        var n = self.from
+        while n > 0 {
+            out.push(n)
+            n -= 1
+        }
+        out
+    }
+}
+
+struct Word { text: str }
+
+impl Word {
+    fn iter(self) -> str { self.text }
+}
+
+struct Upto { n: int }
+
+impl Upto {
+    fn iter(self) -> [int] {
+        var out: [int] = []
+        for i in 0..self.n { out.push(i) }
+        out
+    }
+}
+
+enum Shelf { Empty, Books([str]) }
+
+impl Shelf {
+    fn iter(self) -> [str] {
+        match self {
+            Empty => []
+            Books(names) => names
+        }
+    }
+}
+
+fn total[T](xs: list.List[T], f: fn(T) -> int) -> int {
+    var sum = 0
+    for x in xs { sum += f(x) }
+    sum
+}
+
+fn main() ! io.Error {
+    var seen: [int] = []
+    for n in Countdown(4) { seen.push(n) }
+    var letters: [char] = []
+    for c in Word("año") { letters.push(c) }
+    var pairs = 0
+    for i in Upto(3) {
+        for j in Upto(i) { pairs += 1 }
+        if i == 2 { break }
+    }
+    io.print("{seen} {letters} {pairs}")?
+
+    var xs: list.List[str] = list.List.new()
+    xs.push("uno")
+    xs.push("dos")
+    xs.push("tres")
+    var joined = ""
+    for x in xs { joined = "{joined}{x}." }
+    io.print("{joined} {total(xs, fn(s) { s.len as int })}")?
+
+    var ages: map.Map[str, int] = map.Map.new()
+    ages.set("luis", 27)
+    ages.set("ana", 31)
+    for (name, age) in ages { io.print("{name}: {age}")? }
+
+    var t: hash.Table[int, str] = hash.Table.new()
+    for i in 0..20 { t.set(i * 7, "v{i}") }
+    var sum = 0
+    var chars = 0
+    for (k, v) in t {
+        sum += k
+        chars += v.len as int
+    }
+    io.print("{sum} {chars}")?
+
+    var p: pool.Pool[str] = pool.Pool.new()
+    let a = p.add("a")
+    let b = p.add("b")
+    let c = p.add("c")
+    let gone = p.remove(b)
+    var names: [str] = []
+    for h in p { names.push(p.at(h)) }
+    for book in Shelf.Books(["x", "y"]) { names.push(book) }
+    for book in Shelf.Empty { names.push(book) }
+    io.print("{names}")?
+}

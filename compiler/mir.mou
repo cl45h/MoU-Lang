@@ -2751,7 +2751,34 @@ impl Lower {
 
     fn for_loop(mut self, e: parser.Expr, pat: parser.Pattern, iter: parser.Expr, body: parser.Block) -> Operand {
         let at = span_of(e)
-        let it = self.ty(iter)
+        // A value with a method `iter` is gone over through what the method
+        // gives: the call was noted on the loop.
+        var it = self.ty(iter)
+        var through = -1
+        var through_sig = types.Sig([], types.Ty.Unit)
+        var through_inst = 0
+        match self.res(e) {
+            Some(check.Res.Method(t, n)) => {
+                let f = self.method_id(t, n)
+                let mi = self.c.method_index(t, n)
+                if f < 0 || mi < 0 { return self.unsupported(at, "this `for`") }
+                through = f
+                through_sig = self.c.methods[mi].m.sig
+            }
+            Some(check.Res.Generic(k)) => {
+                if k < 0 || k >= (self.instance_ids.len as int) { return self.unsupported(at, "this `for`") }
+                through = self.instance_ids[k]
+                through_sig = self.c.instances[k].sig
+                through_inst = k + 1
+            }
+            _ => {}
+        }
+        var given: Operand? = None
+        if through >= 0 {
+            let receiver = Receiver(self.expr(iter), false, Place(0, []))
+            given = Some(self.invoke(Callee.Fn(through), Some(receiver), through_sig, self.decl_of(through), through_inst, [], at))
+            it = through_sig.ret
+        }
         // `for i in a..b` over whole numbers counts in two locals; no
         // range value is built.
         match (it, iter.kind) {
@@ -2813,7 +2840,11 @@ impl Lower {
             }
             _ => {}
         }
-        let v = self.expr(iter)
+        var v = unit()
+        match given {
+            Some(g) => { v = g }
+            None => { v = self.expr(iter) }
+        }
         let head = self.new_block()
         let body_bb = self.new_block()
         let step = self.new_block()

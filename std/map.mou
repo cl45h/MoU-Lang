@@ -90,4 +90,12 @@ impl[K: cmp.Ord, V] Map[K, V] {
 
     /// The values, in the order of their keys.
     pub fn values(self) -> [V] { self.vals }
+
+    /// Each key with its value, in the order of the keys: what a `for`
+    /// over the map goes through.
+    pub fn iter(self) -> [(K, V)] {
+        var out: [(K, V)] = []
+        for i in 0..(self.keys.len as int) { out.push((self.keys[i], self.vals[i])) }
+        out
+    }
 }

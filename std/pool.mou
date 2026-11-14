@@ -91,6 +91,9 @@ impl[T] Pool[T] {
         out
     }
 
+    /// The handles of all the values: what a `for` over the pool goes through.
+    pub fn iter(self) -> [Handle[T]] { self.handles() }
+
     /// All the values, in the order of their places.
     pub fn values(self) -> [T] {
         var out: [T] = []

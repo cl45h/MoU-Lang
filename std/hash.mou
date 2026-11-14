@@ -223,6 +223,19 @@ impl[K: Key, V] Table[K, V] {
     }
 
     /// The keys, in no particular order.
+    /// Each key with its value, in no order that can be counted on: what
+    /// a `for` over the table goes through.
+    pub fn iter(self) -> [(K, V)] {
+        var out: [(K, V)] = []
+        for i in 0..(self.keys.len as int) {
+            match (self.keys[i], self.vals[i]) {
+                (Some(k), Some(v)) => { out.push((k, v)) }
+                _ => {}
+            }
+        }
+        out
+    }
+
     pub fn keys(self) -> [K] {
         var out: [K] = []
         for k in self.keys {
