@@ -24,6 +24,10 @@ import c "sys/socket.h" as sys {
     @value fn SHUT_WR() -> i32
 }
 import c "unistd.h" as unix { fn close(fd: i32) -> i32 }
+import c "poll.h" as pl {
+    fn poll(fds: mut [u8], count: u64, ms: i32) -> i32
+    @value fn POLLIN() -> i32
+}
 
 /// A socket for TCP over IPv4, or a negative number.
 pub fn open() -> int { unsafe { sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0) as int } }
@@ -56,3 +60,11 @@ pub fn name(fd: int, addr: mut [u8], len: mut [u32]) -> bool { unsafe { sys.gets
 pub fn finish(fd: int) { unsafe { sys.shutdown(fd as i32, sys.SHUT_WR) } }
 
 pub fn close(fd: int) { unsafe { unix.close(fd as i32) } }
+
+/// What `poll` asks for when it waits for something to read.
+pub fn readable() -> int { unsafe { pl.POLLIN as int } }
+
+/// Waits until one of the sockets in `fds` has what it asks for, up to
+/// `ms` milliseconds (forever when negative): how many have, or a
+/// negative number. `fds` is what the system takes: 8 bytes per socket.
+pub fn poll(fds: mut [u8], count: int, ms: int) -> int { unsafe { pl.poll(mut fds, count as u64, ms as i32) as int } }

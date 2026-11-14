@@ -1,0 +1,98 @@
+import std.io
+import std.net
+import std.text
+
+// One task serves every connection: it asks which ones have something
+// to read, and only reads from those. Three clients talk to it at once.
+
+fn ask(port: int, message: str) -> str ! net.Error {
+    let conn = net.connect("127.0.0.1", port)?
+    conn.send(message)?
+    conn.finish()
+    let answer = conn.read_all()?
+    conn.close()
+    match text.from_bytes(answer) {
+        Some(t) => t
+        None => "?"
+    }
+}
+
+fn client(port: int, message: str) -> str { ask(port, message) catch e { "failed" } }
+
+// Answers `clients` connections, and says how many bytes they sent.
+fn serve(server: net.Listener, clients: int) -> int ! net.Error {
+    var conns: [net.Conn] = []
+    var heard: [[u8]] = []
+    var done = 0
+    var total = 0
+    while done < clients {
+        let ready = net.wait(Some(server), conns, 5000)?
+        if !ready.accept && ready.conns.len == 0 { return net.Error.Failed("hear from the clients in time") }
+        var closed: [int] = []
+        for k in ready.conns {
+            let piece = conns[k as usize].read(4096)?
+            if piece.len > 0 {
+                for b in piece { heard[k as usize].push(b) }
+                continue
+            }
+            let said = match text.from_bytes(heard[k as usize]) {
+                Some(t) => t
+                None => "?"
+            }
+            conns[k as usize].send("eco: {said}!")?
+            conns[k as usize].close()
+            total += heard[k as usize].len as int
+            closed.push(k)
+            done += 1
+        }
+        // The ones that ended leave the list.
+        var keep: [net.Conn] = []
+        var kept: [[u8]] = []
+        for k in 0..(conns.len as int) {
+            var gone = false
+            for c in closed {
+                if c == k { gone = true }
+            }
+            if !gone {
+                keep.push(conns[k as usize])
+                kept.push(heard[k as usize])
+            }
+        }
+        conns = keep
+        heard = kept
+        if ready.accept {
+            conns.push(server.accept()?)
+            heard.push([])
+        }
+    }
+    total
+}
+
+fn run() -> [str] ! net.Error {
+    let server = net.listen("127.0.0.1", 0)?
+    let port = server.port()?
+    var lines: [str] = []
+    // Nothing happens while nobody connects.
+    let quiet = net.wait(Some(server), [], 20)?
+    lines.push("quiet: {!quiet.accept && quiet.conns.len == 0}")
+    scope s {
+        let a = s.spawn(client(port, "uno"))
+        let b = s.spawn(client(port, "dos"))
+        let c = s.spawn(client(port, "tres"))
+        let total = serve(server, 3)?
+        lines.push(a.wait())
+        lines.push(b.wait())
+        lines.push(c.wait())
+        lines.push("bytes: {total}")
+    }
+    server.close()
+    lines
+}
+
+fn main() ! io.Error {
+    let lines = run() catch e {
+        io.print("failed")?
+        return
+    }
+    for l in lines { io.print(l)? }
+}

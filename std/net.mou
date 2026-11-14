@@ -1,8 +1,9 @@
 // TCP connections over IPv4.
 //
 // Every function here waits until it is done. To serve several
-// connections at once, each one goes in a task: a task that waits does
-// not stop the others.
+// connections at once, each one goes in a task (a task that waits does
+// not stop the others), or one task asks `wait` which of them have
+// something to read and only reads from those.
 //
 // It is made of functions of C, so a program that uses it runs compiled
 // (`mou build`), not with `mou run`. For now it only works on Linux.
@@ -69,6 +70,47 @@ pub fn connect(host: str, port: int) -> Conn ! Error {
         return Error.Failed("connect to {host}:{port}")
     }
     Conn(fd)
+}
+
+/// What `wait` found: whether someone is waiting to connect, and the
+/// positions of the connections that have something to read.
+pub struct Ready { accept: bool, conns: [int] }
+
+/// One socket as `poll` takes it: its number, and that it is asked
+/// whether there is something to read. The bytes are in the order of
+/// this machine, which is the one of x86 and ARM.
+fn asked(fds: mut [u8], fd: int) {
+    for k in 0..4 { fds.push(((fd >> (8 * k)) & 255) as u8) }
+    let want = socket.readable()
+    fds.push((want & 255) as u8)
+    fds.push(((want >> 8) & 255) as u8)
+    fds.push(0)
+    fds.push(0)
+}
+
+/// Waits until someone connects to `server` or one of `conns` has
+/// something to read, up to `ms` milliseconds; forever when `ms` is
+/// negative. With nothing in the time given, what comes back is empty.
+/// A connection the other side closed counts as having something to
+/// read: reading it gives the empty array. After this, `accept` and
+/// `read` on what it names do not wait.
+pub fn wait(server: Listener?, conns: [Conn], ms: int) -> Ready ! Error {
+    var fds: [u8] = []
+    var first = 0
+    if let Some(l) = server {
+        asked(mut fds, l.fd)
+        first = 1
+    }
+    for c in conns { asked(mut fds, c.fd) }
+    let count = first + (conns.len as int)
+    if socket.poll(mut fds, count, ms) < 0 { return Error.Failed("wait for the connections") }
+    var out = Ready(false, [])
+    for k in 0..count {
+        // What the system found is in the last two bytes of each one.
+        if fds[(8 * k + 6) as usize] == 0 && fds[(8 * k + 7) as usize] == 0 { continue }
+        if k < first { out.accept = true } else { out.conns.push(k - first) }
+    }
+    out
 }
 
 impl Listener {
