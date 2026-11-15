@@ -63,10 +63,15 @@ Solo con un compilador de C (`cc`), a partir del compilador escrito en Mou:
 
 ```sh
 ./bootstrap.sh
-./mouc c examples/tour.mou std src/runtime.c > tour.c && cc -O2 -o tour tour.c -lm && ./tour
+./mouc run examples/tour.mou
+./mouc build examples/tour.mou -o tour && ./tour
+./mouc check examples/tour.mou
+./mouc test archivo.mou
 ```
 
-Con Rust, que además trae el intérprete (`mou run`), la sesión interactiva, el formateador y los tests:
+`mouc` busca la librería estándar y el runtime en el directorio desde el que se lo llama; desde otro lugar, `MOU_HOME` dice dónde está Mou. `run` compila el programa a un archivo temporal y lo ejecuta.
+
+Con Rust, que además trae el intérprete, la sesión interactiva, el formateador, el fuzzer y la suite de tests del proyecto:
 
 ```sh
 cargo build --release

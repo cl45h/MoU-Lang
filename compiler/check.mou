@@ -5664,6 +5664,7 @@ fn native(module: str, name: str) -> Native? {
         if name == "write_file" { return Some(Native("io.write_file", types.Sig([param("path", types.Ty.Str), param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "args" { return Some(Native("io.args", types.Sig([], types.Ty.Slice(types.Ty.Str)))) }
         if name == "env" { return Some(Native("io.env", types.Sig([param("name", types.Ty.Str)], types.Ty.Optional(types.Ty.Str)))) }
+        if name == "exec" { return Some(Native("io.exec", types.Sig([param("program", types.Ty.Str), param("args", types.Ty.Slice(types.Ty.Str))], fails_io(types.Ty.Int("i64"))))) }
         if name == "run" { return Some(Native("io.run", types.Sig([param("program", types.Ty.Str), param("args", types.Ty.Slice(types.Ty.Str)), param("input", types.Ty.Str)], fails_io(types.Ty.Str)))) }
     }
     if module == "std.task" {
@@ -6747,10 +6748,17 @@ fn res_text(r: Res) -> str {
 // The mistakes the checker found, each one once, by line and column.
 pub fn error_lines(c: Checker) -> [str] {
     var out: [str] = []
+    for e in mistakes(c) { out.push("error {e.line}:{e.col} {e.msg}") }
+    out
+}
+
+// The mistakes the checker found, in the order of the program and each once.
+pub fn mistakes(c: Checker) -> [lexer.Error] {
+    var out: [lexer.Error] = []
     var last = lexer.Error("", -1, -1)
     for e in sorted_errors(c.errors) {
         if e.line == last.line && e.col == last.col && e.msg == last.msg { continue }
-        out.push("error {e.line}:{e.col} {e.msg}")
+        out.push(e)
         last = e
     }
     out

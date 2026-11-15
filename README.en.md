@@ -63,10 +63,15 @@ With only a C compiler (`cc`), starting from the compiler written in Mou:
 
 ```sh
 ./bootstrap.sh
-./mouc c examples/tour.mou std src/runtime.c > tour.c && cc -O2 -o tour tour.c -lm && ./tour
+./mouc run examples/tour.mou
+./mouc build examples/tour.mou -o tour && ./tour
+./mouc check examples/tour.mou
+./mouc test file.mou
 ```
 
-With Rust, which also brings the interpreter (`mou run`), the interactive session, the formatter and the tests:
+`mouc` looks for the standard library and the runtime in the directory it is run from; from anywhere else, `MOU_HOME` says where Mou is. `run` compiles the program to a temporary file and runs it.
+
+With Rust, which also brings the interpreter, the interactive session, the formatter, the fuzzer and the test suite of the project:
 
 ```sh
 cargo build --release

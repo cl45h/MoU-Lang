@@ -1,0 +1,11 @@
+// `io.exec` runs a program with the outputs of this one and gives the
+// status it ended with.
+import std.io
+
+fn main() ! io.Error {
+    io.print("{io.exec("sh", ["-c", "exit 0"])?}")?
+    io.print("{io.exec("sh", ["-c", "exit 3"])?}")?
+    io.print("{io.exec("sh", ["-c", "kill -9 $$"])?}")?
+    let missing = io.exec("mou-no-such-program", []) catch e { -1 }
+    io.print("{missing}")?
+}

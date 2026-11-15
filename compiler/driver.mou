@@ -1,0 +1,423 @@
+// The commands a person runs: `check`, `run`, `build`, `effects` and `test`.
+//
+// Each loads a program, runs every check on it and, when there is a
+// mistake, says where it is with the line of the file under it. What is
+// built goes through C: the compiler of C is `cc`, or the one `CC` names.
+
+import std.fs
+import std.io
+import std.text
+import cgen
+import check
+import consts
+import effects
+import lexer
+import load
+import mir
+import moves
+
+// Where the standard library and the runtime are: the directory `MOU_HOME`
+// names, or the one the compiler is run from.
+pub struct Home { std_dir: str, runtime: str }
+
+pub fn home() -> Home {
+    match io.env("MOU_HOME") {
+        Some(dir) => Home("{dir}/std", "{dir}/src/runtime.c")
+        None => Home("std", "src/runtime.c")
+    }
+}
+
+// A program that passed every check, ready to be written as C.
+struct Built { program: mir.Program, values: [mir.Value], paths: [str] }
+
+let FILE_SHIFT: int = 20
+
+// Says a mistake the way a person reads it: the file, the line and the
+// column, and the line itself with a mark under the place.
+fn report(modules: [load.Module], e: lexer.Error) ! io.Error {
+    let file = e.line >> FILE_SHIFT
+    let line = e.line & ((1 << FILE_SHIFT) - 1)
+    var path = "?"
+    if file >= 0 && file < (modules.len as int) { path = modules[file].path }
+    io.eprint("{path}:{line}:{e.col}: error: {e.msg}")?
+    let src = io.read_file(path) catch _ { return }
+    let lines = text.lines(src)
+    if line >= 1 && line <= (lines.len as int) {
+        var pad = e.col - 1
+        if pad < 0 { pad = 0 }
+        io.eprint("  {lines[line - 1]}")?
+        io.eprint("  {text.repeat(" ", pad)}^")?
+    }
+}
+
+fn fail(modules: [load.Module], errors: [lexer.Error]) ! io.Error {
+    for e in errors { report(modules, e)? }
+    io.eprint("{errors.len} error(s)")?
+}
+
+// Loads a program and runs every check. `None` when it has mistakes,
+// which are said before it returns.
+fn compile(path: str, h: Home) -> Built? ! io.Error {
+    let src = io.read_file(path) catch e {
+        io.eprint("mou: cannot read {path}: {e}")?
+        return None
+    }
+    let program = load.load(path, src, h.std_dir)
+    if program.errors.len > 0 {
+        fail(program.modules, program.errors)?
+        return None
+    }
+    let checked = check.check(program)
+    let mistakes = check.mistakes(checked)
+    if mistakes.len > 0 {
+        fail(program.modules, mistakes)?
+        return None
+    }
+    let lowered = mir.lower(program, checked)
+    if lowered.errors.len > 0 {
+        fail(program.modules, lowered.errors)?
+        return None
+    }
+    let lost = moves.check(lowered)
+    if lost.len > 0 {
+        fail(program.modules, lost)?
+        return None
+    }
+    let ruled = effects.check(lowered)
+    if ruled.len > 0 {
+        fail(program.modules, ruled)?
+        return None
+    }
+    let worked = consts.eval(lowered)
+    if worked.errors.len > 0 {
+        fail(program.modules, worked.errors)?
+        return None
+    }
+    var paths: [str] = []
+    for m in program.modules { paths.push(m.path) }
+    Some(Built(worked.program, worked.values, paths))
+}
+
+pub fn check_file(path: str) -> int ! io.Error {
+    match compile(path, home())? {
+        Some(b) => {
+            io.print("ok: {b.program.fns.len} functions checked")?
+            0
+        }
+        None => 1
+    }
+}
+
+// What each function of the file can do besides computing.
+pub fn effects_file(path: str) -> int ! io.Error {
+    let b = match compile(path, home())? {
+        Some(b) => b
+        None => return 1
+    }
+    let fx = effects.infer(b.program)
+    for i in 0..(b.program.fns.len as int) {
+        let f = b.program.fns[i]
+        let here = f.at.line >> FILE_SHIFT == 0
+        if !here || f.name == "closure" || text.ends_with(f.name, " (place)") || text.starts_with(f.name, "constant ") { continue }
+        var pad = 28 - text.count(f.name)
+        if pad < 0 { pad = 0 }
+        io.print("{f.name}{text.repeat(" ", pad)} {effects.names(fx.of[i])}")?
+    }
+    0
+}
+
+fn env_or(name: str, otherwise: str) -> str {
+    match io.env(name) {
+        Some(v) => v
+        None => otherwise
+    }
+}
+
+// What the compiler of C has to be told for the headers a program uses
+// that are not where it looks by itself: what to compile with, and what to
+// link with. Python says its own with `python3-config`.
+struct Flags { compile: [str], link: [str] }
+
+fn header_flags(p: mir.Program) -> Flags {
+    var python = false
+    var openssl = false
+    for x in p.externs {
+        if x.header == "Python.h" { python = true }
+        if text.starts_with(x.header, "openssl/") { openssl = true }
+    }
+    var compile: [str] = []
+    var link: [str] = []
+    if python {
+        let includes = io.run("python3-config", ["--includes"], "") catch _ { "" }
+        let libs = io.run("python3-config", ["--ldflags", "--embed"], "") catch _ { "" }
+        compile = text.words(includes)
+        link = text.words(libs)
+    }
+    if openssl {
+        link.push("-lssl")
+        link.push("-lcrypto")
+    }
+    Flags(compile, link)
+}
+
+// The name of a file without its directories and without what follows
+// its last dot.
+fn stem(path: str) -> str {
+    let parts = text.split(path, '/')
+    var name = "out"
+    if parts.len > 0 { name = parts[parts.len - 1] }
+    let pieces = text.split(name, '.')
+    if pieces.len < 2 { return name }
+    var kept: [str] = []
+    for i in 0..(pieces.len - 1) { kept.push(pieces[i]) }
+    let joined = text.join(kept, ".")
+    if joined == "" { "out" } else { joined }
+}
+
+// The type in C of what a function marked `@abi` takes or gives.
+fn abi_type(s: mir.Scalar?) -> str {
+    match s {
+        Some(mir.Scalar.Int(k)) => {
+            if k == "isize" { return "ptrdiff_t" }
+            if k == "usize" { return "size_t" }
+            if text.starts_with(k, "u") { return "uint{k[1..]}_t" }
+            "int{k[1..]}_t"
+        }
+        Some(mir.Scalar.F64) => "double"
+        Some(mir.Scalar.Bool) => "bool"
+        _ => "void"
+    }
+}
+
+// The header of a library: the functions C can call.
+fn header(p: mir.Program) -> str {
+    var out = "/* Generated by mou. */\n#include <stdbool.h>\n#include <stddef.h>\n#include <stdint.h>\n\n"
+    for f in p.fns {
+        if f.limits & mir.ABI == 0 { continue }
+        var params: [str] = []
+        for l in 0..f.params {
+            var s: mir.Scalar? = None
+            if l < (f.scalars.len as int) { s = f.scalars[l] }
+            params.push("{abi_type(s)} p{l}")
+        }
+        var listed = text.join(params, ", ")
+        if params.len == 0 { listed = "void" }
+        out = "{out}{abi_type(f.ret)} {f.name}({listed});\n"
+    }
+    out
+}
+
+// Runs the compiler of C. `false` when it could not be run or it found a
+// mistake, which is said.
+fn run_cc(cc: str, args: [str], c_path: str) -> bool ! io.Error {
+    let _ = io.run(cc, args, "") catch e {
+        io.eprint("mou: the C compiler `{cc}` failed on {c_path}: {e} (set CC to choose another)")?
+        return false
+    }
+    true
+}
+
+// `mou build file.mou [-o output] [-l library]...`
+pub fn build_file(path: str, output: str?, libs: [str]) -> int ! io.Error {
+    let h = home()
+    let b = match compile(path, h)? {
+        Some(b) => b
+        None => return 1
+    }
+    let runtime = io.read_file(h.runtime) catch e {
+        io.eprint("mou: cannot read the runtime {h.runtime}: {e} (set MOU_HOME to where Mou is)")?
+        return 1
+    }
+    let c = cgen.emit(b.program, b.paths, runtime, b.values) catch e {
+        io.eprint("mou: {e.msg}")?
+        return 1
+    }
+    let out = match output {
+        Some(o) => o
+        None => stem(path)
+    }
+    let c_path = "{out}.c"
+    io.write_file(c_path, "{c}\n") catch e {
+        io.eprint("mou: cannot write {c_path}: {e}")?
+        return 1
+    }
+    let cc = env_or("CC", "cc")
+    // `CFLAGS` replaces `-O2`: `-O1` builds a large program much faster.
+    let flags = header_flags(b.program)
+    var args = text.words(env_or("CFLAGS", "-O2"))
+    for a in flags.compile { args.push(a) }
+    args.push("-pthread")
+    // Without `main` it is a library: an object for C to link, and its header.
+    var runs = false
+    if let Some(m) = b.program.main {
+        if b.program.fns[m].params == 0 { runs = true }
+    }
+    if !runs {
+        let object = "{out}.o"
+        let h_path = "{out}.h"
+        io.write_file(h_path, header(b.program)) catch e {
+            io.eprint("mou: cannot write {h_path}: {e}")?
+            return 1
+        }
+        for a in ["-c", "-o", object, c_path] { args.push(a) }
+        if !run_cc(cc, args, c_path)? { return 1 }
+        io.print("built {object} and {h_path} (C source in {c_path}); link it with -lm -pthread")?
+        return 0
+    }
+    for a in ["-o", out, c_path, "-lm"] { args.push(a) }
+    for l in libs { args.push("-l{l}") }
+    for a in flags.link { args.push(a) }
+    if !run_cc(cc, args, c_path)? { return 1 }
+    io.print("built {out} (C source in {c_path})")?
+    0
+}
+
+// `mou test file.mou [part of a name] [--all]`: runs the functions
+// without parameters whose name starts with `test_`, compiled into one
+// program that runs the test whose number it is given. A test fails when
+// it panics or returns an error.
+pub fn test_file(path: str, filter: str?, all: bool) -> int ! io.Error {
+    let h = home()
+    let b = match compile(path, h)? {
+        Some(b) => b
+        None => return 1
+    }
+    var tests = b.program.tests
+    if all {
+        // The tests of the modules the file imports.
+        for i in 0..(b.program.fns.len as int) {
+            let f = b.program.fns[i]
+            if f.at.line >> FILE_SHIFT != 0 && f.params == 0 && text.starts_with(f.name, "test_") { tests.push(i) }
+        }
+    }
+    if tests.len == 0 {
+        io.eprint("mou: {path} has no tests: functions without parameters whose name starts with `test_`")?
+        return 1
+    }
+    let found = tests.len
+    if let Some(part) = filter {
+        var kept: [int] = []
+        for t in tests {
+            if text.contains(b.program.fns[t].name, part) { kept.push(t) }
+        }
+        tests = kept
+        if tests.len == 0 {
+            io.eprint("mou: none of the {found} tests of {path} has `{part}` in its name")?
+            return 1
+        }
+    }
+    let runtime = io.read_file(h.runtime) catch e {
+        io.eprint("mou: cannot read the runtime {h.runtime}: {e} (set MOU_HOME to where Mou is)")?
+        return 1
+    }
+    // The program starts at the first test, and that start is made to choose.
+    var program = b.program
+    program.main = Some(tests[0])
+    let c = cgen.emit(program, b.paths, runtime, b.values) catch e {
+        io.eprint("mou: {e.msg}")?
+        return 1
+    }
+    let call = "    int status = kfinish(f{tests[0]}(A, KUNIT));"
+    var list: [str] = []
+    for t in tests { list.push("f{t}") }
+    var lines = text.lines(c)
+    var placed = false
+    for k in 0..(lines.len as int) {
+        if lines[k] == call {
+            lines[k] = "    static kv (*const KT[])(kv *, kv) = {{{text.join(list, ", ")}}};\n    long which = argc > 1 ? strtol(argv[1], NULL, 10) : 0;\n    if (which < 0 || which >= {tests.len}) return 2;\n    int status = kfinish(KT[which](A, KUNIT));"
+            placed = true
+        }
+    }
+    if !placed {
+        io.eprint("mou: internal error: the compiled tests have no entry point")?
+        return 1
+    }
+    let exe = "{env_or("TMPDIR", "/tmp")}/mou-test-{stem(path)}-{found}-{tests.len}"
+    let c_path = "{exe}.c"
+    io.write_file(c_path, "{text.join(lines, "\n")}\n") catch e {
+        io.eprint("mou: cannot write {c_path}: {e}")?
+        return 1
+    }
+    let flags = header_flags(b.program)
+    var args = text.words(env_or("CFLAGS", "-O1"))
+    for a in flags.compile { args.push(a) }
+    for a in ["-w", "-pthread", "-o", exe, c_path, "-lm"] { args.push(a) }
+    for a in flags.link { args.push(a) }
+    if !run_cc(env_or("CC", "cc"), args, c_path)? { return 1 }
+    var failed = 0
+    for k in 0..(tests.len as int) {
+        let f = b.program.fns[tests[k]]
+        var name = f.name
+        let file = f.at.line >> FILE_SHIFT
+        if file > 0 && file < (b.paths.len as int) { name = "{f.name} ({b.paths[file]})" }
+        var problem: str? = None
+        let _ = io.run(exe, ["{k}"], "") catch e {
+            // What went wrong, without the name of the program that ran it.
+            var why = "{e}"
+            let lead = "`{exe}` failed: "
+            if text.starts_with(why, lead) { why = why[(lead.len as int)..] }
+            let said = "`main` returned an error: "
+            if let Some(i) = text.find(why, said) { why = "returned an error: {why[(i + (said.len as int))..]}" }
+            problem = Some(why)
+            ""
+        }
+        match problem {
+            None => io.print("ok    {name}")?
+            Some(why) => {
+                failed += 1
+                io.print("FAIL  {name}\n      {why}")?
+            }
+        }
+    }
+    let _ = fs.remove(exe) catch _ {}
+    let _ = fs.remove(c_path) catch _ {}
+    io.print("\n{(tests.len as int) - failed} passed, {failed} failed")?
+    if failed == 0 { 0 } else { 1 }
+}
+
+// `mou run file.mou [arguments]`: builds the program where temporary
+// files go, runs it with the arguments that follow, and ends with the
+// status it ended with.
+pub fn run_file(path: str, given: [str]) -> int ! io.Error {
+    let h = home()
+    let b = match compile(path, h)? {
+        Some(b) => b
+        None => return 1
+    }
+    let runtime = io.read_file(h.runtime) catch e {
+        io.eprint("mou: cannot read the runtime {h.runtime}: {e} (set MOU_HOME to where Mou is)")?
+        return 1
+    }
+    let c = cgen.emit(b.program, b.paths, runtime, b.values) catch e {
+        io.eprint("mou: {e.msg}")?
+        return 1
+    }
+    var runs = false
+    if let Some(m) = b.program.main {
+        if b.program.fns[m].params == 0 { runs = true }
+    }
+    if !runs {
+        io.eprint("mou: {path} has no `main` function without parameters")?
+        return 1
+    }
+    let exe = "{env_or("TMPDIR", "/tmp")}/mou-run-{stem(path)}-{c.len}"
+    let c_path = "{exe}.c"
+    io.write_file(c_path, "{c}\n") catch e {
+        io.eprint("mou: cannot write {c_path}: {e}")?
+        return 1
+    }
+    let flags = header_flags(b.program)
+    // What runs once is built fast, not to run fast: `CFLAGS` says otherwise.
+    var args = text.words(env_or("CFLAGS", "-O0"))
+    for a in flags.compile { args.push(a) }
+    for a in ["-w", "-pthread", "-o", exe, c_path, "-lm"] { args.push(a) }
+    for a in flags.link { args.push(a) }
+    if !run_cc(env_or("CC", "cc"), args, c_path)? { return 1 }
+    let _ = fs.remove(c_path) catch _ {}
+    let status = io.exec(exe, given) catch e {
+        io.eprint("mou: cannot run {exe}: {e}")?
+        1
+    }
+    let _ = fs.remove(exe) catch _ {}
+    status
+}

@@ -1534,6 +1534,7 @@ fn native(module: &str, name: &str) -> Option<(&'static str, Sig)> {
         ("std.io", "write_file") => ("io.write_file", vec![param("path", Ty::Str), param("text", Ty::Str)], fails(Ty::Unit)),
         ("std.io", "args") => ("io.args", vec![], list(Ty::Str)),
         ("std.io", "env") => ("io.env", vec![param("name", Ty::Str)], Ty::Optional(Box::new(Ty::Str))),
+        ("std.io", "exec") => ("io.exec", vec![param("program", Ty::Str), param("args", list(Ty::Str))], fails(Ty::Int("i64"))),
         ("std.io", "run") => ("io.run", vec![param("program", Ty::Str), param("args", list(Ty::Str)), param("input", Ty::Str)], fails(Ty::Str)),
         ("std.task", "cancelled") => ("task.cancelled", vec![], Ty::Bool),
         ("std.raw", "concat") => ("raw.concat", vec![param("parts", list(Ty::Str))], Ty::Str),

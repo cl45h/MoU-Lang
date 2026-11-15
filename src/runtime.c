@@ -2194,6 +2194,41 @@ done:
 #endif
 }
 
+/* Runs a program with the input and the outputs of this one, until it
+   ends: the status it ended with, or 128 and the signal that ended it. */
+static kv kio_exec(kv program, kv args) {
+#ifdef KPOSIX
+    fflush(stdout);
+    int64_t n = klen(args);
+    char **argv = (char **)calloc((size_t)n + 2, sizeof(char *));
+    kv result;
+    if (!argv) {
+        result = kos_error();
+    } else {
+        argv[0] = (char *)kbytes(program);
+        for (int64_t i = 0; i < n; i++) argv[i + 1] = (char *)kbytes(kelem(args.u.o, i));
+        pid_t pid;
+        int failed = posix_spawnp(&pid, argv[0], NULL, NULL, argv, environ);
+        if (failed) {
+            errno = failed;
+            result = kos_error();
+        } else {
+            int status = 0;
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+            result = kbox(T_OK, kint(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0)));
+        }
+    }
+    free(argv);
+    krelease(program);
+    krelease(args);
+    return result;
+#else
+    krelease(program);
+    krelease(args);
+    return kfailed("running a program is not supported on this system");
+#endif
+}
+
 static kv kio_args(void) {
     if (kgiven[0].depth) return kgiven_top(0);
     int n = kargc > 1 ? kargc - 1 : 0;

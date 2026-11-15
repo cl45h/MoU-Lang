@@ -26,4 +26,5 @@ if ! cmp -s "$work/stage1.c" "$work/stage2.c"; then
 fi
 cp "$work/stage1" ./mouc
 echo "built ./mouc from the sources in compiler/ (it compiles itself to the same C)"
-echo "use: ./mouc c program.mou std src/runtime.c > program.c && $CC -O2 -o program program.c -lm"
+echo "use: ./mouc run program.mou, ./mouc build program.mou -o program, ./mouc check program.mou, ./mouc test program.mou"
+echo "from another directory, set MOU_HOME to this one"

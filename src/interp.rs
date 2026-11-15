@@ -435,6 +435,21 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             }).collect();
             done(run_program(&text(0)?, &given, &text(2)?).map(|s| Value::Str(s.into())))
         }
+        "io.exec" => {
+            let _ = out.flush();
+            let given: Vec<String> = items(1)?.iter().map(|v| match v {
+                Value::Str(s) => s.to_string(),
+                _ => String::new(),
+            }).collect();
+            // The status it ended with; one a signal ended counts as 128 and the signal.
+            done(std::process::Command::new(&*text(0)?).args(&given).status().map(|s| {
+                #[cfg(unix)]
+                let by_signal = std::os::unix::process::ExitStatusExt::signal(&s).map(|n| 128 + n);
+                #[cfg(not(unix))]
+                let by_signal: Option<i32> = None;
+                Value::Int(s.code().or(by_signal).unwrap_or(-1) as i128)
+            }))
+        }
         "io.args" => Value::Array(Rc::new(ARGS.with(|a| a.borrow().iter().map(|s| Value::Str(s.as_str().into())).collect()))),
         "raw.concat" => {
             let mut s = String::new();
