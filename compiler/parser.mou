@@ -156,7 +156,9 @@ let ASSIGN_OPS: [str] = ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<
 
 struct Ret { ret: Type?, by_ref: bool, err: Type? }
 
-struct Parser { toks: [lexer.Token], pos: int, next_id: int }
+// `py_names` and `py_modules`: the modules of Python the file imports,
+// the name each has here and its name there.
+struct Parser { toks: [lexer.Token], pos: int, next_id: int, py_names: [str], py_modules: [str] }
 
 struct Sub { e: Expr, next_id: int }
 
@@ -183,9 +185,11 @@ fn prec_of(p: str) -> int {
 
 // Parses the source of a value inserted in a string, which starts at a
 // position of the file.
-fn parse_expr_at(src: str, line: int, col: int, first_id: int) -> Sub ! lexer.Error {
+// An expression written inside a string: it sees the modules of Python
+// of the file it is in.
+fn parse_expr_at(src: str, line: int, col: int, first_id: int, py_names: [str], py_modules: [str]) -> Sub ! lexer.Error {
     let toks = lexer.lex_at(src, line, col)?
-    var p = Parser(toks, 0, first_id)
+    var p = Parser(toks, 0, first_id, py_names, py_modules)
     let _ = p.skip_nl()
     let e = p.expr()?
     let _ = p.skip_nl()
@@ -380,7 +384,25 @@ impl Parser {
         loop {
             let _ = self.skip_nl()
             if !self.eat_kw("import") { break }
-            imports.push(self.import_decl()?)
+            let imp = self.import_decl()?
+            var python = false
+            if let Some(o) = imp.origin { python = o == "py" }
+            if python {
+                // A module of Python is used through `std.py`, which the
+                // file imports under a name of its own.
+                var alias = imp.path
+                var named = !text.contains(imp.path, ".")
+                if let Some(a) = imp.alias {
+                    alias = a
+                    named = true
+                }
+                if !named { return self.err("a module of Python with dots in its name needs a name here: `import py \"os.path\" as path`") }
+                if self.py_names.len == 0 { imports.push(Import(None, "std.py", Some("py__"), [])) }
+                self.py_names.push(alias)
+                self.py_modules.push(imp.path)
+            } else {
+                imports.push(imp)
+            }
             self.expect_nl()?
         }
         var decls: [Decl] = []
@@ -1035,6 +1057,44 @@ impl Parser {
                     _ => return self.err("expected field name, found {self.describe()}")
                 }
                 self.bump()
+                // `m.name(args)` and `m.name` on a module of Python are
+                // calls of `std.py`, with each argument made an object.
+                var module = ""
+                var python = false
+                match e.kind {
+                    Kind.Name(n) => {
+                        for k in 0..(self.py_names.len as int) {
+                            if !python && self.py_names[k] == n {
+                                module = self.py_modules[k]
+                                python = true
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if python {
+                    let first = Arg(None, Mode.Let, self.mk(Kind.Str([StrPart.Text(module)]), line, col))
+                    let second = Arg(None, Mode.Let, self.mk(Kind.Str([StrPart.Text(name)]), line, col))
+                    if self.eat_p("(") {
+                        var items: [Expr] = []
+                        loop {
+                            if self.list_done(")") { break }
+                            let value = self.expr()?
+                            let method = self.mk(Kind.Field(value, "to_py"), line, col)
+                            items.push(self.mk(Kind.Call(method, []), line, col))
+                            if self.list_end(")")? { break }
+                        }
+                        let list = Arg(None, Mode.Let, self.mk(Kind.Array(items), line, col))
+                        let owner = self.mk(Kind.Name("py__"), line, col)
+                        let target = self.mk(Kind.Field(owner, "call_in"), line, col)
+                        e = self.mk(Kind.Call(target, [first, second, list]), line, col)
+                    } else {
+                        let owner = self.mk(Kind.Name("py__"), line, col)
+                        let target = self.mk(Kind.Field(owner, "attr_in"), line, col)
+                        e = self.mk(Kind.Call(target, [first, second]), line, col)
+                    }
+                    continue
+                }
                 e = self.mk(Kind.Field(e, name), line, col)
             } else if self.eat_p("?") {
                 e = self.mk(Kind.Try(e), line, col)
@@ -1207,7 +1267,7 @@ impl Parser {
                     match part {
                         lexer.Part.Lit(s) => out.push(StrPart.Text(s))
                         lexer.Part.Expr(src, eline, ecol) => {
-                            let sub = parse_expr_at(src, eline, ecol, self.next_id)?
+                            let sub = parse_expr_at(src, eline, ecol, self.next_id, self.py_names, self.py_modules)?
                             self.next_id = sub.next_id
                             out.push(StrPart.Value(sub.e))
                         }
@@ -1411,7 +1471,7 @@ pub fn parse_at(src: str, line: int) -> File ! lexer.Error { parse_from(src, lin
 // The same, numbering the expressions from `first_id`.
 pub fn parse_from(src: str, line: int, first_id: int) -> File ! lexer.Error {
     let toks = lexer.lex_at(src, line, 1)?
-    var p = Parser(toks, 0, first_id)
+    var p = Parser(toks, 0, first_id, [], [])
     p.file()?
 }
 

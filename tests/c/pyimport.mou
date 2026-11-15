@@ -1,0 +1,31 @@
+import std.io
+import std.py
+import py "math" as m
+import py "json"
+import py "os.path" as path
+
+// Modules of Python imported by name: a call gives each argument as an
+// object, and what comes back is one.
+
+fn work() ! py.Error {
+    let root = m.sqrt(2.0)?.as_float()?
+    let big = m.factorial(20)?.as_int()?
+    let pi = m.pi?.as_float()?
+    io.print("{root} {big} {pi > 3.14 && pi < 3.15} {m.pow(2, 0.5)?.as_float()? == root}") catch e {}
+    let data = json.loads("[1, 2.5, \"tres\", null, true]")?
+    io.print("{data.item(1)?.as_float()?} {data.item(2)?.as_str()?} {json.dumps(data)?.as_str()?}") catch e {}
+    io.print("{path.join("a", "b")?.as_str()?} {path.isabs("/x")?.truthy()?} {m.isfinite(1.5)?.truthy()?}") catch e {}
+    let bad = m.sqrt(-1.0) catch e {
+        io.print("refused: {e.message}") catch e2 {}
+        return
+    }
+    io.print("it should not have worked") catch e {}
+}
+
+fn main() ! io.Error {
+    work() catch e { io.print("failed: {e.message}")? }
+    let missing = py.call_in("no_such_module_here", "f", []) catch e {
+        io.print("no module")?
+        return
+    }
+}

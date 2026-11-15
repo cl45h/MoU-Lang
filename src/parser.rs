@@ -13,17 +13,19 @@ pub fn parse_file(src: &str) -> PResult<File> {
 /// Parses a file whose first line has the given position.
 pub fn parse_file_at(src: &str, origin: Span) -> PResult<File> {
     let toks = lexer::lex_at(src, origin)?;
-    Parser { toks, pos: 0 }.file()
+    Parser { toks, pos: 0, py: Vec::new() }.file()
 }
 
 #[allow(dead_code)]
 pub fn parse_expr(src: &str) -> PResult<Expr> {
-    parse_expr_at(src, Span { line: 1, col: 1 })
+    parse_expr_at(src, Span { line: 1, col: 1 }, &[])
 }
 
-fn parse_expr_at(src: &str, origin: Span) -> PResult<Expr> {
+/// An expression written inside a string: it sees the modules of Python
+/// of the file it is in.
+fn parse_expr_at(src: &str, origin: Span, py: &[(String, String)]) -> PResult<Expr> {
     let toks = lexer::lex_at(src, origin)?;
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser { toks, pos: 0, py: py.to_vec() };
     p.skip_nl();
     let e = p.expr()?;
     p.skip_nl();
@@ -36,6 +38,9 @@ fn parse_expr_at(src: &str, origin: Span) -> PResult<Expr> {
 struct Parser {
     toks: Vec<Token>,
     pos: usize,
+    /// The modules of Python the file imports: the name each has here,
+    /// and its name there.
+    py: Vec<(String, String)>,
 }
 
 fn mk(kind: ExprKind, span: Span) -> Expr {
@@ -204,7 +209,20 @@ impl Parser {
             if !self.eat_kw("import") {
                 break;
             }
-            imports.push(self.import()?);
+            let imp = self.import()?;
+            if imp.origin.as_deref() == Some("py") {
+                // A module of Python is used through `std.py`, which the
+                // file imports under a name of its own.
+                let Some(alias) = imp.alias.clone().or_else(|| (!imp.path.contains('.')).then(|| imp.path.clone())) else {
+                    return self.err("a module of Python with dots in its name needs a name here: `import py \"os.path\" as path`");
+                };
+                if self.py.is_empty() {
+                    imports.push(Import { origin: None, path: "std.py".to_string(), alias: Some("py__".to_string()), decls: Vec::new() });
+                }
+                self.py.push((alias, imp.path));
+            } else {
+                imports.push(imp);
+            }
             self.expect_nl()?;
         }
         let mut decls = Vec::new();
@@ -806,6 +824,27 @@ impl Parser {
                     }
                     _ => return self.err(format!("expected field name, found {}", self.describe())),
                 };
+                // `m.name(args)` and `m.name` on a module of Python are
+                // calls of `std.py`, with each argument made an object.
+                let module = match &e.kind {
+                    ExprKind::Path(n) => self.py.iter().find(|(alias, _)| alias == n).map(|(_, module)| module.clone()),
+                    _ => None,
+                };
+                if let Some(module) = module {
+                    let text = |s: String| Arg { label: None, mode: Mode::Let, value: mk(ExprKind::Str(vec![StrPart::Lit(s)]), span) };
+                    let target = |f: &str| Box::new(mk(ExprKind::Field { base: Box::new(mk(ExprKind::Path("py__".to_string()), span)), name: f.to_string() }, span));
+                    if self.eat_p("(") {
+                        let items = self.list(")", |p| {
+                            let value = p.expr()?;
+                            Ok(mk(ExprKind::Call { callee: Box::new(mk(ExprKind::Field { base: Box::new(value), name: "to_py".to_string() }, span)), args: Vec::new() }, span))
+                        })?;
+                        let list = Arg { label: None, mode: Mode::Let, value: mk(ExprKind::Array(items), span) };
+                        e = mk(ExprKind::Call { callee: target("call_in"), args: vec![text(module), text(name), list] }, span);
+                    } else {
+                        e = mk(ExprKind::Call { callee: target("attr_in"), args: vec![text(module), text(name)] }, span);
+                    }
+                    continue;
+                }
                 e = mk(ExprKind::Field { base: Box::new(e), name }, span);
             } else if self.eat_p("?") {
                 e = mk(ExprKind::Try(Box::new(e)), span);
@@ -867,7 +906,7 @@ impl Parser {
                 for part in parts {
                     out.push(match part {
                         LexPart::Lit(s) => StrPart::Lit(s),
-                        LexPart::Expr(src, at) => StrPart::Expr(parse_expr_at(&src, at)?),
+                        LexPart::Expr(src, at) => StrPart::Expr(parse_expr_at(&src, at, &self.py)?),
                     });
                 }
                 ExprKind::Str(out)

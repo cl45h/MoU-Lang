@@ -36,7 +36,7 @@ fn main() ! io.Error {
 - Tareas en hilos con concurrencia estructurada: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. Una tarea lee las variables de afuera y no las puede modificar, así que no hay carreras de datos.
 - Redes: `std.net` da TCP (escuchar, conectar, leer y escribir), UDP y búsqueda de nombres, escrito en Mou sobre los sockets de C, y `std.tls` da conexiones cifradas sobre OpenSSL, con el certificado del otro lado comprobado. Un servidor atiende cada conexión en una tarea. IPv4 e IPv6. Solo Linux y programas compilados.
 - Librería estándar escrita en Mou: listas, mapas, tablas hash, texto con Unicode, matemática, archivos y directorios (`std.fs`), y `std.pool` con `Pool[T]` y `Handle[T]` para grafos y estructuras cíclicas.
-- Python dentro del programa con `std.py`: `py.module("math")?.method("sqrt", [py.from_float(2.0)])?`. Es una librería sobre la interfaz de C de CPython; las excepciones llegan como errores.
+- Python dentro del programa: `import py "math" as m` y después `m.sqrt(2.0)?.as_float()?`. Está hecho sobre `std.py`, una librería sobre la interfaz de C de CPython; las excepciones llegan como errores.
 - Conversiones de enteros que no pierden nada en silencio: `as` conserva el valor o hace panic, y `u8.truncate(x)`, `u8.saturate(x)` y `u8.try_from(x)` dicen qué hacer cuando no entra.
 - Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
 - Herramientas: `mou test` (con filtro por nombre, `--all` y `--native`), `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` y `mou bind` (escribe las declaraciones de un header de C).
@@ -51,7 +51,7 @@ El núcleo del lenguaje está completo y el compilador se compila a sí mismo. L
 - TLS dentro del bucle de eventos: hoy varias conexiones a la vez se atienden con una tarea (un hilo) por conexión, o desde un solo hilo con `net.Server`, que entrega lo que pasa como eventos (`Open`, `Data`, `Done`) y no espera a un cliente lento al escribir; solo Linux. Tareas que se pueden cancelar, canales con `Chan[T]` y estado compartido con `Mutex[T]` ya se pueden.
 - El resto del contexto: un `io` con implementación propia. `with files = tabla` (archivos de texto en memoria), `with alloc = arena`, `with io = lineas` (captura lo que se imprime), `with err = lineas` (lo que va a la salida de errores), `with input = lineas` (da lo que se lee), `with args = lista` y `with env = pares` ya están, y los tipos de función ya llevan efectos escritos (`fn(int) -> int @nopanic`).
 - Tipos como valores de verdad y bloques `comptime` que generan código; las funciones que devuelven un tipo ya están en su forma simple (`fn Matrix(comptime T: type, comptime N: int) -> type { struct { ... } }`, usada como `Matrix(int, 6)`), igual que los parámetros `comptime` de enteros y de tipos (`empty(int)`), los arrays de largo fijo `[T; N]` y la reflexión con `meta.info(T)`.
-- Un backend LLVM propio, SIMD y `soa`: hoy LLVM se usa a través de Clang (`CC=clang mou build`), que compila el mismo C. `import cpp`, y la forma `import py` del lenguaje (Python ya se usa con `std.py`). En la otra dirección, C ya puede llamar funciones de Mou marcadas `@abi`.
+- Un backend LLVM propio, SIMD y `soa`: hoy LLVM se usa a través de Clang (`CC=clang mou build`), que compila el mismo C. `import cpp`. En la otra dirección, C ya puede llamar funciones de Mou marcadas `@abi`.
 
 El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIGN.md). La gramática está en [GRAMMAR.md](GRAMMAR.md).
 

@@ -1,0 +1,5 @@
+1.4142135623730951 2432902008176640000 true true
+2.5 tres [1, 2.5, "tres", null, true]
+a/b true true
+refused: math domain error
+no module

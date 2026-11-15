@@ -115,4 +115,7 @@ pub fn forget() { unsafe { cp.PyErr_Clear() } }
 
 pub fn release(o: ptr) { unsafe { cp.Py_DecRef(o) } }
 
+/// Counts one more owner of an object.
+pub fn retain(o: ptr) { unsafe { cp.Py_IncRef(o) } }
+
 pub fn run(code: str) -> bool { unsafe { cp.PyRun_SimpleString(code) == 0 } }

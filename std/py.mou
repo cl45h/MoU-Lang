@@ -193,3 +193,54 @@ impl Object {
     /// Lets Python free the value. The object must not be used after this.
     pub fn release(self) { c.release(self.p) }
 }
+
+/// What can be given to a function of Python as it is: `import py "math"
+/// as m` and `m.pow(2, 0.5)` turn each argument into an object with this.
+pub trait ToPy {
+    /// An object of Python with this value, which the caller releases.
+    fn to_py(self) -> Object
+}
+
+impl ToPy for int {
+    fn to_py(self) -> Object { from_int(self) }
+}
+
+impl ToPy for f64 {
+    fn to_py(self) -> Object { from_float(self) }
+}
+
+impl ToPy for bool {
+    fn to_py(self) -> Object { from_bool(self) }
+}
+
+impl ToPy for str {
+    fn to_py(self) -> Object { from_str(self) }
+}
+
+impl ToPy for Object {
+    fn to_py(self) -> Object {
+        c.retain(self.p)
+        self
+    }
+}
+
+/// `module.name(args...)`, for a module by its name. It releases the
+/// arguments: this is what a call through `import py` becomes.
+pub fn call_in(module_name: str, name: str, args: [Object]) -> Object ! Error {
+    let m = module(module_name) catch e {
+        for a in args { a.release() }
+        return e
+    }
+    let result = m.method(name, args)
+    for a in args { a.release() }
+    m.release()
+    result?
+}
+
+/// `module.name`, for a module by its name.
+pub fn attr_in(module_name: str, name: str) -> Object ! Error {
+    let m = module(module_name)?
+    let result = m.attr(name)
+    m.release()
+    result?
+}

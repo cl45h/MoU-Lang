@@ -36,7 +36,7 @@ fn main() ! io.Error {
 - Tasks on threads with structured concurrency: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. A task reads the variables outside it and cannot modify them, so there are no data races.
 - Networking: `std.net` gives TCP (listen, connect, read and write), UDP and name lookup, written in Mou on top of C sockets, and `std.tls` gives encrypted connections on top of OpenSSL, with the certificate of the other side checked. A server handles each connection in a task. IPv4 and IPv6. Linux and compiled programs only.
 - A standard library written in Mou: lists, maps, hash tables, text with Unicode, math, files and directories (`std.fs`), and `std.pool` with `Pool[T]` and `Handle[T]` for graphs and cyclic structures.
-- Python inside the program with `std.py`: `py.module("math")?.method("sqrt", [py.from_float(2.0)])?`. It is a library on top of the C interface of CPython; exceptions arrive as errors.
+- Python inside the program: `import py "math" as m` and then `m.sqrt(2.0)?.as_float()?`. It is built on `std.py`, a library on top of the C interface of CPython; exceptions arrive as errors.
 - Integer conversions that never lose anything silently: `as` keeps the value or panics, and `u8.truncate(x)`, `u8.saturate(x)` and `u8.try_from(x)` say what to do when it does not fit.
 - Two ways to run: an interpreter (`mou run`) and native binaries through C (`mou build`).
 - Tools: `mou test` (with a name filter, `--all` and `--native`), `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` and `mou bind` (writes the declarations of a C header).
@@ -51,7 +51,7 @@ The core of the language is complete and the compiler compiles itself. What foll
 - TLS inside the event loop: today several connections at once are handled with one task (one thread) per connection, or from a single thread with `net.Server`, which hands over what happens as events (`Open`, `Data`, `Done`) and does not wait for a slow client when writing; Linux only. Cancellable tasks, channels with `Chan[T]` and shared state with `Mutex[T]` already work.
 - The rest of the context: an `io` with an implementation of your own. `with files = table` (text files in memory), `with alloc = arena`, `with io = lines` (captures what is printed), `with err = lines` (what goes to the error output), `with input = lines` (provides what is read), `with args = list` and `with env = pairs` are already there, and function types already carry written effects (`fn(int) -> int @nopanic`).
 - Types as real values and `comptime` blocks that generate code; functions that return a type are already there in their simple form (`fn Matrix(comptime T: type, comptime N: int) -> type { struct { ... } }`, used as `Matrix(int, 6)`), as are `comptime` parameters for integers and types (`empty(int)`), fixed-length arrays `[T; N]` and reflection with `meta.info(T)`.
-- An LLVM backend of its own, SIMD and `soa`: today LLVM is used through Clang (`CC=clang mou build`), which compiles the same C. `import cpp`, and the language form of `import py` (Python is already usable with `std.py`). In the other direction, C can already call Mou functions marked `@abi`.
+- An LLVM backend of its own, SIMD and `soa`: today LLVM is used through Clang (`CC=clang mou build`), which compiles the same C. `import cpp`. In the other direction, C can already call Mou functions marked `@abi`.
 
 The details, with the known limits of each part, are in [DESIGN.md](DESIGN.md). The grammar is in [GRAMMAR.md](GRAMMAR.md). Both documents are in Spanish.
 
