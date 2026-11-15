@@ -179,6 +179,8 @@ pub let NOUNSAFE: int = 16
 pub let NOBLOCK: int = 32
 // With `NOALLOC`: it comes from the profile of the module, not from an annotation.
 pub let SYSTEM: int = 8
+// Not an effect: the function is one C can call, by its name (`@abi`).
+pub let ABI: int = 64
 
 pub struct Extern { name: str, header: str, params: [str], ret: str }
 
@@ -369,6 +371,16 @@ fn opt_rec(s: Scalar?) -> Scalar? {
     match s {
         Some(Scalar.Rec(i)) => Some(Scalar.Opt(16 + i))
         _ => None
+    }
+}
+
+// Whether a value of that type goes to C and back as it is.
+fn abi_plain(t: types.Ty) -> bool {
+    match t {
+        types.Ty.Bool => true
+        types.Ty.Float(k) => k == "f64"
+        types.Ty.Int(k) => !text.ends_with(k, "128")
+        _ => false
     }
 }
 
@@ -796,7 +808,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                         if text.starts_with(f.name, "test_") && c.fns[idx].sig.params.len == 0 { tests.push(id) }
                     }
                 }
-                let limits = lw.limits(p, d)
+                let asked = lw.limits(p, d)
+                let limits = lw.abi(asked, Some(c.fns[idx].sig), at)
                 jobs.push(Job.Fn(FnJob(f.name, f, c.fns[idx].sig, None, at, 0, false, limits)))
             }
             parser.DeclKind.Impl(im) => {
@@ -824,7 +837,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                             let id = jobs.len as int
                             lw.set_method_id(key, mangled, id)
                             lw.note_decl(id, f)
-                            let limits = lw.limits(p, m)
+                            let asked = lw.limits(p, m)
+                            let limits = lw.abi(asked, None, check.Span(m.line, m.col))
                             if let Some(_) = method.self_mode { receivers.push(SelfHint(id, method.self_ty)) }
                             jobs.push(Job.Fn(FnJob("{key}.{f.name}", f, method.sig, method.self_mode, check.Span(m.line, m.col), 0, false, limits)))
                         }
@@ -864,7 +878,8 @@ pub fn lower(p: load.Program, c: check.Checker) -> Program {
                 lw.note_decl(id, f)
                 var name = "{prefix}{f.name}"
                 if instance.shown != "" { name = "{prefix}{f.name}[{instance.shown}]" }
-                let limits = lw.limits(p, d)
+                let asked = lw.limits(p, d)
+                let limits = lw.abi(asked, None, check.Span(d.line, d.col))
                 jobs.push(Job.Fn(FnJob(name, f, instance.sig, self_mode, check.Span(d.line, d.col), k + 1, false, limits)))
             }
             _ => {}
@@ -1118,6 +1133,27 @@ impl Lower {
 
     // The effects a declaration rules out: its own annotations, and what
     // the profile of its module does not allow.
+    // Checks that a function marked `@abi` is one C can call: it has the
+    // signature given, of numbers and booleans only.
+    fn abi(mut self, limits: int, sig: types.Sig?, at: check.Span) -> int {
+        if limits & ABI == 0 { return limits }
+        if let Some(s) = sig {
+            var ok = abi_plain(s.ret)
+            match s.ret {
+                types.Ty.Unit => {
+                    ok = true
+                }
+                _ => {}
+            }
+            for q in s.params {
+                if !abi_plain(q.ty) { ok = false }
+            }
+            if ok { return limits }
+        }
+        self.fail(at, "`@abi` goes on a function that C can call: not a method, without type parameters, and taking and returning only `bool`, `f64` and integers of up to 64 bits")
+        limits - ABI
+    }
+
     fn limits(mut self, p: load.Program, d: parser.Decl) -> int {
         var limits = 0
         for a in d.attrs {
@@ -1135,6 +1171,8 @@ impl Lower {
                         } else {
                             if a.name == "nounsafe" {
                                 limits = limits | NOUNSAFE
+                            } else if a.name == "abi" {
+                                limits = limits | ABI
                             } else {
                                 self.fail(check.Span(d.line, d.col), "unknown annotation `@{a.name}`: a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`")
                             }

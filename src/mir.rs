@@ -339,6 +339,8 @@ pub const NOUNSAFE: u8 = 16;
 pub const NOBLOCK: u8 = 32;
 /// With `NOALLOC`: it comes from the profile of the module, not from an annotation.
 pub const SYSTEM: u8 = 8;
+/// Not an effect: the function is one C can call, by its name (`@abi`).
+pub const ABI: u8 = 64;
 
 /// A type the C backend can keep in a machine register.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -957,6 +959,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
                     module_tests.push(jobs.len());
                 }
                 let limits = lw.limits(file, d);
+                let limits = lw.abi(limits, Some(&info.fns[idx].sig), d.span);
                 jobs.push(Job::Fn { name: f.name.clone(), f, sig: &info.fns[idx].sig, self_mode: None, span: d.span, inst: 0, path: false, limits });
             }
             DeclKind::Impl(im) => {
@@ -973,6 +976,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
                     lw.fn_decls.insert(jobs.len(), f);
                     let name = format!("{key}.{}", f.name);
                     let limits = lw.limits(file, m);
+                    let limits = lw.abi(limits, None, m.span);
                     if method.self_mode.is_some() {
                         receivers.push((jobs.len(), method.self_ty.clone()));
                     }
@@ -1005,6 +1009,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
             shown => format!("{prefix}{}[{shown}]", f.name),
         };
         let limits = lw.limits(file, d);
+        let limits = lw.abi(limits, None, d.span);
         jobs.push(Job::Fn { name, f, sig: &instance.sig, self_mode, span: d.span, inst: k + 1, path: false, limits });
     }
     // A function that returns `ref mut` is lowered a second time, to
@@ -1118,6 +1123,21 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
 }
 
 impl<'a> Lower<'a> {
+    /// Checks that a function marked `@abi` is one C can call: it has the
+    /// signature given, of numbers and booleans only.
+    fn abi(&mut self, limits: u8, sig: Option<&Sig>, span: Span) -> u8 {
+        if limits & ABI == 0 {
+            return limits;
+        }
+        let plain = |t: &Ty| matches!(t, Ty::Bool | Ty::Float("f64")) || matches!(t, Ty::Int(k) if !k.ends_with("128"));
+        if sig.is_some_and(|s| s.params.iter().all(|p| plain(&p.ty)) && (plain(&s.ret) || s.ret == Ty::Unit)) {
+            return limits;
+        }
+        let msg = "`@abi` goes on a function that C can call: not a method, without type parameters, and taking and returning only `bool`, `f64` and integers of up to 64 bits".to_string();
+        self.errors.push(Error { msg, span });
+        limits & !ABI
+    }
+
     /// The effects a declaration rules out: its own annotations, and what
     /// the profile of its module does not allow.
     fn limits(&mut self, file: &File, d: &Decl) -> u8 {
@@ -1129,6 +1149,7 @@ impl<'a> Lower<'a> {
                 "noio" => limits |= NOIO,
                 "noblock" => limits |= NOBLOCK,
                 "nounsafe" => limits |= NOUNSAFE,
+                "abi" => limits |= ABI,
                 other => {
                     let msg = format!("unknown annotation `@{other}`: a function takes `@noalloc`, `@nopanic`, `@noio`, `@noblock` and `@nounsafe`");
                     self.errors.push(Error { msg, span: d.span });

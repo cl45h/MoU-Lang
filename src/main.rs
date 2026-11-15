@@ -415,6 +415,28 @@ fn build_file(path: &str, src: &str, print: bool, output: Option<String>, libs: 
     // `CFLAGS` replaces the default `-O2`: `-O1` builds a large program much faster.
     let flags = std::env::var("CFLAGS").unwrap_or_else(|_| "-O2".to_string());
     let (compile, link) = cgen::header_flags(&program);
+    // Without `main` it is a library: an object for C to link, and its header.
+    if program.main.is_none() {
+        let (object, header) = (format!("{output}.o"), format!("{output}.h"));
+        if let Err(e) = std::fs::write(&header, cgen::header(&program)) {
+            eprintln!("mou: cannot write {header}: {e}");
+            return ExitCode::FAILURE;
+        }
+        return match std::process::Command::new(&cc).args(flags.split_whitespace()).args(compile).args(["-pthread", "-c", "-o", &object, &c_path]).status() {
+            Ok(status) if status.success() => {
+                println!("built {object} and {header} (C source in {c_path}); link it with -lm -pthread");
+                ExitCode::SUCCESS
+            }
+            Ok(_) => {
+                eprintln!("mou: the C compiler `{cc}` failed on {c_path}");
+                ExitCode::FAILURE
+            }
+            Err(e) => {
+                eprintln!("mou: cannot run the C compiler `{cc}`: {e} (set CC to choose another)");
+                ExitCode::FAILURE
+            }
+        };
+    }
     match std::process::Command::new(&cc).args(flags.split_whitespace()).args(compile).args(["-pthread", "-o", &output, &c_path, "-lm"]).args(libs).args(link).status() {
         Ok(status) if status.success() => {
             println!("built {output} (C source in {c_path})");
