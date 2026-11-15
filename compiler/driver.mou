@@ -11,6 +11,7 @@ import cgen
 import check
 import consts
 import effects
+import fmt
 import lexer
 import load
 import mir
@@ -420,4 +421,28 @@ pub fn run_file(path: str, given: [str]) -> int ! io.Error {
     }
     let _ = fs.remove(exe) catch _ {}
     status
+}
+
+// `mou fmt file.mou [--check]`: gives the file the standard layout, or
+// only says whether it has it.
+pub fn fmt_file(path: str, only_check: bool) -> int ! io.Error {
+    let src = io.read_file(path) catch e {
+        io.eprint("mou: cannot read {path}: {e}")?
+        return 2
+    }
+    let out = fmt.format(src) catch e {
+        io.eprint("mou: {path}: {e.msg}")?
+        return 1
+    }
+    if out == src { return 0 }
+    if only_check {
+        io.eprint("{path} does not have the standard layout: run `mou fmt {path}`")?
+        return 1
+    }
+    io.write_file(path, out) catch e {
+        io.eprint("mou: cannot write {path}: {e}")?
+        return 1
+    }
+    io.print("formatted {path}")?
+    0
 }

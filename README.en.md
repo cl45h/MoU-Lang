@@ -67,11 +67,12 @@ With only a C compiler (`cc`), starting from the compiler written in Mou:
 ./mouc build examples/tour.mou -o tour && ./tour
 ./mouc check examples/tour.mou
 ./mouc test file.mou
+./mouc fmt file.mou
 ```
 
 `mouc` looks for the standard library and the runtime in the directory it is run from; from anywhere else, `MOU_HOME` says where Mou is. `run` compiles the program to a temporary file and runs it.
 
-With Rust, which also brings the interpreter, the interactive session, the formatter, the fuzzer and the test suite of the project:
+With Rust, which also brings the interpreter, the interactive session, the fuzzer and the test suite of the project:
 
 ```sh
 cargo build --release
