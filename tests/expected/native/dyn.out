@@ -1,0 +1,14 @@
+8.0 3
+cuadrado: 4.0 | hola, cuadrado
+círculo: 3.0 | buenas, círculo
+cuadrado: 1.0 | hola, cuadrado
+37.0 [Square(side: 4.0), Circle(r: 2.0), Square(side: 3.0)]
+3.0 12.0 Circle(r: 1.0) Circle(r: 2.0)
+<hola, entero 7>
+<hola, 2 de entero 3>
+<hola, 1 de círculo>
+<hola, entero 1>
+2 de entero 3 <hola, cuadrado>
+25.0 16.0 escena
+círculo 12.0
+status 0

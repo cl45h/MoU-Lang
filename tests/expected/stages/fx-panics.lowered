@@ -1,0 +1,831 @@
+fn 0 first params=1 locals=4 body=1 limits=0 ret=i64 at=4:1
+  names 0=xs
+  once 
+  scalars _
+  hints 3=i64
+  copies 
+  b0 4:34
+    L1 = len L0 @4:34
+    L2 = > dyn L1, int 0 @4:34
+    branch L2 b1 b2
+  b1 4:47
+    L3 = use L0[int 0] @4:47
+    return L3
+  b2 4:34
+    panic "a `where` condition of `first` does not hold"
+fn 1 item params=2 locals=7 body=1 limits=0 ret=i64 at=5:1
+  names 0=xs 1=i
+  once 
+  scalars _ usize
+  hints 6=i64
+  copies 
+  b0 5:43
+    L2 = use L1 @5:43
+    L3 = len L0 @5:47
+    L4 = < dyn L2, L3 @5:43
+    branch L4 b1 b2
+  b1 5:56
+    L5 = use L1 @5:59
+    L6 = use L0[L5] @5:56
+    return L6
+  b2 5:43
+    panic "a `where` condition of `item` does not hold"
+fn 2 twice params=1 locals=3 body=0 limits=0 ret=i64 at=6:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 6:27
+    L1 = use L0 @6:27
+    L2 = * i64 L1, int 2 @6:27
+    return L2
+fn 3 say params=0 locals=6 body=0 limits=0 ret=_ at=7:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 7:23
+    call print(str "x") back[] -> L0 b1
+  b1 7:23
+    L1 = is 1 L0 @7:23
+    branch L1 b3 b2
+  b2 7:23
+    L4 = use L0.0 @7:23
+    L5 = ok L4 @7:23
+    return L5
+  b3 7:23
+    L2 = use L0.0 @7:23
+    L3 = err L2 @7:23
+    return L3
+fn 4 case0 params=5 locals=7 body=0 limits=2 ret=i64 at=9:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 11:1
+    L5 = use L2 @11:1
+    L6 = +% i64 L5, int 1 @11:1
+    return L6
+fn 5 case1 params=5 locals=7 body=0 limits=2 ret=i64 at=14:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 16:1
+    L5 = use L2 @16:1
+    L6 = *| i64 L5, int 2 @16:1
+    return L6
+fn 6 case2 params=5 locals=7 body=0 limits=2 ret=i64 at=19:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 21:1
+    L5 = use L2 @21:1
+    L6 = / i64 L5, int 2 @21:1
+    return L6
+fn 7 case3 params=5 locals=14 body=0 limits=2 ret=i64 at=24:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 26:4
+    L6 = use L2 @26:4
+    L7 = > dyn L6, int 0 @26:4
+    branch L7 b4 b1
+  b1 26:43
+    L5 = use int 0 @26:43
+    goto b2
+  b2 26:43
+    return L5
+  b3 26:24
+    L10 = use L2 @26:24
+    L11 = use L2 @26:28
+    L12 = * i64 L10, L11 @26:24
+    L13 = + i64 L12, int 1 @26:24
+    L5 = use L13 @26:24
+    goto b2
+  b4 26:13
+    L8 = use L2 @26:13
+    L9 = < dyn L8, int 1000 @26:13
+    branch L9 b3 b1
+fn 8 case4 params=5 locals=10 body=0 limits=2 ret=i64 at=29:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 31:4
+    L6 = use L2 @31:4
+    L7 = != dyn L6, int 0 @31:4
+    branch L7 b3 b1
+  b1 31:30
+    L5 = use int 0 @31:30
+    goto b2
+  b2 31:30
+    return L5
+  b3 31:13
+    L8 = use L2 @31:19
+    L9 = / i64 int 100, L8 @31:13
+    L5 = use L9 @31:13
+    goto b2
+fn 9 case5 params=5 locals=12 body=0 limits=2 ret=i64 at=34:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 36:4
+    L6 = use L2 @36:4
+    L7 = neg lit int 100 @36:8
+    L8 = convert fit i64 L7 @36:8
+    L9 = > dyn L6, L8 @36:4
+    branch L9 b3 b1
+  b1 36:30
+    L5 = use int 0 @36:30
+    goto b2
+  b2 36:30
+    return L5
+  b3 36:15
+    L10 = use L2 @36:19
+    L11 = - i64 int 0, L10 @36:15
+    L5 = use L11 @36:15
+    goto b2
+fn 10 case6 params=5 locals=13 body=0 limits=2 ret=i64 at=39:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 41:4
+    L6 = use L2 @41:4
+    L7 = >= dyn L6, int 0 @41:4
+    branch L7 b4 b1
+  b1 41:50
+    L5 = use int 0 @41:50
+    goto b2
+  b2 41:50
+    return L5
+  b3 41:25
+    L10 = use L2 @41:25
+    L11 = castint u8 L10 @41:25
+    L12 = castint i64 L11 @41:25
+    L5 = use L12 @41:25
+    goto b2
+  b4 41:14
+    L8 = use L2 @41:14
+    L9 = < dyn L8, int 256 @41:14
+    branch L9 b3 b1
+fn 11 case7 params=5 locals=7 body=0 limits=2 ret=i64 at=44:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 46:1
+    L5 = use L2 @46:1
+    L6 = + i64 L5, int 1 @46:1
+    return L6
+fn 12 case8 params=5 locals=7 body=0 limits=2 ret=i64 at=49:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 51:1
+    L5 = use L2 @51:5
+    L6 = - i64 int 0, L5 @51:1
+    return L6
+fn 13 case9 params=5 locals=7 body=0 limits=2 ret=i64 at=54:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 56:1
+    L5 = use L2 @56:7
+    L6 = / i64 int 100, L5 @56:1
+    return L6
+fn 14 case10 params=5 locals=7 body=0 limits=2 ret=i64 at=59:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 61:1
+    L5 = use L2 @61:7
+    L6 = % i64 int 100, L5 @61:1
+    return L6
+fn 15 case11 params=5 locals=8 body=0 limits=2 ret=i64 at=64:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 66:2
+    L5 = use L2 @66:2
+    L6 = castint u8 L5 @66:2
+    L7 = castint i64 L6 @66:2
+    return L7
+fn 16 case12 params=5 locals=8 body=0 limits=2 ret=i64 at=69:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 71:1
+    L5 = use L2 @71:6
+    L6 = << lit int 1, L5 @71:1
+    L7 = convert fit i64 L6 @71:1
+    return L7
+fn 17 case13 params=5 locals=11 body=0 limits=2 ret=i64 at=74:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 10=i64
+  copies 
+  b0 76:4
+    L6 = use L1 @76:4
+    L7 = len L0 @76:8
+    L8 = < dyn L6, L7 @76:4
+    branch L8 b3 b1
+  b1 76:32
+    L5 = use int 0 @76:32
+    goto b2
+  b2 76:32
+    return L5
+  b3 76:17
+    L9 = use L1 @76:20
+    L10 = use L0[L9] @76:17
+    L5 = use L10 @76:17
+    goto b2
+fn 18 case14 params=5 locals=9 body=0 limits=2 ret=i64 at=79:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 8=i64
+  copies 
+  b0 81:4
+    L6 = len L0 @81:4
+    L7 = > dyn L6, int 2 @81:4
+    branch L7 b3 b1
+  b1 81:32
+    L5 = use int 0 @81:32
+    goto b2
+  b2 81:32
+    return L5
+  b3 81:17
+    L8 = use L0[int 2] @81:17
+    L5 = use L8 @81:17
+    goto b2
+fn 19 case15 params=5 locals=11 body=0 limits=2 ret=i64 at=84:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 10=i64
+  copies 
+  b0 86:4
+    L6 = len L0 @86:4
+    L7 = == dyn L6, int 0 @86:4
+    branch L7 b3 b1
+  b1 86:18
+    goto b2
+  b2 87:2
+    L8 = len L0 @87:5
+    L9 = - usize L8, int 1 @87:5
+    L10 = use L0[L9] @87:2
+    return L10
+  b3 86:18
+    return int 0
+  b4 86:18
+    goto b2
+fn 20 case16 params=5 locals=12 body=0 limits=2 ret=i64 at=90:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 11=i64
+  copies 
+  b0 92:4
+    L6 = len L0 @92:4
+    L7 = == dyn L6, int 0 @92:4
+    branch L7 b3 b1
+  b1 92:18
+    goto b2
+  b2 93:2
+    L8 = use L1 @93:5
+    L9 = len L0 @93:9
+    L10 = % usize L8, L9 @93:5
+    L11 = use L0[L10] @93:2
+    return L11
+  b3 92:18
+    return int 0
+  b4 92:18
+    goto b2
+fn 21 case17 params=5 locals=16 body=0 limits=2 ret=i64 at=96:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=s 11=x
+  once 
+  scalars _ usize i64 _ _
+  hints 11=i64
+  copies 
+  b0 99:11
+    L5 = use int 0 @98:9
+    L6 = use L5 @98:9
+    L7 = use L0 @99:11
+    L8 = use int 0 @99:11
+    L9 = len L7 @99:11
+    goto b1
+  b1 99:11
+    L10 = < dyn L8, L9 @99:11
+    branch L10 b2 b4
+  b2 99:16
+    L11 = use L7[L8] @99:11
+    L12 = use L6 @99:20
+    L13 = use L11 @99:25
+    L14 = +% i64 L12, L13 @99:20
+    L6 = use L14 @99:16
+    goto b3
+  b3 99:2
+    L8 = + usize L8, int 1 @99:2
+    goto b1
+  b4 100:2
+    L15 = use L6 @100:2
+    return L15
+fn 22 case18 params=5 locals=17 body=0 limits=2 ret=i64 at=103:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=s 11=k
+  once 
+  scalars _ usize i64 _ _
+  hints 8=usize 9=usize 11=usize 14=i64
+  copies 
+  b0 106:14
+    L5 = use int 0 @105:9
+    L6 = use L5 @105:9
+    L7 = len L0 @106:14
+    L8 = use int 0 @106:14
+    L9 = use L7 @106:14
+    goto b1
+  b1 106:14
+    L10 = < dyn L8, L9 @106:14
+    branch L10 b2 b4
+  b2 106:23
+    L11 = use L8 @106:14
+    L12 = use L6 @106:27
+    L13 = use L11 @106:35
+    L14 = use L0[L13] @106:32
+    L15 = +% i64 L12, L14 @106:27
+    L6 = use L15 @106:23
+    goto b3
+  b3 106:2
+    L8 = succ usize L8 @106:2
+    goto b1
+  b4 107:2
+    L16 = use L6 @107:2
+    return L16
+fn 23 case19 params=5 locals=18 body=0 limits=2 ret=i64 at=110:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=s 8=k
+  once 
+  scalars _ usize i64 _ _
+  hints 8=usize 14=i64 16=usize
+  copies 
+  b0 114:2
+    L5 = use int 0 @112:9
+    L6 = use L5 @112:9
+    L7 = use int 0 @113:17
+    L8 = use L7 @113:17
+    goto b1
+  b1 114:8
+    L9 = use L8 @114:8
+    L10 = len L0 @114:12
+    L11 = < dyn L9, L10 @114:8
+    branch L11 b3 b2
+  b2 118:2
+    L17 = use L6 @118:2
+    return L17
+  b3 116:2
+    L12 = use L6 @115:6
+    L13 = use L8 @115:14
+    L14 = use L0[L13] @115:11
+    L15 = +% i64 L12, L14 @115:6
+    L6 = use L15 @115:2
+    L16 = use L8 @116:7
+    L8 = + usize L16, int 1 @116:2
+    goto b1
+fn 24 case20 params=5 locals=19 body=0 limits=2 ret=i64 at=121:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=len 8=s 13=k
+  once 
+  scalars _ usize i64 _ _
+  hints 6=usize 10=usize 11=usize 13=usize 16=i64
+  copies 
+  b0 125:14
+    L5 = len L0 @123:11
+    L6 = use L5 @123:11
+    L7 = use int 0 @124:10
+    L8 = use L7 @124:10
+    L9 = use L6 @125:14
+    L10 = use int 0 @125:14
+    L11 = use L9 @125:14
+    goto b1
+  b1 125:14
+    L12 = < dyn L10, L11 @125:14
+    branch L12 b2 b4
+  b2 125:20
+    L13 = use L10 @125:14
+    L14 = use L8 @125:24
+    L15 = use L13 @125:32
+    L16 = use L0[L15] @125:29
+    L17 = +% i64 L14, L16 @125:24
+    L8 = use L17 @125:20
+    goto b3
+  b3 125:2
+    L10 = succ usize L10 @125:2
+    goto b1
+  b4 126:2
+    L18 = use L8 @126:2
+    return L18
+fn 25 case21 params=5 locals=8 body=0 limits=2 ret=i64 at=129:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 7=i64
+  copies 
+  b0 132:2
+    L5 = array[int 1, int 2, int 3] @131:17
+    L6 = use L5 @131:17
+    L7 = use L6[int 2] @132:2
+    return L7
+fn 26 case22 params=5 locals=10 body=0 limits=2 ret=i64 at=135:1
+  names 0=xs 1=i 2=n 3=p 4=g 7=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 138:2
+    L5 = array[int 1, int 2, int 255] @137:23
+    L6 = convert elems(fit u8) L5 @137:16
+    L7 = use L6 @137:16
+    L8 = len L7 @138:2
+    L9 = castint i64 L8 @138:2
+    return L9
+fn 27 case23 params=5 locals=13 body=0 limits=2 ret=i64 at=141:1
+  names 0=xs 1=i 2=n 3=p 4=g 10=v
+  once 
+  scalars _ usize i64 _ _
+  hints 7=opt2 10=i64
+  copies 
+  b0 143:14
+    L5 = use L0 @143:7
+    L6 = use L1 @143:14
+    L7 = get L5, L6 @143:14
+    L9 = is 1 L7 @143:14
+    branch L9 b3 b2
+  b1 143:1
+    return L8
+  b2 144:13
+    L12 = is 0 L7 @144:13
+    branch L12 b5 b4
+  b3 144:13
+    L10 = use L7.0 @143:14
+    L11 = use L10 @144:13
+    L8 = use L11 @144:13
+    goto b1
+  b4 143:1
+    panic "no arm of this `match` matched the value"
+  b5 145:10
+    L8 = use int 0 @145:10
+    goto b1
+fn 28 case24 params=5 locals=13 body=0 limits=2 ret=i64 at=149:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 151:4
+    L6 = use L1 @151:4
+    L7 = len L3.1 @151:8
+    L8 = < dyn L6, L7 @151:4
+    branch L8 b4 b1
+  b1 151:52
+    L5 = use int 0 @151:52
+    goto b2
+  b2 151:52
+    L12 = convert fit i64 L5 @151:52
+    return L12
+  b3 151:41
+    L5 = use int 1 @151:41
+    goto b2
+  b4 151:22
+    L9 = use L1 @151:29
+    L10 = use L3.1[L9] @151:22
+    L11 = == dyn L10, str "a" @151:22
+    branch L11 b3 b1
+fn 29 case25 params=5 locals=7 body=0 limits=2 ret=i64 at=154:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 6=i64
+  copies 
+  b0 156:1
+    L5 = use L1 @156:4
+    L6 = use L0[L5] @156:1
+    return L6
+fn 30 case26 params=5 locals=6 body=0 limits=2 ret=i64 at=159:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 5=i64
+  copies 
+  b0 161:1
+    L5 = use L0[int 0] @161:1
+    return L5
+fn 31 case27 params=5 locals=11 body=0 limits=2 ret=i64 at=164:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 10=i64
+  copies 
+  b0 166:4
+    L6 = use L1 @166:4
+    L7 = len L0 @166:9
+    L8 = <= dyn L6, L7 @166:4
+    branch L8 b3 b1
+  b1 166:33
+    L5 = use int 0 @166:33
+    goto b2
+  b2 166:33
+    return L5
+  b3 166:18
+    L9 = use L1 @166:21
+    L10 = use L0[L9] @166:18
+    L5 = use L10 @166:18
+    goto b2
+fn 32 case28 params=5 locals=11 body=0 limits=2 ret=i64 at=169:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 10=i64
+  copies 
+  b0 171:4
+    L6 = use L2 @171:4
+    L7 = >= dyn L6, int 0 @171:4
+    branch L7 b3 b1
+  b1 171:37
+    L5 = use int 0 @171:37
+    goto b2
+  b2 171:37
+    return L5
+  b3 171:13
+    L8 = use L2 @171:16
+    L9 = castint usize L8 @171:16
+    L10 = use L0[L9] @171:13
+    L5 = use L10 @171:13
+    goto b2
+fn 33 case29 params=5 locals=14 body=0 limits=2 ret=i64 at=174:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 11=opt2 13=i64
+  copies 176:10
+  b0 177:5
+    L5 = use L0 @176:10
+    L6 = use L5 @176:10
+    L8 = use L1 @177:5
+    L9 = len L6 @177:9
+    L10 = < dyn L8, L9 @177:5
+    branch L10 b3 b1
+  b1 179:2
+    goto b2
+  b2 181:2
+    return int 0
+  b3 179:2
+    L11 = pop L6 @178:10
+    L12 = use L1 @179:12
+    L13 = use L6[L12] @179:9
+    return L13
+  b4 179:2
+    goto b2
+fn 34 case30 params=5 locals=14 body=0 limits=2 ret=i64 at=184:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 13=i64
+  copies 186:10
+  b0 187:5
+    L5 = use L0 @186:10
+    L6 = use L5 @186:10
+    L8 = use L1 @187:5
+    L9 = len L6 @187:9
+    L10 = < dyn L8, L9 @187:5
+    branch L10 b3 b1
+  b1 189:2
+    goto b2
+  b2 191:2
+    return int 0
+  b3 189:2
+    L11 = use L1 @188:5
+    L6[L11] = use int 7 @188:2
+    L12 = use L1 @189:12
+    L13 = use L6[L12] @189:9
+    return L13
+  b4 189:2
+    goto b2
+fn 35 case31 params=5 locals=12 body=0 limits=2 ret=i64 at=194:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 196:4
+    L6 = use L2 @196:4
+    L7 = > dyn L6, int 0 @196:4
+    branch L7 b3 b1
+  b1 196:12
+    goto b2
+  b2 197:2
+    L11 = use L2 @197:2
+    return L11
+  b3 196:19
+    L8 = use L2 @196:19
+    L9 = > dyn L8, int 0 @196:19
+    branch L9 b4 b5
+  b4 196:12
+    goto b2
+  b5 196:12
+    call panic(str "assertion failed") back[] -> L10 b6
+  b6 196:12
+    goto b4
+fn 36 case32 params=5 locals=9 body=0 limits=2 ret=i64 at=200:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 202:8
+    L5 = use L2 @202:8
+    L6 = > dyn L5, int 0 @202:8
+    branch L6 b1 b2
+  b1 203:2
+    L8 = use L2 @203:2
+    return L8
+  b2 202:1
+    call panic(str "assertion failed") back[] -> L7 b3
+  b3 202:1
+    goto b1
+fn 37 case33 params=5 locals=10 body=0 limits=2 ret=i64 at=206:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 208:4
+    L6 = use L2 @208:4
+    L7 = < dyn L6, int 0 @208:4
+    branch L7 b3 b1
+  b1 208:12
+    goto b2
+  b2 209:2
+    L9 = use L2 @209:2
+    return L9
+  b3 208:12
+    call panic(str "no") back[] -> L8 b4
+  b4 208:12
+    goto b2
+fn 38 case34 params=5 locals=10 body=0 limits=2 ret=i64 at=212:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 214:4
+    L6 = len L0 @214:4
+    L7 = > dyn L6, int 0 @214:4
+    branch L7 b3 b1
+  b1 214:36
+    L5 = use int 0 @214:36
+    goto b2
+  b2 214:36
+    return L5
+  b3 214:17
+    L8 = use L0 @214:23
+    call fn 0(L8) back[] -> L9 b4
+  b4 214:17
+    L5 = use L9 @214:17
+    goto b2
+fn 39 case35 params=5 locals=15 body=0 limits=2 ret=i64 at=217:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 219:4
+    L6 = use L1 @219:4
+    L7 = len L0 @219:8
+    L8 = < dyn L6, L7 @219:4
+    branch L8 b3 b1
+  b1 219:51
+    L5 = use int 0 @219:51
+    goto b2
+  b2 219:51
+    return L5
+  b3 219:17
+    L9 = use L0 @219:22
+    L10 = use L1 @219:26
+    call fn 1(L9, L10) back[] -> L11 b4
+  b4 219:32
+    L12 = use L0 @219:38
+    call fn 0(L12) back[] -> L13 b5
+  b5 219:17
+    L14 = +% i64 L11, L13 @219:17
+    L5 = use L14 @219:17
+    goto b2
+fn 40 case36 params=5 locals=7 body=0 limits=2 ret=i64 at=222:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 224:1
+    L5 = use L0 @224:7
+    call fn 0(L5) back[] -> L6 b1
+  b1 224:1
+    return L6
+fn 41 case37 params=5 locals=7 body=0 limits=2 ret=i64 at=227:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 229:1
+    L5 = use L0 @229:6
+    call fn 1(L5, int 0) back[] -> L6 b1
+  b1 229:1
+    return L6
+fn 42 case38 params=5 locals=7 body=0 limits=2 ret=i64 at=232:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 234:1
+    L5 = use L2 @234:7
+    call fn 2(L5) back[] -> L6 b1
+  b1 234:1
+    return L6
+fn 43 case39 params=5 locals=8 body=0 limits=2 ret=i64 at=237:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 239:1
+    L5 = use L4 @239:1
+    L6 = use L2 @239:3
+    call indirect L5(L6) back[] -> L7 b1
+  b1 239:1
+    return L7
+fn 44 case40 params=5 locals=15 body=0 limits=2 ret=i64 at=242:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 244:4
+    L6 = use L2 @244:4
+    L7 = <= dyn L6, int 0 @244:4
+    branch L7 b3 b1
+  b1 244:24
+    L8 = use L0 @244:31
+    L9 = use L1 @244:35
+    L10 = use L2 @244:38
+    L11 = - i64 L10, int 1 @244:38
+    L12 = use L3 @244:45
+    L13 = use L4 @244:48
+    call fn 44(L8, L9, L11, L12, L13) back[] -> L14 b4
+  b2 244:24
+    return L5
+  b3 244:13
+    L5 = use int 0 @244:13
+    goto b2
+  b4 244:24
+    L5 = use L14 @244:24
+    goto b2
+fn 45 main params=0 locals=0 body=0 limits=0 ret=_ at=247:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 247:11
+    return ()
+consts 
+main 45
+tests 
+struct 0 P (x, tags) record[] boxed=false
+enum 0 Tree boxed=true
+  variant Leaf ()
+  variant Node (_, _)
+dyn_from 1

@@ -1,0 +1,133 @@
+fn 0 first params=1 locals=4 body=1 limits=0 ret=i64 at=4:1
+  names 0=xs
+  once 
+  scalars _
+  hints 3=i64
+  copies 
+  b0 4:34
+    L1 = len L0 @4:34
+    L2 = > dyn L1, int 0 @4:34
+    branch L2 b1 b2
+  b1 4:47
+    L3 = use L0[int 0] @4:47
+    return L3
+  b2 4:34
+    panic "a `where` condition of `first` does not hold"
+fn 1 item params=2 locals=7 body=1 limits=0 ret=i64 at=5:1
+  names 0=xs 1=i
+  once 
+  scalars _ usize
+  hints 6=i64
+  copies 
+  b0 5:43
+    L2 = use L1 @5:43
+    L3 = len L0 @5:47
+    L4 = < dyn L2, L3 @5:43
+    branch L4 b1 b2
+  b1 5:56
+    L5 = use L1 @5:59
+    L6 = use L0[L5] @5:56
+    return L6
+  b2 5:43
+    panic "a `where` condition of `item` does not hold"
+fn 2 twice params=1 locals=3 body=0 limits=0 ret=i64 at=6:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 6:27
+    L1 = use L0 @6:27
+    L2 = * i64 L1, int 2 @6:27
+    return L2
+fn 3 say params=0 locals=6 body=0 limits=0 ret=_ at=7:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 7:23
+    call print(str "x") back[] -> L0 b1
+  b1 7:23
+    L1 = is 1 L0 @7:23
+    branch L1 b3 b2
+  b2 7:23
+    L4 = use L0.0 @7:23
+    L5 = ok L4 @7:23
+    return L5
+  b3 7:23
+    L2 = use L0.0 @7:23
+    L3 = err L2 @7:23
+    return L3
+fn 4 case0 params=5 locals=10 body=0 limits=4 ret=i64 at=9:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 8=i64
+  copies 
+  b0 11:1
+    L5 = use L2 @11:7
+    call fn 2(L5) back[] -> L6 b1
+  b1 11:1
+    L7 = use L1 @11:15
+    L8 = use L0[L7] @11:12
+    L9 = + i64 L6, L8 @11:1
+    return L9
+fn 5 case1 params=5 locals=10 body=0 limits=4 ret=i64 at=14:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 16:1
+    call fn 3() back[] -> L5 b1
+  b1 16:1
+    L7 = is 1 L5 @16:1
+    branch L7 b3 b2
+  b2 16:1
+    L8 = use L5.0 @16:1
+    L6 = use L8 @16:1
+    goto b4
+  b3 16:1
+    L6 = use () @16:1
+    goto b4
+  b4 17:2
+    L9 = use L2 @17:2
+    return L9
+fn 6 case2 params=5 locals=10 body=0 limits=4 ret=i64 at=20:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 22:1
+    call print(str "x") back[] -> L5 b1
+  b1 22:1
+    L7 = is 1 L5 @22:1
+    branch L7 b3 b2
+  b2 22:1
+    L8 = use L5.0 @22:1
+    L6 = use L8 @22:1
+    goto b4
+  b3 22:1
+    L6 = use () @22:1
+    goto b4
+  b4 23:2
+    L9 = use L2 @23:2
+    return L9
+fn 7 main params=0 locals=0 body=0 limits=0 ret=_ at=26:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 26:11
+    return ()
+consts 
+main 7
+tests 
+struct 0 P (x, tags) record[] boxed=false
+enum 0 Tree boxed=true
+  variant Leaf ()
+  variant Node (_, _)
+dyn_from 1

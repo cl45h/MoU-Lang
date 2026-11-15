@@ -1,0 +1,10 @@
+[0, 1, 4, 9, 16] 5
+[0, 1, 4, 9, 16] [0, 1, 4, 9, 16, 99]
+Some(99) Some(16) [0, 1, 4, 9]
+Some(0) Some(9) None None
+[Bag(items: [1, 2], name: "b"), Bag(items: [1, 2, 3], name: "b")] Bag(items: [1, 2], name: "b")
+None
+2 Some("b") Some("b") Some("a") None List(items: [])
+200000 19999900000
+[[], [7]]
+status 0

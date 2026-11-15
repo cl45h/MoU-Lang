@@ -1,0 +1,31 @@
+fn 0 big params=0 locals=0 body=0 limits=0 ret=f64 at=1:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 1:19
+    return float 1e30
+fn 1 constant A params=0 locals=2 body=0 limits=0 ret=_ at=2:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 2:14
+    call fn 0() back[] -> L0 b1
+  b1 2:14
+    L1 = castint i64 L0 @2:14
+    return L1
+fn 2 main params=0 locals=0 body=0 limits=0 ret=_ at=3:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 3:11
+    return ()
+consts 1
+main 2
+tests 
+dyn_from 0

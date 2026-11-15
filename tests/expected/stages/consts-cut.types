@@ -1,0 +1,8 @@
+checked 2 skipped_exprs 0
+const 0 i64
+e 1 0 1:17 t=floatlit w=- r=- d=- rw=false
+e 1 1 1:19 t=floatlit w=- r=- d=- rw=false
+e 1 2 2:14 t=i64 w=i64 r=- d=- rw=false
+e 1 3 2:14 t=f64 w=- r=fn 0 d=- rw=false
+e 1 5 3:11 t=() w=- r=- d=- rw=false
+unseen 0

@@ -1,0 +1,8 @@
+Config | host: str | port: u16 | tags: [str] | limit: i64?
+Pair[i64] | a: i64 | b: i64
+enum Shape 3
+  Dot 0 []
+  Circle 1 [":f64"]
+  Rect 2 ["w:f64", "h:f64"]
+i64 other 0 [Config]
+status 0

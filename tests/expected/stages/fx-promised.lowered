@@ -1,0 +1,120 @@
+fn 0 double params=1 locals=3 body=0 limits=0 ret=i64 at=3:1
+  names 0=x
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 3:28
+    L1 = use L0 @3:28
+    L2 = *% i64 L1, int 2 @3:28
+    return L2
+fn 1 risky params=1 locals=3 body=0 limits=0 ret=i64 at=4:1
+  names 0=x
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 4:27
+    L1 = use L0 @4:33
+    L2 = / i64 int 100, L1 @4:27
+    return L2
+fn 2 loud params=1 locals=9 body=0 limits=0 ret=i64 at=5:1
+  names 0=x 6=e
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 6:5
+    L1 = use L0 @6:16
+    L2 = format(L1) @6:14
+    call print(L2) back[] -> L3 b1
+  b1 6:5
+    L5 = is 1 L3 @6:5
+    branch L5 b3 b2
+  b2 6:31
+    L7 = use L3.0 @6:31
+    L4 = use L7 @6:31
+    goto b4
+  b3 6:31
+    L6 = use L3.0 @6:5
+    return int 0
+  b4 7:5
+    L8 = use L0 @7:5
+    return L8
+  b5 6:31
+    L4 = use () @6:31
+    goto b4
+fn 3 apply params=2 locals=5 body=0 limits=2 ret=i64 at=10:1
+  names 0=f 1=x
+  once 
+  scalars _ i64
+  hints 
+  copies 
+  b0 11:55
+    L2 = use L0 @11:55
+    L3 = use L1 @11:57
+    call indirect L2(L3) back[] -> L4 b1
+  b1 11:55
+    return L4
+fn 4 silent params=2 locals=5 body=0 limits=4 ret=i64 at=13:1
+  names 0=f 1=x
+  once 
+  scalars _ i64
+  hints 
+  copies 
+  b0 14:62
+    L2 = use L0 @14:62
+    L3 = use L1 @14:64
+    call indirect L2(L3) back[] -> L4 b1
+  b1 14:62
+    return L4
+fn 5 pick params=1 locals=4 body=0 limits=0 ret=_ at=16:1
+  names 0=n 2=a
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 18:5
+    L1 = use fn 1 @17:38
+    L2 = use L1 @17:38
+    L3 = use L2 @18:5
+    return L3
+fn 6 main params=0 locals=6 body=0 limits=0 ret=_ at=21:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 22:5
+    call fn 3(fn 1, int 1) back[] -> L0 b1
+  b1 23:5
+    L1 = closure 7() @23:11
+    call fn 3(L1, int 1) back[] -> L2 b2
+  b2 24:5
+    call fn 3(fn 0, int 1) back[] -> L3 b3
+  b3 25:5
+    call fn 4(fn 2, int 2) back[] -> L4 b4
+  b4 26:5
+    call fn 4(fn 0, int 2) back[] -> L5 b5
+  b5 26:5
+    return ()
+fn 7 closure params=1 locals=3 body=0 limits=0 ret=_ at=23:11
+  names 0=x
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 23:31
+    L1 = use L0 @23:31
+    L2 = + i64 L1, int 1 @23:31
+    return L2
+consts 
+main 6
+tests 
+dyn_from 0
+demand 1 2 17:38
+demand 1 2 22:11
+demand 7 2 23:11
+demand 0 2 24:11
+demand 2 6 25:12
+demand 0 6 26:12

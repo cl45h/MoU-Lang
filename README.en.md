@@ -68,9 +68,10 @@ With only a C compiler (`cc`), starting from the compiler written in Mou:
 ./mouc check examples/tour.mou
 ./mouc test file.mou
 ./mouc fmt file.mou
+tests/suite.sh
 ```
 
-`mouc` looks for the standard library and the runtime in the directory it is run from; from anywhere else, `MOU_HOME` says where Mou is. `run` compiles the program to a temporary file and runs it.
+`mouc` looks for the standard library and the runtime in the directory it is run from; from anywhere else, `MOU_HOME` says where Mou is. `run` compiles the program to a temporary file and runs it. `tests/suite.sh` runs the tests of the project with `mouc` and a C compiler: it compares what each program gives with what is kept in `tests/expected/`.
 
 With Rust, which also brings the interpreter, the interactive session, the fuzzer and the test suite of the project:
 

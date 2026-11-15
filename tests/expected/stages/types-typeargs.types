@@ -1,0 +1,46 @@
+error 7:20 expected a type
+error 8:28 argument: expected `i64`, found `str`
+error 9:20 unknown type `Nope`
+error 11:20 unknown type `k`
+checked 2 skipped_exprs 2
+instance 0 fn 0 [i64, =2] <i64, 2> (let T: _ false, let n: i64 false, let v: i64 false) -> [i64]
+e 0 0 1:59 t=['T] w=- r=- d=- rw=false
+e 0 1 2:20 t=[never; 0] w=['T] r=- d=- rw=false
+e 0 2 3:5 t=() w=- r=- d=- rw=false
+e 0 3 3:14 t=range i64 w=- r=- d=- rw=false
+e 0 4 3:14 t=intlit w=- r=- d=- rw=false
+e 0 5 3:17 t=i64 w=- r=local d=- rw=false
+e 0 6 3:21 t=() w=- r=builtin push d=- rw=false
+e 0 8 3:21 t=['T] w=- r=local d=- rw=false
+e 0 9 3:30 t='T w='T r=local d=- rw=false
+e 0 10 4:5 t=['T] w=- r=local d=- rw=false
+e 1 11 6:18 t=intlit w=- r=- d=- rw=false
+e 1 12 7:13 t=[_] w=- r=- d=- rw=false
+e 1 14 7:20 t=- w=_ r=- d=- rw=false
+e 1 15 7:23 t=intlit w=i64 r=- d=- rw=false
+e 1 16 7:26 t=intlit w=_ r=- d=- rw=false
+e 1 17 8:13 t=[i64] w=- r=generic 0 d=- rw=false
+e 1 19 8:20 t=- w=_ r=- d=- rw=false
+e 1 20 8:25 t=intlit w=i64 r=- d=- rw=false
+e 1 21 8:28 t=str w=- r=- d=- rw=false
+e 1 22 9:13 t=[_] w=- r=- d=- rw=false
+e 1 24 9:20 t=- w=_ r=- d=- rw=false
+e 1 25 9:26 t=intlit w=i64 r=- d=- rw=false
+e 1 26 9:29 t=intlit w=_ r=- d=- rw=false
+e 1 27 10:13 t=intlit w=- r=- d=- rw=false
+e 1 28 11:13 t=[_] w=- r=- d=- rw=false
+e 1 30 11:20 t=- w=_ r=- d=- rw=false
+e 1 31 11:23 t=intlit w=i64 r=- d=- rw=false
+e 1 32 11:26 t=intlit w=_ r=- d=- rw=false
+e 1 33 12:5 t=intlit w=- r=- d=- rw=false
+e 2 0 1:59 t=[i64] w=- r=- d=- rw=false
+e 2 1 2:20 t=[never; 0] w=[i64] r=- d=- rw=false
+e 2 2 3:5 t=() w=- r=- d=- rw=false
+e 2 3 3:14 t=range i64 w=- r=- d=- rw=false
+e 2 4 3:14 t=intlit w=- r=- d=- rw=false
+e 2 5 3:17 t=i64 w=- r=local d=- rw=false
+e 2 6 3:21 t=() w=- r=builtin push d=- rw=false
+e 2 8 3:21 t=[i64] w=- r=local d=- rw=false
+e 2 9 3:30 t=i64 w=i64 r=local d=- rw=false
+e 2 10 4:5 t=[i64] w=- r=local d=- rw=false
+unseen 0

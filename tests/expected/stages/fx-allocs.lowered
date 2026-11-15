@@ -1,0 +1,256 @@
+fn 0 first params=1 locals=4 body=1 limits=0 ret=i64 at=4:1
+  names 0=xs
+  once 
+  scalars _
+  hints 3=i64
+  copies 
+  b0 4:34
+    L1 = len L0 @4:34
+    L2 = > dyn L1, int 0 @4:34
+    branch L2 b1 b2
+  b1 4:47
+    L3 = use L0[int 0] @4:47
+    return L3
+  b2 4:34
+    panic "a `where` condition of `first` does not hold"
+fn 1 item params=2 locals=7 body=1 limits=0 ret=i64 at=5:1
+  names 0=xs 1=i
+  once 
+  scalars _ usize
+  hints 6=i64
+  copies 
+  b0 5:43
+    L2 = use L1 @5:43
+    L3 = len L0 @5:47
+    L4 = < dyn L2, L3 @5:43
+    branch L4 b1 b2
+  b1 5:56
+    L5 = use L1 @5:59
+    L6 = use L0[L5] @5:56
+    return L6
+  b2 5:43
+    panic "a `where` condition of `item` does not hold"
+fn 2 twice params=1 locals=3 body=0 limits=0 ret=i64 at=6:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 6:27
+    L1 = use L0 @6:27
+    L2 = * i64 L1, int 2 @6:27
+    return L2
+fn 3 say params=0 locals=6 body=0 limits=0 ret=_ at=7:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 7:23
+    call print(str "x") back[] -> L0 b1
+  b1 7:23
+    L1 = is 1 L0 @7:23
+    branch L1 b3 b2
+  b2 7:23
+    L4 = use L0.0 @7:23
+    L5 = ok L4 @7:23
+    return L5
+  b3 7:23
+    L2 = use L0.0 @7:23
+    L3 = err L2 @7:23
+    return L3
+fn 4 case0 params=5 locals=11 body=0 limits=1 ret=i64 at=9:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 9=i64
+  copies 
+  b0 11:1
+    L5 = use L2 @11:1
+    L6 = len L0 @11:5
+    L7 = castint i64 L6 @11:5
+    L8 = + i64 L5, L7 @11:1
+    L9 = use L3.0 @11:21
+    L10 = + i64 L8, L9 @11:1
+    return L10
+fn 5 case1 params=5 locals=9 body=0 limits=1 ret=i64 at=14:1
+  names 0=xs 1=i 2=n 3=p 4=g 7=q
+  once 
+  scalars _ usize i64 _ _
+  hints 8=i64
+  copies 
+  b0 17:2
+    L5 = array[] @16:14
+    L6 = struct 0(int 1, L5) @16:14
+    L7 = use L6 @16:14
+    L8 = use L7.0 @17:2
+    return L8
+fn 6 case2 params=5 locals=10 body=0 limits=1 ret=i64 at=20:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=s 8=t
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 24:2
+    L5 = use str "abc" @22:9
+    L6 = use L5 @22:9
+    L7 = use L6 @23:10
+    L8 = use L7 @23:10
+    L9 = use L2 @24:2
+    return L9
+fn 7 case3 params=5 locals=8 body=0 limits=1 ret=i64 at=27:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=t
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 30:2
+    L5 = use enum 0.0 @29:9
+    L6 = use L5 @29:9
+    L7 = use L2 @30:2
+    return L7
+fn 8 case4 params=5 locals=8 body=0 limits=1 ret=i64 at=33:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 36:2
+    L5 = array[int 1, int 2] @35:14
+    L6 = use L5 @35:14
+    L7 = use L2 @36:2
+    return L7
+fn 9 case5 params=5 locals=8 body=0 limits=1 ret=i64 at=39:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 42:2
+    L5 = repeat int 0, int 8 @41:10
+    L6 = use L5 @41:10
+    L7 = use L2 @42:2
+    return L7
+fn 10 case6 params=5 locals=8 body=0 limits=1 ret=i64 at=45:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 47:10
+  b0 48:2
+    L5 = use L0 @47:10
+    L6 = use L5 @47:10
+    L7 = use L2 @48:2
+    return L7
+fn 11 case7 params=5 locals=8 body=0 limits=1 ret=i64 at=51:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=q
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 53:9
+  b0 54:2
+    L5 = use L3 @53:9
+    L6 = use L5 @53:9
+    L7 = use L2 @54:2
+    return L7
+fn 12 case8 params=5 locals=9 body=0 limits=1 ret=i64 at=57:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 61:2
+    L5 = array[] @59:17
+    L6 = use L5 @59:17
+    L7 = push L6, int 1 @60:10
+    L8 = use L2 @61:2
+    return L8
+fn 13 case9 params=5 locals=9 body=0 limits=1 ret=i64 at=64:1
+  names 0=xs 1=i 2=n 3=p 4=g 7=s
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 67:2
+    L5 = use L2 @66:16
+    L6 = format("n is ", L5) @66:9
+    L7 = use L6 @66:9
+    L8 = use L2 @67:2
+    return L8
+fn 14 case10 params=5 locals=12 body=0 limits=1 ret=i64 at=70:1
+  names 0=xs 1=i 2=n 3=p 4=g 10=ys
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 73:2
+    L5 = use L0 @72:10
+    L6 = some int 0 @72:13
+    L7 = some int 1 @72:16
+    L8 = tuple(L6, L7, bool false) @72:16
+    L9 = slice L5, L8 @72:10
+    L10 = use L9 @72:10
+    L11 = use L2 @73:2
+    return L11
+fn 15 case11 params=5 locals=8 body=0 limits=1 ret=i64 at=76:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=t
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 79:2
+    L5 = enum 0.1(none, int 1) @78:25
+    L6 = use L5 @78:25
+    L7 = use L2 @79:2
+    return L7
+fn 16 case12 params=5 locals=8 body=0 limits=1 ret=i64 at=82:1
+  names 0=xs 1=i 2=n 3=p 4=g 6=h
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 85:2
+    L5 = closure 19(L2) @84:9
+    L6 = use L5 @84:9
+    L7 = use L2 @85:2
+    return L7
+fn 17 case13 params=5 locals=8 body=0 limits=1 ret=i64 at=88:1
+  names 0=xs 1=i 2=n 3=p 4=g
+  once 
+  scalars _ usize i64 _ _
+  hints 
+  copies 
+  b0 90:1
+    L5 = use L4 @90:1
+    L6 = use L2 @90:3
+    call indirect L5(L6) back[] -> L7 b1
+  b1 90:1
+    return L7
+fn 18 main params=0 locals=0 body=0 limits=0 ret=_ at=93:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 93:11
+    return ()
+fn 19 closure params=1 locals=5 body=0 limits=0 ret=_ at=84:9
+  names 0=k
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 84:29
+    L2 = capture 0 @84:33
+    L1 = use L0 @84:29
+    L3 = use L2 @84:33
+    L4 = + i64 L1, L3 @84:29
+    return L4
+consts 
+main 18
+tests 
+struct 0 P (x, tags) record[] boxed=false
+enum 0 Tree boxed=true
+  variant Leaf ()
+  variant Node (_, _)
+dyn_from 1

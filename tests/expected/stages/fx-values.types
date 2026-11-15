@@ -1,0 +1,118 @@
+checked 12 skipped_exprs 0
+e 1 0 9:42 t=i64 w=- r=- d=- rw=false
+e 1 1 9:44 t=i64 w=- r=- d=- rw=false
+e 1 2 9:44 t=i64 w=- r=field 0 d=- rw=false
+e 1 3 9:44 t=S0[] w=- r=local d=- rw=false
+e 1 4 9:54 t=i64 w=- r=field 0 d=- rw=false
+e 1 5 9:54 t=S0[] w=- r=local d=- rw=false
+e 1 6 10:44 t=i64 w=- r=- d=- rw=false
+e 1 7 10:46 t=i64 w=- r=- d=- rw=false
+e 1 8 10:46 t=i64 w=- r=field 0 d=- rw=false
+e 1 9 10:46 t=S1[] w=- r=local d=- rw=false
+e 1 10 10:55 t=i64 w=- r=field 1 d=- rw=false
+e 1 11 10:55 t=S1[] w=- r=local d=- rw=false
+e 1 12 13:44 t=i64 w=- r=- d=- rw=false
+e 1 13 13:46 t=i64 w=- r=- d=- rw=false
+e 1 14 13:46 t=fn(let i64) -> i64 w=- r=local d=- rw=false
+e 1 15 13:48 t=i64 w=i64 r=local d=- rw=false
+e 1 16 16:48 t=i64 w=- r=- d=- rw=false
+e 1 17 16:50 t=i64 w=- r=- d=- rw=false
+e 1 18 16:50 t=fn(let i64, let i64) -> i64 w=- r=local d=- rw=false
+e 1 19 16:52 t=i64 w=i64 r=local d=- rw=false
+e 1 20 16:55 t=i64 w=i64 r=local d=- rw=false
+e 1 21 19:33 t=i64 w=- r=- d=- rw=false
+e 1 22 19:35 t=i64 w=- r=dyn 0 false d=- rw=false
+e 1 24 19:35 t=dyn0[] w=- r=local d=- rw=false
+e 1 25 22:28 t=i64 w=- r=- d=- rw=false
+e 1 26 23:13 t=intlit w=- r=- d=- rw=false
+e 1 27 24:5 t=() w=- r=- d=- rw=false
+e 1 28 24:14 t=[i64] w=- r=local d=- rw=false
+e 1 29 24:19 t=i64 w=- r=local d=- rw=false
+e 1 30 24:23 t=i64 w=i64 r=- d=- rw=false
+e 1 31 24:23 t=i64 w=- r=local d=- rw=false
+e 1 32 24:28 t=i64 w=- r=fn 5 d=- rw=false
+e 1 34 24:35 t=i64 w=i64 r=local d=- rw=false
+e 1 35 25:5 t=() w=- r=- d=- rw=false
+e 1 36 25:14 t=range usize w=- r=- d=- rw=false
+e 1 37 25:14 t=intlit w=- r=- d=- rw=false
+e 1 38 25:17 t=usize w=- r=len d=- rw=false
+e 1 39 25:17 t=[i64] w=- r=local d=- rw=false
+e 1 40 25:26 t=i64 w=- r=local d=- rw=false
+e 1 41 25:30 t=i64 w=i64 r=- d=- rw=false
+e 1 42 25:30 t=i64 w=- r=local d=- rw=false
+e 1 43 25:35 t=i64 w=- r=fn 5 d=- rw=false
+e 1 45 25:42 t=i64 w=i64 r=- d=- rw=false
+e 1 46 25:42 t=[i64] w=- r=local d=- rw=false
+e 1 47 25:45 t=usize w=- r=local d=- rw=false
+e 1 48 26:5 t=i64 w=- r=local d=- rw=false
+e 1 49 30:31 t=i64 w=- r=- d=- rw=false
+e 1 50 30:33 t=i64 w=- r=- d=- rw=false
+e 1 51 30:33 t=fn() -> i64 w=- r=local d=- rw=false
+e 1 52 32:26 t=i64 w=- r=- d=- rw=false
+e 1 53 32:28 t=i64 w=- r=- d=- rw=false
+e 1 54 32:28 t=i64 w=- r=local d=- rw=false
+e 1 55 32:33 t=intlit w=- r=- d=- rw=false
+e 1 56 33:26 t=i64 w=- r=- d=- rw=false
+e 1 57 33:28 t=i64 w=- r=- d=- rw=false
+e 1 58 33:28 t=i64 w=- r=local d=- rw=false
+e 1 59 33:32 t=i64 w=- r=local d=- rw=false
+e 1 60 34:31 t=i64 w=- r=- d=- rw=false
+e 1 61 34:33 t=i64 w=- r=- d=- rw=false
+e 1 62 34:33 t=i64 w=- r=local d=- rw=false
+e 1 63 34:38 t=i64 w=- r=local d=- rw=false
+e 1 64 35:19 t=intlit w=- r=- d=- rw=false
+e 1 65 36:5 t=() w=- r=- d=- rw=false
+e 1 66 36:5 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 69 36:14 t=str w=str r=- d=- rw=false
+e 1 70 37:5 t=intlit w=- r=- d=- rw=false
+e 1 71 40:22 t=() w=- r=- d=- rw=false
+e 1 72 41:17 t=dyn0[] w=- r=- d=method Sq.area rw=false
+e 1 73 41:17 t=S0[] w=- r=struct 0 d=- rw=false
+e 1 75 41:20 t=intlit w=i64 r=- d=- rw=false
+e 1 76 42:16 t=dyn0[] w=- r=- d=method Wide.area rw=false
+e 1 77 42:16 t=S1[] w=- r=struct 1 d=- rw=false
+e 1 79 42:21 t=intlit w=i64 r=- d=- rw=false
+e 1 80 42:24 t=intlit w=i64 r=- d=- rw=false
+e 1 81 43:16 t=fn(let i64) -> i64 w=- r=- d=- rw=false
+e 1 82 43:36 t=i64 w=- r=- d=- rw=false
+e 1 83 43:36 t=i64 w=- r=local d=- rw=false
+e 1 84 43:41 t=intlit w=- r=- d=- rw=false
+e 1 85 44:5 t=() w=- r=- d=- rw=false
+e 1 86 45:17 t=task i64 w=- r=builtin task.spawn d=- rw=false
+e 1 88 45:17 t=scope w=- r=local d=- rw=false
+e 1 89 45:25 t=i64 w=- r=fn 8 d=- rw=false
+e 1 91 46:9 t=() w=- r=- d=- rw=false
+e 1 92 46:9 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 95 46:18 t=str w=str r=- d=- rw=false
+e 1 96 46:20 t=i64 w=- r=builtin task.wait d=- rw=false
+e 1 98 46:20 t=task i64 w=- r=local d=- rw=false
+e 1 99 48:5 t=() w=- r=- d=- rw=false
+e 1 100 48:5 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 103 48:14 t=str w=str r=- d=- rw=false
+e 1 104 48:16 t=i64 w=- r=fn 0 d=- rw=false
+e 1 106 48:22 t=fn(let i64) -> i64 w=fn(let i64) -> i64 r=fn 5 d=- rw=false
+e 1 107 48:30 t=intlit w=i64 r=- d=- rw=false
+e 1 108 48:35 t=i64 w=- r=fn 0 d=- rw=false
+e 1 110 48:41 t=fn(let i64) -> i64 w=fn(let i64) -> i64 r=fn 6 d=- rw=false
+e 1 111 48:49 t=intlit w=i64 r=- d=- rw=false
+e 1 112 48:54 t=i64 w=- r=fn 0 d=- rw=false
+e 1 114 48:60 t=fn(let i64) -> i64 w=fn(let i64) -> i64 r=local d=- rw=false
+e 1 115 48:66 t=intlit w=i64 r=- d=- rw=false
+e 1 116 48:71 t=i64 w=- r=fn 1 d=- rw=false
+e 1 118 48:76 t=fn(let i64, let i64) -> i64 w=fn(let i64, let i64) -> i64 r=fn 7 d=- rw=false
+e 1 119 48:81 t=intlit w=i64 r=- d=- rw=false
+e 1 120 49:5 t=() w=- r=- d=- rw=false
+e 1 121 49:5 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 124 49:14 t=str w=str r=- d=- rw=false
+e 1 125 49:16 t=i64 w=- r=fn 2 d=- rw=false
+e 1 127 49:24 t=dyn0[] w=dyn0[] r=local d=- rw=false
+e 1 128 49:33 t=i64 w=- r=fn 2 d=- rw=false
+e 1 130 49:41 t=dyn0[] w=dyn0[] r=local d=- rw=false
+e 1 131 49:49 t=i64 w=- r=fn 3 d=- rw=false
+e 1 133 49:55 t=[intlit; 2] w=[i64] r=- d=- rw=false
+e 1 134 49:56 t=intlit w=- r=- d=- rw=false
+e 1 135 49:59 t=intlit w=- r=- d=- rw=false
+e 1 136 49:65 t=i64 w=- r=fn 4 d=- rw=false
+e 1 138 49:69 t=fn() -> i64 w=fn() -> i64 r=- d=- rw=false
+e 1 139 49:83 t=intlit w=- r=- d=- rw=false
+unseen 0

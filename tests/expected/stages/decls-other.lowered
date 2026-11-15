@@ -1,0 +1,14 @@
+consts 
+main _
+tests 
+struct 0 Open (x) record[2] boxed=false
+struct 1 Hidden (y) record[2] boxed=false
+struct 2 Box (item) record[] boxed=false
+struct 3 dyn Shown (value, show) record[] boxed=true
+struct 4 dyn Secret (value, s) record[] boxed=true
+enum 0 Color boxed=false
+  variant Red ()
+  variant Green (_)
+  variant Blue (r, g)
+dyn_from 3
+sum 0 (6, 2, 2)

@@ -1,0 +1,296 @@
+fn 0 Sq.area params=1 locals=4 body=0 limits=0 ret=i64 at=9:21
+  names 0=self
+  once 
+  scalars rec0
+  hints 1=i64 2=i64
+  copies 
+  b0 9:44
+    L1 = use L0.0 @9:44
+    L2 = use L0.0 @9:54
+    L3 = *% i64 L1, L2 @9:44
+    return L3
+fn 1 Wide.area params=1 locals=4 body=0 limits=0 ret=i64 at=10:23
+  names 0=self
+  once 
+  scalars rec1
+  hints 1=i64 2=i64
+  copies 
+  b0 10:46
+    L1 = use L0.0 @10:46
+    L2 = use L0.1 @10:55
+    L3 = * i64 L1, L2 @10:46
+    return L3
+fn 2 apply params=2 locals=5 body=0 limits=5 ret=i64 at=12:1
+  names 0=f 1=x
+  once 
+  scalars _ i64
+  hints 
+  copies 
+  b0 13:46
+    L2 = use L0 @13:46
+    L3 = use L1 @13:48
+    call indirect L2(L3) back[] -> L4 b1
+  b1 13:46
+    return L4
+fn 3 both params=2 locals=6 body=0 limits=7 ret=i64 at=15:1
+  names 0=f 1=x
+  once 
+  scalars _ i64
+  hints 
+  copies 
+  b0 16:50
+    L2 = use L0 @16:50
+    L3 = use L1 @16:52
+    L4 = use L1 @16:55
+    call indirect L2(L3, L4) back[] -> L5 b1
+  b1 16:50
+    return L5
+fn 4 measure params=1 locals=4 body=0 limits=7 ret=i64 at=18:1
+  names 0=s
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 19:35
+    L1 = use L0.1 @19:35
+    L2 = use L0.0 @19:35
+    call indirect L1(L2) back[] -> L3 b1
+  b1 19:35
+    return L3
+fn 5 total params=1 locals=23 body=0 limits=6 ret=i64 at=21:1
+  names 0=xs 2=t 7=x 16=i
+  once 
+  scalars _
+  hints 7=i64 13=usize 14=usize 16=usize 19=i64
+  copies 
+  b0 24:14
+    L1 = use int 0 @23:13
+    L2 = use L1 @23:13
+    L3 = use L0 @24:14
+    L4 = use int 0 @24:14
+    L5 = len L3 @24:14
+    goto b1
+  b1 24:14
+    L6 = < dyn L4, L5 @24:14
+    branch L6 b2 b4
+  b2 24:28
+    L7 = use L3[L4] @24:14
+    L8 = use L2 @24:23
+    L9 = use L7 @24:35
+    call fn 7(L9) back[] -> L10 b5
+  b3 24:5
+    L4 = + usize L4, int 1 @24:5
+    goto b1
+  b4 25:17
+    L12 = len L0 @25:17
+    L13 = use int 0 @25:17
+    L14 = use L12 @25:17
+    goto b6
+  b5 24:19
+    L11 = +% i64 L8, L10 @24:23
+    L2 = use L11 @24:19
+    goto b3
+  b6 25:17
+    L15 = < dyn L13, L14 @25:17
+    branch L15 b7 b9
+  b7 25:35
+    L16 = use L13 @25:17
+    L17 = use L2 @25:30
+    L18 = use L16 @25:45
+    L19 = use L0[L18] @25:42
+    call fn 7(L19) back[] -> L20 b10
+  b8 25:5
+    L13 = succ usize L13 @25:5
+    goto b6
+  b9 26:5
+    L22 = use L2 @26:5
+    return L22
+  b10 25:26
+    L21 = +% i64 L17, L20 @25:30
+    L2 = use L21 @25:26
+    goto b8
+fn 6 run params=1 locals=3 body=0 limits=2 ret=i64 at=29:1
+  names 0=f
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 30:33
+    L1 = use L0 @30:33
+    call indirect L1() back[] -> L2 b1
+  b1 30:33
+    return L2
+fn 7 double params=1 locals=3 body=0 limits=0 ret=i64 at=32:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 32:28
+    L1 = use L0 @32:28
+    L2 = *% i64 L1, int 2 @32:28
+    return L2
+fn 8 square params=1 locals=4 body=0 limits=0 ret=i64 at=33:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 33:28
+    L1 = use L0 @33:28
+    L2 = use L0 @33:32
+    L3 = * i64 L1, L2 @33:28
+    return L3
+fn 9 add params=2 locals=5 body=0 limits=0 ret=i64 at=34:1
+  names 0=a 1=b
+  once 
+  scalars i64 i64
+  hints 
+  copies 
+  b0 34:33
+    L2 = use L0 @34:33
+    L3 = use L1 @34:38
+    L4 = +% i64 L2, L3 @34:33
+    return L4
+fn 10 shout params=0 locals=5 body=0 limits=0 ret=i64 at=35:1
+  names 3=e
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 36:5
+    call print(str "hola") back[] -> L0 b1
+  b1 36:5
+    L2 = is 1 L0 @36:5
+    branch L2 b3 b2
+  b2 36:5
+    L4 = use L0.0 @36:5
+    L1 = use L4 @36:5
+    goto b4
+  b3 36:5
+    L3 = use L0.0 @36:5
+    L1 = use () @36:5
+    goto b4
+  b4 37:5
+    return int 1
+fn 11 main params=0 locals=50 body=0 limits=0 ret=_ at=40:1
+  names 2=shape 5=wide 7=grow 9=s 12=t
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 44:5
+    L0 = struct 0(int 3) @41:20
+    L1 = struct 2(L0, fn 0) @41:17
+    L2 = use L1 @41:17
+    L3 = struct 1(int 2, int 5) @42:24
+    L4 = struct 2(L3, fn 1) @42:16
+    L5 = use L4 @42:16
+    L6 = closure 12() @43:16
+    L7 = use L6 @43:16
+    call native task.open() back[] -> L8 b1
+  b1 45:17
+    L9 = use L8 @44:5
+    L10 = closure 13() @45:17
+    call native task.spawn(L10) back[] -> L11 b2
+  b2 46:20
+    L12 = use L11 @45:17
+    L13 = use L12 @46:20
+    call native task.wait(L13) back[] -> L14 b3
+  b3 46:9
+    L15 = format(L14) @46:18
+    call print(L15) back[] -> L16 b4
+  b4 46:9
+    L17 = is 1 L16 @46:9
+    branch L17 b6 b5
+  b5 44:5
+    L21 = use L16.0 @46:9
+    call native task.close(L9) back[] -> L22 b8
+  b6 46:9
+    L18 = use L16.0 @46:9
+    L19 = err L18 @46:9
+    call native task.close(L9) back[] -> L20 b7
+  b7 46:9
+    return L19
+  b8 48:16
+    call fn 2(fn 7, int 4) back[] -> L23 b9
+  b9 48:35
+    call fn 2(fn 8, int 4) back[] -> L24 b10
+  b10 48:54
+    L25 = use L7 @48:60
+    call fn 2(L25, int 4) back[] -> L26 b11
+  b11 48:71
+    call fn 3(fn 9, int 2) back[] -> L27 b12
+  b12 48:5
+    L28 = format(L23, " ", L24, " ", L26, " ", L27) @48:14
+    call print(L28) back[] -> L29 b13
+  b13 48:5
+    L30 = is 1 L29 @48:5
+    branch L30 b15 b14
+  b14 49:16
+    L33 = use L29.0 @48:5
+    L34 = use L2 @49:24
+    call fn 4(L34) back[] -> L35 b16
+  b15 48:5
+    L31 = use L29.0 @48:5
+    L32 = err L31 @48:5
+    return L32
+  b16 49:33
+    L36 = use L5 @49:41
+    call fn 4(L36) back[] -> L37 b17
+  b17 49:49
+    L38 = array[int 1, int 2] @49:59
+    L39 = convert elems(fit i64) L38 @49:55
+    call fn 5(L39) back[] -> L40 b18
+  b18 49:65
+    L41 = closure 14() @49:69
+    call fn 6(L41) back[] -> L42 b19
+  b19 49:5
+    L43 = format(L35, " ", L37, " ", L40, " ", L42) @49:14
+    call print(L43) back[] -> L44 b20
+  b20 49:5
+    L45 = is 1 L44 @49:5
+    branch L45 b22 b21
+  b21 49:5
+    L48 = use L44.0 @49:5
+    L49 = ok L48 @49:5
+    return L49
+  b22 49:5
+    L46 = use L44.0 @49:5
+    L47 = err L46 @49:5
+    return L47
+fn 12 closure params=1 locals=3 body=0 limits=0 ret=_ at=43:16
+  names 0=n
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 43:36
+    L1 = use L0 @43:36
+    L2 = +% i64 L1, int 1 @43:36
+    return L2
+fn 13 task params=0 locals=1 body=0 limits=0 ret=_ at=45:17
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 45:25
+    call fn 10() back[] -> L0 b1
+  b1 45:25
+    return L0
+fn 14 closure params=0 locals=0 body=0 limits=0 ret=_ at=49:69
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 49:83
+    return int 7
+consts 
+main 11
+tests 
+struct 0 Sq (s) record[2] boxed=false
+struct 1 Wide (w, h) record[2 2] boxed=false
+struct 2 dyn Shape (value, area) record[] boxed=true
+dyn_from 2

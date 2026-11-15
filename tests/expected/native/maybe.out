@@ -1,0 +1,11 @@
+Some(Point(x: 3, y: 4)) None
+7
+true Point(x: 0, y: 0)
+Some(Point(x: 30, y: 7)) true Some(Point(x: 30, y: 7))
+Some(Point(x: 5, y: 10)) None
+Some((3, 4)) None
+4 5
+Some(Circle(3.0)) Some(Rect(2.0, 4.0)) None None
+33 [Some(Point(x: 3, y: 4)), None, Some(Point(x: 30, y: 7))]
+250000
+status 0

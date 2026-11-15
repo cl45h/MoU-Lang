@@ -1,0 +1,1 @@
+error 19:35 `measure` is `@nopanic`, but the function value or `dyn` method called here can be `Wide.area`, which can panic: `*` on `i64` can overflow here: use `*%` or `*|`, or check the range first (line 10 of its file)

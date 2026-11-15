@@ -1,0 +1,15 @@
+checked 2 skipped_exprs 0
+e 1 0 1:25 t=i64 w=- r=- d=- rw=false
+e 1 1 2:5 t=() w=- r=builtin assert d=- rw=false
+e 1 3 2:12 t=bool w=bool r=- d=- rw=false
+e 1 4 2:12 t=i64 w=- r=local d=- rw=false
+e 1 5 2:16 t=intlit w=- r=- d=- rw=false
+e 1 6 2:19 t=str w=str r=- d=- rw=false
+e 1 7 2:26 t=i64 w=- r=local d=- rw=false
+e 1 8 3:5 t=i64 w=- r=local d=- rw=false
+e 1 9 5:18 t=i64 w=- r=- d=- rw=false
+e 1 10 6:13 t=i64 w=- r=- d=- rw=false
+e 1 11 6:22 t=i64 w=- r=fn 0 d=- rw=false
+e 1 13 6:28 t=intlit w=i64 r=- d=- rw=false
+e 1 14 7:5 t=i64 w=- r=local d=- rw=false
+unseen 0

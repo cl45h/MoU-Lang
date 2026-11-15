@@ -1,0 +1,12 @@
+[true, true, false, true, false, true, false] [true, true, false, true, true, true] 7 false
+[1, 170141183460469231731687303715884105727, 3, 4] 170141183460469231731687303715884105726 Some(4) 3
+[5, -170141183460469231731687303715884105727] Some(-170141183460469231731687303715884105727) Some(5) None []
+[7]
+true true [1, 2]
+[1, 2, 3] [Some(1), None, Some(3)] [1.0, 2.5, 3.0] 6
+[4, 9, 16] [[0, 100], [4, 9, 16], [9]] [0, 1] 285
+Grid(cells: [true, false, true], sizes: [6, 8, 2], name: "g") Grid(cells: [false, true], sizes: [3, 4], name: "g")
+[Pair(a: 1, b: false), Pair(a: 41, b: false)] 42
+['a', 'ü', '→', 'z'] 4 [0.5, 0.5, 1.75, 2.0] 3.5
+1547 100
+status 101

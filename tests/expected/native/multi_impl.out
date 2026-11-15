@@ -1,0 +1,7 @@
+5 5 m 5.0 [5 m]
+5 5 m <5 m> 6 5|5 m
+[5, 5] ["5 m", "5 m"] [0.5]
+Meters(v: 7) Meters(v: 4) Meters(v: 2030) Meters(v: 9)
+Meters(v: -12)
+5 m 6 ["5 m", "5 m"] [5, 5] [0.5]
+status 0

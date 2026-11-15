@@ -1,0 +1,31 @@
+// A file without `main` whose functions are marked `@abi` is a library:
+// `caller.c` calls them by their names.
+import std.text
+
+let SCALE = 3
+
+fn fib(n: int) -> int {
+    if n < 2 { return n }
+    fib(n - 1) + fib(n - 2)
+}
+
+@abi
+pub fn mou_fib(n: i32) -> i64 { fib(n as int) }
+
+@abi
+pub fn mou_scaled(x: f64, up: bool) -> f64 {
+    if up { x * SCALE as f64 } else { x / SCALE as f64 }
+}
+
+@abi
+pub fn mou_letters(n: u8) -> usize {
+    var out = text.Builder.new()
+    for k in 0..(n as int) { out.add("ab") }
+    text.count(out.build()) as usize
+}
+
+@abi
+pub fn mou_even(n: i64) -> bool { n % 2 == 0 }
+
+@abi
+pub fn mou_nothing() {}

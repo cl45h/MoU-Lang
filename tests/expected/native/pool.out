@@ -1,0 +1,8 @@
+["a", "b", "c", "d"] ["d", "c", "b", "a"] 4
+["a", "c"] ["c", "a"] 2 false true
+["a", "c", "e"] None Some(Node(name: "e", prev: Some(Handle(index: 2, turn: 0)), next: None)) false true
+3 3 false
+["Rome", "Oslo", "LIMA", "Rome", "Oslo", "LIMA", "Rome"]
+2 None
+None Kyiv
+status 101

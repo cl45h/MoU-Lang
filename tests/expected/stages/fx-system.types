@@ -1,0 +1,17 @@
+checked 3 skipped_exprs 0
+e 1 0 2:25 t=() w=- r=- d=- rw=false
+e 1 1 2:27 t=() w=- r=- d=- rw=false
+e 1 2 2:36 t=range usize w=- r=- d=- rw=false
+e 1 3 2:36 t=intlit w=- r=- d=- rw=false
+e 1 4 2:39 t=usize w=- r=len d=- rw=false
+e 1 5 2:39 t=[i64] w=- r=local d=- rw=false
+e 1 6 2:48 t=i64 w=- r=- d=- rw=false
+e 1 7 2:48 t=[i64] w=- r=local d=- rw=false
+e 1 8 2:51 t=usize w=- r=local d=- rw=false
+e 1 9 2:56 t=intlit w=i64 r=- d=- rw=false
+e 1 10 3:24 t=() w=- r=- d=- rw=false
+e 1 11 3:26 t=() w=- r=builtin push d=- rw=false
+e 1 13 3:26 t=[i64] w=- r=local d=- rw=false
+e 1 14 3:34 t=intlit w=i64 r=- d=- rw=false
+e 1 15 4:11 t=() w=- r=- d=- rw=false
+unseen 0

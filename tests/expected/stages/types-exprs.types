@@ -1,0 +1,526 @@
+error 6:15 literal `300` is out of range for `u8`
+error 7:17 constant `EARLY` is used before its definition
+error 11:13 operator `+` cannot be applied to `integer literal` and `str`
+error 12:18 initializer: expected `str`, found `integer literal`
+error 13:13 undefined name `undefined_name`
+error 14:13 `Pair` is a type, not a value
+error 15:13 `helper` is a module, not a value
+error 16:13 operator `-` cannot be applied to `bool`
+error 17:13 operator `!` cannot be applied to `integer literal`
+error 18:13 operator `<` cannot be applied to `integer literal` and `str`
+error 19:13 operator `&&` cannot be applied to `bool` and `integer literal`
+error 20:17 array elements have different types: `integer literal` and `str`
+error 21:13 `if` branches have different types: `integer literal` and `str`
+error 22:17 literal `256` is out of range for `u8`
+error 23:17 literal `-129` is out of range for `i8`
+error 24:13 invalid integer literal `99999999999999999999999999999999999999999999`
+error 25:13 invalid integer literal `0x`
+error 26:13 cannot cast `integer literal` to `str`
+error 27:13 cannot cast `str` to `i64`
+error 30:13 type `(integer literal, integer literal)` has no field `5`
+error 33:13 a `str` is UTF-8 and can only be indexed with a range
+error 35:20 an index must be an integer or a range, found `bool`
+error 36:13 a value of type `integer literal` cannot be indexed
+error 37:5 cannot assign to `a`: it is immutable (declare it with `var` or take it as `mut`)
+error 38:5 cannot assign to constant `BIG`
+error 39:5 this expression cannot be assigned to
+error 40:12 expected return type `i64`, found `str`
+error 44:5 `break` outside of a loop
+error 45:5 `continue` outside of a loop
+error 46:14 cannot iterate over a value of type `integer literal`
+error 47:19 a tuple pattern cannot match a value of type `i64`
+error 48:20 the pattern of a `for` must always match
+error 48:20 pattern `Some` cannot match a value of type `i64`
+error 49:11 condition: expected `bool`, found `integer literal`
+error 51:9 `break` values have different types (found `str`)
+error 52:18 only `loop` can `break` with a value
+error 53:13 this `match` on `usize` does not cover every value: add a `_` arm
+error 54:14 `match` arms have different types: `integer literal` and `str`
+error 56:5 this `match` does not cover every value: missing `Green`, `Blue`
+error 58:25 `Color` has no variant `Purple`
+error 59:29 `Blue` has 1 fields, the pattern has 2
+error 61:5 this `match` does not cover every value: missing `false`
+error 62:5 this `match` does not cover every value: missing `None`
+error 63:33 the tuple has 2 elements, the pattern has 3
+error 65:31 `Color` has no variant `Pair`
+error 67:19 this pattern may not match: use `if let` or `match`
+error 68:18 a tuple pattern cannot match a value of type `i64`
+error 69:26 `Pair` has no field `zz`
+error 70:29 pattern does not mention every field of `Pair`: add `..`
+error 72:18 every alternative of an `|` pattern must bind the same names
+error 73:9 a pattern of type `str` cannot match a value of type `integer literal`
+error 77:22 a slice pattern cannot match a value of type `integer literal`
+error 79:22 pattern `Some` cannot match a value of type `integer literal`
+error 80:21 initializer: expected `i64`, found `None`
+error 82:15 `?` on an optional needs a function that returns an optional
+error 83:15 `?` on a result needs a function that declares an error (`! E`)
+error 84:18 `catch` needs a result with an error, found `integer literal`
+error 85:19 the `catch` handler must produce `str`, found `integer literal`
+error 86:5 this result may hold an error and is ignored: use `?` or `catch`
+error 91:5 expected 0 arguments, found 1
+error 92:5 expected 1 arguments, found 0
+error 93:5 expected 1 arguments, found 2
+error 94:20 argument 1 is named `xs`, not `wrong`
+error 95:13 argument: expected `[i64]`, found `str`
+error 97:5 a value of type `i64` cannot be called
+error 98:5 expected 2 arguments, found 1
+error 99:13 argument: expected `str`, found `integer literal`
+error 100:13 argument 1 is named `a`, not `b`
+error 100:19 argument 2 is named `b`, not `a`
+error 101:5 variant `Color.Blue` needs arguments
+error 102:5 expected 0 arguments, found 1
+error 103:5 `Color` has no variant `Nope`
+error 104:16 argument: expected `i64`, found `str`
+error 105:5 `private` is private to the module `helper`: it is not declared `pub`
+error 106:5 the module `helper` has no `missing`
+error 107:20 argument: expected `i64`, found `str`
+error 108:5 `Hidden` is private to the module `helper`: it is not declared `pub`
+error 110:5 expected 0 arguments, found 1
+error 111:5 the method `secret` is private to the module `helper`: it is not declared `pub`
+error 112:5 type `helper.Point` has no method `nothing`
+error 113:5 expected 0 arguments, found 1
+error 114:5 `sum` takes `self`: call it on a value of type `helper.Point`
+error 115:5 `origin` has no `self`: call it as `helper.Point.origin(...)`
+error 116:15 this parameter is `mut`: write `mut p` at the call
+error 117:19 cannot use `r` as `mut`: it is not mutable
+error 118:19 a `mut` access needs a variable, field or element
+error 119:19 argument is marked `mut` but the parameter is not `mut`
+error 120:19 argument is marked `own` but the parameter only borrows
+error 121:19 cannot move `r`: it is borrowed (take the parameter as `own`)
+error 122:19 `own` moves a whole variable: this expression is not one
+error 122:19 argument: expected `Pair`, found `i64`
+error 123:26 `p` is accessed twice by this call and one access is `mut`: exclusivity requires they do not overlap
+error 123:26 argument is marked `mut` but the parameter is not `mut`
+error 124:22 `p` is accessed twice by this call and one access is `mut`: exclusivity requires they do not overlap
+error 125:5 cannot assign to `r`: it is immutable (declare it with `var` or take it as `mut`)
+error 126:11 assignment: expected `i64`, found `str`
+error 127:5 operator `+` cannot be applied to `str` and `integer literal`
+error 129:5 `Some` takes 1 argument, found 2
+error 130:5 `Some` takes 1 argument, found 0
+error 131:11 argument: expected `str`, found `integer literal`
+error 132:12 argument: expected `bool`, found `integer literal`
+error 133:18 argument: expected `str`, found `integer literal`
+error 134:5 `unsafe` is only allowed in a module that starts with `@profile(system)`
+error 135:5 the contexts there are for now are `with alloc = arena { }`, `with io = lines { }`, `with err = lines { }`, `with input = lines { }`, `with args = list { }`, `with env = pairs { }` and `with files = pairs { }`
+error 145:5 a fixed-size array cannot change its length: give the variable the type `[i64]`
+error 147:5 the element type of this array is not known: give the variable a type, as in `var xs: [int] = []`
+error 149:13 argument: expected `i64`, found `str`
+error 150:5 expected 0 arguments, found 1
+error 151:20 argument: expected `usize`, found `str`
+error 153:19 cannot modify `zs` while a `for` iterates over it
+error 154:34 cannot use `zs` as `mut`: a closure captures it by value
+error 156:15 the type of the parameter `a` is not known here: write it, as in `fn(a: int)`
+error 159:12 expected return type `()`, found `integer literal`
+error 163:13 `?` would return an error of type `io.Error`, but the function declares `str`
+error 165:12 undefined name `Error`
+error 169:13 `?` on a result needs a function that declares an error (`! E`)
+error 170:5 this result may hold an error and is ignored: use `?` or `catch`
+error 175:13 `?` on a result needs a function that declares an error (`! E`)
+error 183:13 `u8.truncate` takes one whole number
+error 184:25 `u8.saturate` takes a whole number, found `f64`
+error 185:17 initializer: expected `u8`, found `u8?`
+error 187:13 undefined name `f64`
+error 199:5 to go over a `Odd` with `for`, its method `iter` has to take `self` and nothing else
+error 200:14 cannot iterate over a value of type `Plain`
+checked 20 skipped_exprs 0
+const 0 i64
+const 1 u8
+const 2 i64
+const 3 i64
+e 1 0 1048579:31 t=i64 w=- r=- d=- rw=false
+e 1 1 1048579:33 t=i64 w=- r=local d=- rw=false
+e 1 2 1048580:27 t=i64 w=- r=- d=- rw=false
+e 1 3 1048580:29 t=i64 w=- r=local d=- rw=false
+e 1 4 1048583:29 t=i64 w=- r=- d=- rw=false
+e 1 5 1048583:31 t=i64 w=- r=- d=- rw=false
+e 1 6 1048583:31 t=i64 w=- r=field 0 d=- rw=false
+e 1 7 1048583:31 t=S0[] w=- r=local d=- rw=false
+e 1 8 1048583:40 t=i64 w=- r=field 1 d=- rw=false
+e 1 9 1048583:40 t=S0[] w=- r=local d=- rw=false
+e 1 10 1048584:28 t=i64 w=- r=- d=- rw=false
+e 1 11 1048584:30 t=i64 w=- r=field 0 d=- rw=false
+e 1 12 1048584:30 t=S0[] w=- r=local d=- rw=false
+e 1 13 1048585:30 t=S0[] w=- r=- d=- rw=false
+e 1 14 1048585:32 t=S0[] w=- r=struct 0 d=- rw=false
+e 1 16 1048585:38 t=intlit w=i64 r=- d=- rw=false
+e 1 17 1048585:41 t=intlit w=i64 r=- d=- rw=false
+e 1 18 1048587:22 t=intlit w=i64 r=- d=- rw=false
+e 1 19 6:15 t=intlit w=u8 r=- d=- rw=false
+e 1 20 7:17 t=_ w=i64 r=- d=- rw=false
+e 1 21 7:17 t=_ w=- r=- d=- rw=false
+e 1 22 7:25 t=intlit w=- r=- d=- rw=false
+e 1 23 8:18 t=intlit w=i64 r=- d=- rw=false
+e 1 24 10:20 t=never w=- r=- d=- rw=false
+e 1 25 11:13 t=_ w=- r=- d=- rw=false
+e 1 26 11:13 t=intlit w=- r=- d=- rw=false
+e 1 27 11:17 t=str w=- r=- d=- rw=false
+e 1 28 12:18 t=intlit w=- r=- d=- rw=false
+e 1 29 13:13 t=_ w=- r=- d=- rw=false
+e 1 30 14:13 t=_ w=- r=- d=- rw=false
+e 1 31 15:13 t=_ w=- r=- d=- rw=false
+e 1 32 16:13 t=_ w=- r=- d=- rw=false
+e 1 33 16:14 t=bool w=- r=- d=- rw=false
+e 1 34 17:13 t=_ w=- r=- d=- rw=false
+e 1 35 17:14 t=intlit w=- r=- d=- rw=false
+e 1 36 18:13 t=_ w=- r=- d=- rw=false
+e 1 37 18:13 t=intlit w=- r=- d=- rw=false
+e 1 38 18:17 t=str w=- r=- d=- rw=false
+e 1 39 19:13 t=_ w=- r=- d=- rw=false
+e 1 40 19:13 t=bool w=- r=- d=- rw=false
+e 1 41 19:21 t=intlit w=- r=- d=- rw=false
+e 1 42 20:13 t=[floatlit; 3] w=- r=- d=- rw=false
+e 1 43 20:14 t=intlit w=- r=- d=- rw=false
+e 1 44 20:17 t=str w=- r=- d=- rw=false
+e 1 45 20:22 t=floatlit w=- r=- d=- rw=false
+e 1 46 21:13 t=_ w=- r=- d=- rw=false
+e 1 47 21:16 t=bool w=bool r=- d=- rw=false
+e 1 48 21:23 t=intlit w=- r=- d=- rw=false
+e 1 49 21:32 t=str w=- r=- d=- rw=false
+e 1 50 21:34 t=str w=- r=- d=- rw=false
+e 1 51 22:17 t=intlit w=u8 r=- d=- rw=false
+e 1 52 23:17 t=intlit w=i8 r=- d=- rw=false
+e 1 53 23:18 t=intlit w=- r=- d=- rw=false
+e 1 54 24:13 t=intlit w=- r=- d=- rw=false
+e 1 55 25:13 t=intlit w=- r=- d=- rw=false
+e 1 56 26:13 t=str w=- r=- d=- rw=false
+e 1 57 26:13 t=intlit w=- r=- d=- rw=false
+e 1 58 27:13 t=i64 w=- r=- d=- rw=false
+e 1 59 27:13 t=str w=- r=- d=- rw=false
+e 1 60 28:13 t=i64 w=- r=- d=- rw=false
+e 1 61 28:13 t=char w=- r=- d=- rw=false
+e 1 62 29:13 t=i64 w=- r=- d=- rw=false
+e 1 63 29:13 t=floatlit w=- r=- d=- rw=false
+e 1 64 30:13 t=_ w=- r=field 5 d=- rw=false
+e 1 65 30:13 t=(intlit, intlit) w=- r=- d=- rw=false
+e 1 66 30:14 t=intlit w=- r=- d=- rw=false
+e 1 67 30:17 t=intlit w=- r=- d=- rw=false
+e 1 68 31:13 t=intlit w=- r=field 0 d=- rw=false
+e 1 69 31:13 t=(intlit, intlit) w=- r=- d=- rw=false
+e 1 70 31:14 t=intlit w=- r=- d=- rw=false
+e 1 71 31:17 t=intlit w=- r=- d=- rw=false
+e 1 72 32:13 t=_ w=- r=- d=- rw=false
+e 1 73 32:13 t=_ w=- r=local d=- rw=false
+e 1 74 33:13 t=_ w=- r=- d=- rw=false
+e 1 75 33:13 t=str w=- r=- d=- rw=false
+e 1 76 33:19 t=intlit w=- r=- d=- rw=false
+e 1 77 34:13 t=str w=- r=- d=- rw=false
+e 1 78 34:13 t=str w=- r=- d=- rw=false
+e 1 79 34:19 t=range intlit w=- r=- d=- rw=false
+e 1 80 34:19 t=intlit w=- r=- d=- rw=false
+e 1 81 34:22 t=intlit w=- r=- d=- rw=false
+e 1 82 35:13 t=_ w=- r=- d=- rw=false
+e 1 83 35:13 t=[intlit; 2] w=- r=- d=- rw=false
+e 1 84 35:14 t=intlit w=- r=- d=- rw=false
+e 1 85 35:17 t=intlit w=- r=- d=- rw=false
+e 1 86 35:20 t=bool w=- r=- d=- rw=false
+e 1 87 36:13 t=_ w=- r=- d=- rw=false
+e 1 88 36:13 t=intlit w=- r=- d=- rw=false
+e 1 89 36:15 t=intlit w=- r=- d=- rw=false
+e 1 90 37:5 t=_ w=- r=local d=- rw=false
+e 1 91 37:9 t=intlit w=_ r=- d=- rw=false
+e 1 92 38:5 t=u8 w=- r=const 1 d=- rw=false
+e 1 93 38:11 t=intlit w=u8 r=- d=- rw=false
+e 1 94 39:5 t=intlit w=- r=- d=- rw=false
+e 1 95 39:5 t=intlit w=- r=- d=- rw=false
+e 1 96 39:9 t=intlit w=- r=- d=- rw=false
+e 1 97 39:13 t=intlit w=_ r=- d=- rw=false
+e 1 98 40:5 t=never w=- r=- d=- rw=false
+e 1 99 40:12 t=str w=- r=- d=- rw=false
+e 1 100 43:30 t=intlit w=- r=- d=- rw=false
+e 1 101 44:5 t=never w=- r=- d=- rw=false
+e 1 102 45:5 t=never w=- r=- d=- rw=false
+e 1 103 46:5 t=() w=- r=- d=- rw=false
+e 1 104 46:14 t=intlit w=- r=- d=- rw=false
+e 1 105 47:5 t=() w=- r=- d=- rw=false
+e 1 106 47:19 t=[i64] w=- r=local d=- rw=false
+e 1 107 48:5 t=() w=- r=- d=- rw=false
+e 1 108 48:20 t=[i64] w=- r=local d=- rw=false
+e 1 109 49:5 t=() w=- r=- d=- rw=false
+e 1 110 49:11 t=intlit w=- r=- d=- rw=false
+e 1 111 50:13 t=intlit w=- r=- d=- rw=false
+e 1 112 50:20 t=never w=- r=- d=- rw=false
+e 1 113 50:26 t=intlit w=- r=- d=- rw=false
+e 1 114 51:9 t=never w=- r=- d=- rw=false
+e 1 115 51:15 t=str w=- r=- d=- rw=false
+e 1 116 52:5 t=() w=- r=- d=- rw=false
+e 1 117 52:11 t=bool w=bool r=- d=- rw=false
+e 1 118 52:18 t=never w=- r=- d=- rw=false
+e 1 119 52:24 t=intlit w=- r=- d=- rw=false
+e 1 120 53:13 t=intlit w=- r=- d=- rw=false
+e 1 121 53:19 t=usize w=- r=len d=- rw=false
+e 1 122 53:19 t=[i64] w=- r=local d=- rw=false
+e 1 123 53:28 t=intlit w=- r=- d=- rw=false
+e 1 124 53:33 t=intlit w=- r=- d=- rw=false
+e 1 125 54:9 t=intlit w=- r=- d=- rw=false
+e 1 126 54:14 t=str w=- r=- d=- rw=false
+e 1 127 55:15 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 129 56:5 t=intlit w=- r=- d=- rw=false
+e 1 130 56:11 t=E1[] w=- r=local d=- rw=false
+e 1 131 56:30 t=intlit w=- r=- d=- rw=false
+e 1 132 57:5 t=intlit w=- r=- d=- rw=false
+e 1 133 57:11 t=E1[] w=- r=local d=- rw=false
+e 1 134 57:30 t=intlit w=- r=- d=- rw=false
+e 1 135 58:25 t=intlit w=- r=- d=- rw=false
+e 1 136 59:29 t=intlit w=- r=- d=- rw=false
+e 1 137 60:14 t=intlit w=- r=- d=- rw=false
+e 1 138 61:5 t=intlit w=- r=- d=- rw=false
+e 1 139 61:11 t=bool w=- r=- d=- rw=false
+e 1 140 61:18 t=bool w=- r=- d=- rw=false
+e 1 141 61:26 t=intlit w=- r=- d=- rw=false
+e 1 142 62:5 t=i64 w=- r=- d=- rw=false
+e 1 143 62:11 t=intlit? w=- r=some d=- rw=false
+e 1 145 62:16 t=intlit w=- r=- d=- rw=false
+e 1 146 62:32 t=i64 w=- r=local d=- rw=false
+e 1 147 63:5 t=intlit w=- r=- d=- rw=false
+e 1 148 63:11 t=(intlit, intlit) w=- r=- d=- rw=false
+e 1 149 63:12 t=intlit w=- r=- d=- rw=false
+e 1 150 63:15 t=intlit w=- r=- d=- rw=false
+e 1 151 63:33 t=intlit w=- r=- d=- rw=false
+e 1 152 64:14 t=intlit w=- r=- d=- rw=false
+e 1 153 65:5 t=intlit w=- r=- d=- rw=false
+e 1 154 65:11 t=E1[] w=- r=local d=- rw=false
+e 1 155 65:31 t=intlit w=- r=- d=- rw=false
+e 1 156 66:14 t=intlit w=- r=- d=- rw=false
+e 1 157 67:19 t=intlit? w=- r=some d=- rw=false
+e 1 159 67:24 t=intlit w=- r=- d=- rw=false
+e 1 160 68:18 t=intlit w=- r=- d=- rw=false
+e 1 161 69:26 t=S2[] w=- r=struct 2 d=- rw=false
+e 1 163 69:31 t=intlit w=i64 r=- d=- rw=false
+e 1 164 69:34 t=str w=str r=- d=- rw=false
+e 1 165 70:29 t=S2[] w=- r=struct 2 d=- rw=false
+e 1 167 70:34 t=intlit w=i64 r=- d=- rw=false
+e 1 168 70:37 t=str w=str r=- d=- rw=false
+e 1 169 71:5 t=intlit w=- r=- d=- rw=false
+e 1 170 71:11 t=intlit w=- r=- d=- rw=false
+e 1 171 71:15 t=intlit w=- r=- d=- rw=false
+e 1 172 71:19 t=intlit w=- r=- d=- rw=false
+e 1 173 71:24 t=intlit w=- r=- d=- rw=false
+e 1 174 72:13 t=intlit w=- r=- d=- rw=false
+e 1 175 72:18 t=intlit w=- r=- d=- rw=false
+e 1 176 73:9 t=str w=- r=- d=- rw=false
+e 1 177 73:16 t=intlit w=- r=- d=- rw=false
+e 1 178 74:14 t=intlit w=- r=- d=- rw=false
+e 1 179 75:5 t=intlit w=- r=- d=- rw=false
+e 1 180 75:11 t=[i64] w=- r=local d=- rw=false
+e 1 181 75:26 t=intlit w=- r=- d=- rw=false
+e 1 182 76:14 t=intlit w=- r=- d=- rw=false
+e 1 183 77:5 t=intlit w=- r=- d=- rw=false
+e 1 184 77:11 t=intlit w=- r=- d=- rw=false
+e 1 185 77:22 t=intlit w=- r=- d=- rw=false
+e 1 186 78:14 t=intlit w=- r=- d=- rw=false
+e 1 187 79:5 t=() w=- r=- d=- rw=false
+e 1 188 79:22 t=intlit w=- r=- d=- rw=false
+e 1 189 80:21 t=never? w=- r=none d=- rw=false
+e 1 190 81:21 t=never? w=i64? r=none d=- rw=false
+e 1 191 82:15 t=i64 w=- r=- d=- rw=false
+e 1 192 82:15 t=i64? w=- r=local d=- rw=false
+e 1 193 83:15 t=str w=- r=- d=- rw=false
+e 1 194 83:15 t=str ! io.Error w=- r=builtin io.read_file d=- rw=false
+e 1 197 83:28 t=str w=str r=- d=- rw=false
+e 1 198 84:18 t=_ w=- r=- d=- rw=false
+e 1 199 84:18 t=intlit w=- r=- d=- rw=false
+e 1 200 84:30 t=intlit w=- r=- d=- rw=false
+e 1 201 85:19 t=_ w=- r=- d=- rw=false
+e 1 202 85:19 t=str ! io.Error w=- r=builtin io.read_file d=- rw=false
+e 1 205 85:32 t=str w=str r=- d=- rw=false
+e 1 206 85:47 t=intlit w=- r=- d=- rw=false
+e 1 207 86:5 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 210 86:14 t=str w=str r=- d=- rw=false
+e 1 211 87:5 t=intlit w=- r=- d=- rw=false
+e 1 212 90:52 t=intlit w=- r=- d=- rw=false
+e 1 213 91:5 t=i64 w=- r=fn 2 d=- rw=false
+e 1 215 91:12 t=intlit w=- r=- d=- rw=false
+e 1 216 92:5 t=i64 w=- r=fn 3 d=- rw=false
+e 1 218 93:5 t=i64 w=- r=fn 3 d=- rw=false
+e 1 220 93:17 t=[intlit; 1] w=[i64] r=- d=- rw=false
+e 1 221 93:18 t=intlit w=- r=- d=- rw=false
+e 1 222 93:29 t=intlit w=- r=- d=- rw=false
+e 1 223 94:5 t=i64 w=- r=fn 3 d=- rw=false
+e 1 225 94:20 t=[intlit; 1] w=[i64] r=- d=- rw=false
+e 1 226 94:21 t=intlit w=- r=- d=- rw=false
+e 1 227 95:5 t=i64 w=- r=fn 3 d=- rw=false
+e 1 229 95:13 t=str w=- r=- d=- rw=false
+e 1 230 96:13 t=intlit w=- r=- d=- rw=false
+e 1 231 97:5 t=_ w=- r=- d=- rw=false
+e 1 232 97:5 t=i64 w=- r=local d=- rw=false
+e 1 233 97:7 t=intlit w=- r=- d=- rw=false
+e 1 234 98:5 t=S2[] w=- r=struct 2 d=- rw=false
+e 1 236 98:10 t=intlit w=i64 r=- d=- rw=false
+e 1 237 99:5 t=S2[] w=- r=struct 2 d=- rw=false
+e 1 239 99:10 t=intlit w=i64 r=- d=- rw=false
+e 1 240 99:13 t=intlit w=- r=- d=- rw=false
+e 1 241 100:5 t=S2[] w=- r=struct 2 d=- rw=false
+e 1 243 100:13 t=intlit w=i64 r=- d=- rw=false
+e 1 244 100:19 t=str w=str r=- d=- rw=false
+e 1 245 101:5 t=_ w=- r=- d=- rw=false
+e 1 247 102:5 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 250 102:15 t=intlit w=- r=- d=- rw=false
+e 1 251 103:5 t=_ w=- r=- d=- rw=false
+e 1 253 104:5 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 256 104:16 t=str w=- r=- d=- rw=false
+e 1 257 105:5 t=_ w=- r=- d=- rw=false
+e 1 260 105:20 t=intlit w=- r=- d=- rw=false
+e 1 261 106:5 t=_ w=- r=- d=- rw=false
+e 1 264 106:20 t=intlit w=- r=- d=- rw=false
+e 1 265 107:5 t=i64 w=- r=fn 0 d=- rw=false
+e 1 268 107:20 t=str w=- r=- d=- rw=false
+e 1 269 108:5 t=_ w=- r=- d=- rw=false
+e 1 272 108:19 t=intlit w=- r=- d=- rw=false
+e 1 273 109:14 t=S0[] w=- r=struct 0 d=- rw=false
+e 1 276 109:27 t=intlit w=i64 r=- d=- rw=false
+e 1 277 109:30 t=intlit w=i64 r=- d=- rw=false
+e 1 278 110:5 t=i64 w=- r=method helper.Point.sum d=- rw=false
+e 1 280 110:5 t=S0[] w=- r=local d=- rw=false
+e 1 281 110:12 t=intlit w=- r=- d=- rw=false
+e 1 282 111:5 t=i64 w=- r=method helper.Point.secret d=- rw=false
+e 1 284 111:5 t=S0[] w=- r=local d=- rw=false
+e 1 285 112:5 t=_ w=- r=- d=- rw=false
+e 1 287 112:5 t=S0[] w=- r=local d=- rw=false
+e 1 288 113:5 t=S0[] w=- r=assoc helper.Point.origin d=- rw=false
+e 1 292 113:25 t=intlit w=- r=- d=- rw=false
+e 1 293 114:5 t=_ w=- r=- d=- rw=false
+e 1 297 115:5 t=S0[] w=- r=method helper.Point.origin d=- rw=false
+e 1 299 115:5 t=S0[] w=- r=local d=- rw=false
+e 1 300 116:5 t=() w=- r=fn 5 d=- rw=false
+e 1 302 116:15 t=S2[] w=S2[] r=local d=- rw=false
+e 1 303 117:5 t=() w=- r=fn 5 d=- rw=false
+e 1 305 117:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 306 118:5 t=() w=- r=fn 5 d=- rw=false
+e 1 308 118:19 t=S2[] w=S2[] r=struct 2 d=- rw=false
+e 1 310 118:24 t=intlit w=i64 r=- d=- rw=false
+e 1 311 118:27 t=str w=str r=- d=- rw=false
+e 1 312 119:5 t=() w=- r=fn 6 d=- rw=false
+e 1 314 119:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 315 120:5 t=() w=- r=fn 6 d=- rw=false
+e 1 317 120:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 318 121:5 t=() w=- r=fn 7 d=- rw=false
+e 1 320 121:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 321 122:5 t=() w=- r=fn 7 d=- rw=false
+e 1 323 122:19 t=i64 w=- r=field 0 d=- rw=false
+e 1 324 122:19 t=S2[] w=- r=local d=- rw=false
+e 1 325 123:5 t=() w=- r=fn 8 d=- rw=false
+e 1 327 123:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 328 123:26 t=S2[] w=S2[] r=local d=- rw=false
+e 1 329 124:5 t=() w=- r=fn 8 d=- rw=false
+e 1 331 124:19 t=S2[] w=S2[] r=local d=- rw=false
+e 1 332 124:22 t=S2[] w=S2[] r=local d=- rw=false
+e 1 333 125:5 t=i64 w=- r=field 0 d=- rw=false
+e 1 334 125:5 t=S2[] w=- r=local d=- rw=false
+e 1 335 125:11 t=intlit w=i64 r=- d=- rw=false
+e 1 336 126:5 t=i64 w=- r=field 0 d=- rw=false
+e 1 337 126:5 t=S2[] w=- r=local d=- rw=false
+e 1 338 126:11 t=str w=- r=- d=- rw=false
+e 1 339 127:5 t=str w=- r=field 1 d=- rw=false
+e 1 340 127:5 t=S2[] w=- r=local d=- rw=false
+e 1 341 127:12 t=intlit w=- r=- d=- rw=false
+e 1 342 128:5 t=() w=- r=fn 9 d=- rw=false
+e 1 344 129:5 t=intlit? w=- r=some d=- rw=false
+e 1 346 129:10 t=intlit w=- r=- d=- rw=false
+e 1 348 130:5 t=_? w=- r=some d=- rw=false
+e 1 350 131:5 t=never w=- r=builtin panic d=- rw=false
+e 1 352 131:11 t=intlit w=- r=- d=- rw=false
+e 1 353 132:5 t=() w=- r=builtin assert d=- rw=false
+e 1 355 132:12 t=intlit w=- r=- d=- rw=false
+e 1 356 133:5 t=() w=- r=builtin assert d=- rw=false
+e 1 358 133:12 t=bool w=bool r=- d=- rw=false
+e 1 359 133:18 t=intlit w=- r=- d=- rw=false
+e 1 360 134:5 t=intlit w=- r=- d=- rw=false
+e 1 361 134:14 t=intlit w=- r=- d=- rw=false
+e 1 362 135:5 t=intlit w=- r=- d=- rw=false
+e 1 364 135:18 t=intlit w=- r=- d=- rw=false
+e 1 365 136:5 t=intlit w=- r=- d=- rw=false
+e 1 366 139:27 t=() w=- r=- d=- rw=false
+e 1 367 140:23 t=() w=- r=- d=- rw=false
+e 1 368 141:27 t=() w=- r=- d=- rw=false
+e 1 369 142:36 t=() w=- r=- d=- rw=false
+e 1 370 143:14 t=never w=- r=- d=- rw=false
+e 1 371 144:14 t=[intlit; 2] w=- r=- d=- rw=false
+e 1 372 144:15 t=intlit w=- r=- d=- rw=false
+e 1 373 144:18 t=intlit w=- r=- d=- rw=false
+e 1 374 145:5 t=_ w=- r=- d=- rw=false
+e 1 376 145:5 t=[i64; 2] w=- r=local d=- rw=false
+e 1 377 145:13 t=intlit w=- r=- d=- rw=false
+e 1 378 146:14 t=[never; 0] w=- r=- d=- rw=false
+e 1 379 147:5 t=_ w=- r=- d=- rw=false
+e 1 381 147:5 t=[never] w=- r=local d=- rw=false
+e 1 382 147:13 t=intlit w=- r=- d=- rw=false
+e 1 383 148:21 t=[never; 0] w=[i64] r=- d=- rw=false
+e 1 384 149:5 t=() w=- r=builtin push d=- rw=false
+e 1 386 149:5 t=[i64] w=- r=local d=- rw=false
+e 1 387 149:13 t=str w=- r=- d=- rw=false
+e 1 388 150:5 t=i64? w=- r=builtin pop d=- rw=false
+e 1 390 150:5 t=[i64] w=- r=local d=- rw=false
+e 1 391 150:12 t=intlit w=- r=- d=- rw=false
+e 1 392 151:13 t=i64? w=- r=builtin get d=- rw=false
+e 1 394 151:13 t=[i64] w=- r=local d=- rw=false
+e 1 395 151:20 t=str w=- r=- d=- rw=false
+e 1 396 152:25 t=[intlit; 3] w=[i64; 3] r=- d=- rw=false
+e 1 397 152:26 t=intlit w=- r=- d=- rw=false
+e 1 398 152:29 t=intlit w=- r=- d=- rw=false
+e 1 399 152:32 t=intlit w=- r=- d=- rw=false
+e 1 400 153:5 t=() w=- r=- d=- rw=false
+e 1 401 153:14 t=[i64] w=- r=local d=- rw=false
+e 1 402 153:19 t=() w=- r=builtin push d=- rw=false
+e 1 404 153:19 t=[i64] w=- r=local d=- rw=false
+e 1 405 153:27 t=i64 w=i64 r=local d=- rw=false
+e 1 406 154:14 t=fn(let i64) -> i64 w=- r=- d=- rw=false
+e 1 407 154:34 t=() w=- r=builtin push d=- rw=false
+e 1 409 154:34 t=[i64] w=- r=local d=- rw=false
+e 1 410 154:42 t=i64 w=i64 r=local d=- rw=false
+e 1 411 155:9 t=i64 w=- r=local d=- rw=false
+e 1 412 156:15 t=fn(let _) -> _ w=- r=- d=- rw=false
+e 1 413 156:23 t=_ w=- r=local d=- rw=false
+e 1 414 157:15 t=never? w=- r=none d=- rw=false
+e 1 415 158:16 t=[never; 0] w=- r=- d=- rw=false
+e 1 416 159:5 t=never w=- r=- d=- rw=false
+e 1 417 159:12 t=intlit w=- r=- d=- rw=false
+e 1 418 162:25 t=never w=- r=- d=- rw=false
+e 1 419 163:13 t=str w=- r=- d=- rw=false
+e 1 420 163:13 t=str ! io.Error w=- r=builtin io.read_file d=- rw=false
+e 1 423 163:26 t=str w=str r=- d=- rw=false
+e 1 424 164:5 t=() w=- r=- d=- rw=false
+e 1 425 164:8 t=bool w=bool r=- d=- rw=false
+e 1 426 164:8 t=str w=- r=local d=- rw=false
+e 1 427 164:13 t=str w=- r=- d=- rw=false
+e 1 428 164:18 t=never w=- r=- d=- rw=false
+e 1 429 164:25 t=str w=- r=- d=- rw=false
+e 1 430 165:5 t=never w=- r=- d=- rw=false
+e 1 431 165:12 t=_ w=- r=- d=- rw=false
+e 1 432 165:12 t=_ w=- r=- d=- rw=false
+e 1 433 165:18 t=str w=- r=- d=- rw=false
+e 1 434 168:21 t=i64 w=- r=- d=- rw=false
+e 1 435 169:13 t=i64 w=- r=- d=- rw=false
+e 1 436 169:13 t=i64 ! str w=- r=fn 10 d=- rw=false
+e 1 438 170:5 t=i64 ! str w=- r=fn 10 d=- rw=false
+e 1 440 171:5 t=i64 w=- r=local d=- rw=false
+e 1 441 174:18 t=never? w=- r=- d=- rw=false
+e 1 442 175:13 t=i64 w=- r=- d=- rw=false
+e 1 443 175:13 t=i64 ! str w=- r=fn 10 d=- rw=false
+e 1 445 176:13 t=intlit w=- r=- d=- rw=false
+e 1 446 176:13 t=intlit? w=- r=some d=- rw=false
+e 1 448 176:18 t=intlit w=- r=- d=- rw=false
+e 1 449 177:5 t=never? w=- r=none d=- rw=false
+e 1 450 180:11 t=() w=- r=- d=- rw=false
+e 1 451 182:32 t=() w=- r=- d=- rw=false
+e 1 452 183:13 t=_ w=- r=- d=- rw=false
+e 1 455 183:25 t=i64 w=- r=local d=- rw=false
+e 1 456 183:28 t=intlit w=- r=- d=- rw=false
+e 1 457 184:13 t=u8 w=- r=builtin int.saturate d=- rw=false
+e 1 460 184:25 t=f64 w=- r=local d=- rw=false
+e 1 461 185:17 t=u8? w=- r=builtin int.try_from d=- rw=false
+e 1 464 185:29 t=i64 w=- r=local d=- rw=false
+e 1 465 186:17 t=i8 w=i8 r=builtin int.truncate d=- rw=false
+e 1 468 186:29 t=i64 w=- r=local d=- rw=false
+e 1 469 187:13 t=_ w=- r=- d=- rw=false
+e 1 471 187:13 t=_ w=- r=- d=- rw=false
+e 1 472 187:26 t=i64 w=- r=local d=- rw=false
+e 1 473 193:32 t=[i64; 1] w=- r=- d=- rw=false
+e 1 474 193:34 t=[i64; 1] w=- r=- d=- rw=false
+e 1 475 193:35 t=i64 w=- r=field 0 d=- rw=false
+e 1 476 193:35 t=S3[] w=- r=local d=- rw=false
+e 1 477 198:28 t=() w=- r=- d=- rw=false
+e 1 478 199:5 t=() w=- r=- d=- rw=false
+e 1 479 199:14 t=S3[] w=- r=local d=- rw=false
+e 1 480 200:5 t=() w=- r=- d=- rw=false
+e 1 481 200:14 t=S4[] w=- r=local d=- rw=false
+unseen 0

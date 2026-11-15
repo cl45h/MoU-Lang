@@ -1,0 +1,96 @@
+error 4:1 what `Named` requires must be a trait
+error 4:1 trait `Named` cannot require itself
+error 5:5 method `name` is already declared by `Named`
+error 11:1 trait `Self2` cannot require itself
+error 16:1 `P` already implements `Into[str]`
+error 16:24 method `into` is already defined for `P`
+error 19:1 `Q` already implements `Into`: to implement it again, every `impl` must give the trait type arguments without type parameters
+error 20:1 method `name` of `P` does not have the signature `Named` declares
+error 20:1 method `first` of `P` does not have the signature `Named` declares
+error 25:1 an `impl` for `Q[i64]` is not supported: a generic `impl` must be for a generic struct or enum and name all of its parameters, as in `impl[T] List[T]`
+error 26:1 `impl Named for Opt` is missing the method `conv2`
+error 26:1 `impl Named for Opt` is missing the method `first`
+error 26:1 `impl Named for Opt` is missing the method `peek`
+error 26:1 `Named` requires `Into[str]`, which `Opt` does not implement: add `impl Into[str] for Opt`
+error 27:5 type parameter `T` is already a parameter of the `impl`
+error 28:5 method `name` is already defined for `Opt`
+error 30:1 method `show` of `P` does not have the signature `Shown` declares
+error 31:1 `Secret` is private to the module `other`: it is not declared `pub`
+error 33:1 method `show` of `[i64]` does not have the signature `Shown` declares
+error 38:5 method `get` is already defined for `P`
+error 39:5 unknown type `Missing`
+error 40:1 unknown type `Missing`
+error 42:1 an `impl` for `Opt[i64]` is not supported: a generic `impl` must be for a generic struct or enum and name all of its parameters, as in `impl[T] List[T]`
+error 43:1 trait `Into` takes 1 type arguments, found 0
+error 43:1 method `into` of `other.Open` does not have the signature `Into[_]` declares
+checked 26 skipped_exprs 0
+skipped trait Wide (region and value parameters)
+skipped conformance of `P` to a trait that is not checked
+skipped conformance of `P` to a trait that is not checked
+skipped generic impl
+e 0 0 3:30 t=('T, 'T) w=- r=- d=- rw=false
+e 0 1 3:32 t=('T, 'T) w=- r=- d=- rw=false
+e 0 2 3:33 t='T w=- r=- d=- rw=false
+e 0 4 3:33 t='Self w=- r=local d=- rw=false
+e 0 5 3:46 t='T w=- r=- d=- rw=false
+e 0 7 3:46 t='Self w=- r=local d=- rw=false
+e 0 14 18:47 t='T w=- r=- d=- rw=false
+e 0 15 18:49 t='T w=- r=field 0 d=- rw=false
+e 0 16 18:49 t=S4['T] w=- r=local d=- rw=false
+e 0 17 19:51 t=intlit w=- r=- d=- rw=false
+e 0 18 19:53 t=intlit w=- r=- d=- rw=false
+e 0 21 21:33 t='V w=- r=- d=- rw=false
+e 0 22 21:35 t='V w=- r=local d=- rw=false
+e 0 23 22:43 t='W w=- r=- d=- rw=false
+e 0 24 22:45 t='W w=- r=local d=- rw=false
+e 0 33 26:49 t=str w=- r=- d=- rw=false
+e 0 34 26:51 t=str w=- r=- d=- rw=false
+e 0 35 27:33 t='T w=- r=- d=- rw=false
+e 0 36 27:35 t='T w=- r=local d=- rw=false
+e 0 37 28:26 t=str w=- r=- d=- rw=false
+e 0 38 28:28 t=str w=- r=- d=- rw=false
+e 0 46 34:47 t='T w=- r=- d=- rw=false
+e 0 47 34:49 t='T w=- r=field 0 d=- rw=false
+e 0 48 34:49 t=S4['T] w=- r=local d=- rw=false
+e 0 49 35:30 t=S4['T] w=- r=- d=- rw=false
+e 0 50 35:32 t=S4['T] w=- r=struct 4 d=- rw=false
+e 0 52 35:34 t='T w='T r=local d=- rw=false
+e 0 53 36:44 t=S4['U] w=- r=- d=- rw=false
+e 0 54 36:46 t=S4['U] w=- r=struct 4 d=- rw=false
+e 0 56 36:48 t='U w='U r=- d=- rw=false
+e 0 57 36:48 t=fn(let 'T) -> 'U w=- r=local d=- rw=false
+e 0 58 36:50 t='T w='T r=field 0 d=- rw=false
+e 0 59 36:50 t=S4['T] w=- r=local d=- rw=false
+e 1 8 15:45 t=str w=- r=- d=- rw=false
+e 1 9 15:47 t=str w=- r=- d=- rw=false
+e 1 10 16:45 t=str w=- r=- d=- rw=false
+e 1 11 16:47 t=str w=- r=- d=- rw=false
+e 1 12 17:45 t=intlit w=- r=- d=- rw=false
+e 1 13 17:47 t=intlit w=- r=- d=- rw=false
+e 1 19 20:41 t=intlit w=- r=- d=- rw=false
+e 1 20 20:43 t=intlit w=- r=- d=- rw=false
+e 1 25 23:35 t=i64 w=- r=- d=- rw=false
+e 1 26 23:37 t=i64 w=- r=field 0 d=- rw=false
+e 1 27 23:37 t=S3[] w=- r=local d=- rw=false
+e 1 28 24:30 t=i64 w=- r=- d=- rw=false
+e 1 29 24:32 t=i64 w=- r=field 0 d=- rw=false
+e 1 30 24:32 t=S3[] w=- r=local d=- rw=false
+e 1 39 29:30 t=() w=- r=- d=- rw=false
+e 1 40 30:51 t=str w=- r=- d=- rw=false
+e 1 41 30:53 t=str w=- r=- d=- rw=false
+e 1 42 32:49 t=str w=- r=- d=- rw=false
+e 1 43 32:51 t=str w=- r=- d=- rw=false
+e 1 44 33:63 t=str w=- r=- d=- rw=false
+e 1 45 33:65 t=str w=- r=- d=- rw=false
+e 1 60 37:30 t=i64 w=- r=- d=- rw=false
+e 1 61 37:32 t=i64 w=- r=field 0 d=- rw=false
+e 1 62 37:32 t=S3[] w=- r=local d=- rw=false
+e 1 63 38:25 t=i64 w=- r=- d=- rw=false
+e 1 64 38:27 t=i64 w=- r=field 0 d=- rw=false
+e 1 65 38:27 t=S3[] w=- r=local d=- rw=false
+e 1 66 39:42 t=E0[] w=- r=- d=- rw=false
+e 1 67 39:44 t=E0[] w=- r=variant 0.0 d=- rw=false
+e 1 72 43:49 t=intlit w=- r=- d=- rw=false
+e 1 73 43:51 t=intlit w=- r=- d=- rw=false
+e 1 74 44:11 t=() w=- r=- d=- rw=false
+unseen 0

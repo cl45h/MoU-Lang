@@ -1,0 +1,237 @@
+fn 0 take params=1 locals=1 body=0 limits=0 ret=i64 at=2:1
+  names 0=b
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 2:28
+    return int 0
+fn 1 peek params=1 locals=1 body=0 limits=0 ret=i64 at=3:1
+  names 0=b
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 3:24
+    return int 0
+fn 2 fine params=1 locals=38 body=0 limits=0 ret=i64 at=5:1
+  names 0=c 1=x 4=y 8=b 11=n 16=total 20=k 24=each
+  once 1
+  scalars bool
+  hints 11=i64 17=i64 18=i64 27=i64
+  copies 
+  b0 7:8
+    L1 = uninit @5:25
+    L3 = use L0 @7:8
+    branch L3 b3 b1
+  b1 7:27
+    L1 = use int 2 @7:27
+    L2 = use () @7:27
+    goto b2
+  b2 12:13
+    L4 = uninit @7:27
+    L4 = use int 1 @9:5
+    L4 = use int 2 @10:5
+    L5 = array[int 1] @11:16
+    L6 = convert elems(fit i64) L5 @11:15
+    L7 = struct 0(L6) @11:15
+    L8 = use L7 @11:15
+    L9 = use L8 @12:22
+    L8 = moved @12:22
+    call fn 0(L9) back[] -> L10 b4
+  b3 7:12
+    L1 = use int 1 @7:12
+    L2 = use () @7:12
+    goto b2
+  b4 15:17
+    L11 = use L10 @12:13
+    L12 = array[int 2] @13:12
+    L13 = convert elems(fit i64) L12 @13:11
+    L14 = struct 0(L13) @13:11
+    L8 = use L14 @13:5
+    L15 = use int 0 @14:17
+    L16 = use L15 @14:17
+    L17 = use int 0 @15:17
+    L18 = use int 3 @15:17
+    goto b5
+  b5 15:17
+    L19 = < dyn L17, L18 @15:17
+    branch L19 b6 b8
+  b6 17:18
+    L20 = use L17 @15:17
+    L21 = use L20 @16:23
+    L22 = array[L21] @16:23
+    L23 = struct 0(L22) @16:22
+    L24 = use L23 @16:22
+    L25 = use L24 @17:27
+    L24 = moved @17:27
+    call fn 0(L25) back[] -> L26 b9
+  b7 15:5
+    L17 = succ i64 L17 @15:5
+    goto b5
+  b8 19:17
+    L28 = use L1 @19:5
+    L29 = use L4 @19:9
+    L30 = + i64 L28, L29 @19:5
+    L31 = use L11 @19:13
+    L32 = + i64 L30, L31 @19:5
+    L33 = use L8 @19:22
+    call fn 1(L33) back[] -> L34 b10
+  b9 17:9
+    L27 = use L16 @17:18
+    L16 = + i64 L27, L26 @17:9
+    goto b7
+  b10 19:5
+    L35 = + i64 L32, L34 @19:5
+    L36 = use L16 @19:27
+    L37 = + i64 L35, L36 @19:5
+    return L37
+fn 3 unset params=1 locals=24 body=0 limits=0 ret=i64 at=22:1
+  names 0=c 1=x 2=y 5=z 7=w 8=b 11=q 13=g
+  once 1 2 7 11
+  scalars bool
+  hints 
+  copies 
+  b0 25:8
+    L1 = uninit @22:26
+    L2 = uninit @22:26
+    L4 = use L0 @25:8
+    branch L4 b3 b1
+  b1 25:12
+    goto b2
+  b2 27:5
+    L5 = uninit @25:12
+    goto b4
+  b3 25:12
+    L2 = use int 1 @25:12
+    goto b2
+  b4 27:11
+    L6 = use L0 @27:11
+    branch L6 b6 b5
+  b5 35:21
+    L7 = uninit @27:15
+    L7 = use int 1 @29:5
+    L7 = use int 2 @30:5
+    L8 = uninit @30:5
+    L9 = array[int 1] @32:12
+    L10 = convert elems(fit i64) L9 @32:11
+    L8.0 = use L10 @32:5
+    L11 = uninit @32:5
+    L12 = closure 6(L11) @34:13
+    L13 = use L12 @34:13
+    L14 = use L1 @35:5
+    L15 = use L2 @35:9
+    L16 = + i64 L14, L15 @35:5
+    L17 = use L5 @35:13
+    L18 = + i64 L16, L17 @35:5
+    L19 = use L7 @35:17
+    L20 = + i64 L18, L19 @35:5
+    L21 = use L13 @35:21
+    call indirect L21() back[] -> L22 b7
+  b6 27:15
+    L5 = use int 1 @27:15
+    goto b4
+  b7 35:5
+    L23 = + i64 L20, L22 @35:5
+    return L23
+fn 4 moved params=1 locals=47 body=0 limits=0 ret=i64 at=38:1
+  names 0=c 4=b 9=first 13=d 19=twice 23=e 31=f 33=n
+  once 
+  scalars bool
+  hints 9=i64 19=i64 38=i64
+  copies 
+  b0 40:5
+    L1 = array[int 1] @39:16
+    L2 = convert elems(fit i64) L1 @39:15
+    L3 = struct 0(L2) @39:15
+    L4 = use L3 @39:15
+    L5 = use L4 @40:14
+    L4 = moved @40:14
+    call fn 0(L5) back[] -> L6 b1
+  b1 41:17
+    L7 = use L4 @41:22
+    call fn 1(L7) back[] -> L8 b2
+  b2 43:17
+    L9 = use L8 @41:17
+    L10 = array[int 1] @42:16
+    L11 = convert elems(fit i64) L10 @42:15
+    L12 = struct 0(L11) @42:15
+    L13 = use L12 @42:15
+    L14 = use L13 @43:26
+    L13 = moved @43:26
+    call fn 0(L14) back[] -> L15 b3
+  b3 43:31
+    L16 = use L13 @43:40
+    L13 = moved @43:40
+    call fn 0(L16) back[] -> L17 b4
+  b4 45:8
+    L18 = + i64 L15, L17 @43:17
+    L19 = use L18 @43:17
+    L20 = array[int 1] @44:16
+    L21 = convert elems(fit i64) L20 @44:15
+    L22 = struct 0(L21) @44:15
+    L23 = use L22 @44:15
+    L25 = use L0 @45:8
+    branch L25 b7 b5
+  b5 45:12
+    goto b6
+  b6 48:5
+    L28 = array[int 1] @46:16
+    L29 = convert elems(fit i64) L28 @46:15
+    L30 = struct 0(L29) @46:15
+    L31 = use L30 @46:15
+    L32 = use int 0 @47:13
+    L33 = use L32 @47:13
+    goto b9
+  b7 45:12
+    L26 = use L23 @45:21
+    L23 = moved @45:21
+    call fn 0(L26) back[] -> L27 b8
+  b8 45:12
+    goto b6
+  b9 48:11
+    L34 = use L33 @48:11
+    L35 = < dyn L34, int 3 @48:11
+    branch L35 b11 b10
+  b10 49:21
+    L39 = use L9 @49:5
+    L40 = use L19 @49:13
+    L41 = + i64 L39, L40 @49:5
+    L42 = use L23 @49:26
+    call fn 1(L42) back[] -> L43 b13
+  b11 48:24
+    L36 = use L31 @48:33
+    L31 = moved @48:33
+    call fn 0(L36) back[] -> L37 b12
+  b12 48:19
+    L38 = use L33 @48:24
+    L33 = + i64 L38, L37 @48:19
+    goto b9
+  b13 49:5
+    L44 = + i64 L41, L43 @49:5
+    L45 = use L33 @49:31
+    L46 = + i64 L44, L45 @49:5
+    return L46
+fn 5 main params=0 locals=0 body=0 limits=0 ret=_ at=52:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 52:11
+    return ()
+fn 6 closure params=0 locals=2 body=0 limits=0 ret=_ at=34:13
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 34:27
+    L0 = capture 0 @34:27
+    L1 = use L0 @34:27
+    return L1
+consts 
+main 5
+tests 
+struct 0 B (d) record[] boxed=false
+dyn_from 1

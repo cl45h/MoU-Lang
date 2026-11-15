@@ -1,0 +1,11 @@
+3 a.txt: 2
+b.txt: 1
+
+no: No such file or directory (os error 2)
+[("deep.txt", "not here")] one
+two
+3 ("b.txt", "x\ny\nz") report.txt
+outside again: No such file or directory (os error 2)
+[("r", "0")]
+[("r", "2")]
+status 0

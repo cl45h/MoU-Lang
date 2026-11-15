@@ -1,0 +1,6 @@
+n7 212.0 [3, 4, 5] ("n7", "n7")
+n9 32.0 [3, 4, 5] <n42>
+3 4 Some(3) None Some('ñ')
+bolsa con 3 | bolsa con 3 / Some(3) | letras con 1 / Some("x")
+None 0 vacía con 0 / None
+status 0

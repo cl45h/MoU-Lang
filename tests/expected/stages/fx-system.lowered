@@ -1,0 +1,45 @@
+fn 0 clear params=1 locals=7 body=0 limits=9 ret=_ at=2:1
+  names 0=xs 5=i
+  once 
+  scalars _
+  hints 2=usize 3=usize 5=usize
+  copies 
+  b0 2:39
+    L1 = len L0 @2:39
+    L2 = use int 0 @2:39
+    L3 = use L1 @2:39
+    goto b1
+  b1 2:39
+    L4 = < dyn L2, L3 @2:39
+    branch L4 b2 b4
+  b2 2:48
+    L5 = use L2 @2:39
+    L6 = use L5 @2:51
+    L0[L6] = use int 0 @2:48
+    goto b3
+  b3 2:27
+    L2 = succ usize L2 @2:27
+    goto b1
+  b4 2:27
+    return ()
+fn 1 grow params=1 locals=2 body=0 limits=9 ret=_ at=3:1
+  names 0=xs
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 3:34
+    L1 = push L0, int 0 @3:34
+    return L1
+fn 2 main params=0 locals=0 body=0 limits=9 ret=_ at=4:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 4:11
+    return ()
+consts 
+main 2
+tests 
+dyn_from 0

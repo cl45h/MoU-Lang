@@ -1,0 +1,669 @@
+error 6:5 the result of `bad`: a C function can only take and return numbers of up to 64 bits, `bool`, `str`, `ptr`, structs marked `@c` and, to take, arrays of numbers and functions of numbers
+error 7:5 `worse` is a C function: it is declared with its parameters and its result, and nothing else
+error 8:5 only functions can be declared for a C header
+error 10:1 field `x` is defined twice in `A`
+error 10:1 unknown type `Missing`
+error 10:1 `Hidden` is private to the module `other`: it is not declared `pub`
+error 10:1 the module `other` has no `Nope`
+error 10:1 unknown type `nope.Thing`
+error 11:1 `A` is already defined
+error 12:1 `int` is already defined
+error 13:1 variant `One` is defined twice in `E`
+error 14:1 type alias `Loop` refers to itself
+error 16:1 type alias `L2` refers to itself
+error 19:1 `Gen` takes 1 type arguments, found 2
+error 20:1 `Use` takes no type arguments
+error 21:1 type alias `Rec` refers to itself
+error 23:1 bounds on the type parameter `T` of a type are not supported: put them on the `impl`
+error 23:1 `G` takes 1 type arguments, found 2: write `G[...]`
+error 23:1 `G` takes 1 type arguments, found 0: write `G[...]`
+error 25:1 `Secret` is private to the module `other`: it is not declared `pub`
+error 25:1 `dyn` must be followed by a trait
+error 25:1 `dyn` takes one trait: declare a trait that requires the others
+error 25:1 `Self` can only be used inside an `impl`
+error 25:1 `Shown` is a trait, not a type (use `dyn Shown`)
+error 25:1 `Box` takes 1 type arguments, found 0: write `Box[...]`
+error 26:1 unknown type `T`
+error 26:1 `self` can only be used inside an `impl`
+error 26:1 `Self` can only be used inside an `impl`
+error 27:1 parameter `a` of `noty` needs a type
+error 28:1 the bound of `T` must be a trait
+error 28:1 `Secret` is private to the module `other`: it is not declared `pub`
+error 28:1 the bound of `U` must be a trait
+error 28:1 `int` takes no type arguments
+error 28:80 expected return type `T`, found `()`
+error 29:1 `g` is already defined
+checked 52 skipped_exprs 2
+skipped struct R
+skipped fn h
+e 0 270 3145840:37 t='T w=- r=- d=- rw=false
+e 0 271 3145841:5 t='T w=- r=- d=- rw=false
+e 0 272 3145841:8 t=bool w=bool r=- d=- rw=false
+e 0 273 3145841:8 t=E1[] w=- r=- d=- rw=false
+e 0 275 3145841:8 t='T w=- r=local d=- rw=false
+e 0 276 3145841:14 t='T w='T r=local d=- rw=false
+e 0 277 3145841:20 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 0 279 3145841:33 t='T w=- r=local d=- rw=false
+e 0 280 3145841:42 t='T w=- r=- d=- rw=false
+e 0 281 3145841:44 t='T w=- r=local d=- rw=false
+e 0 282 3145844:37 t='T w=- r=- d=- rw=false
+e 0 283 3145845:5 t='T w=- r=- d=- rw=false
+e 0 284 3145845:8 t=bool w=bool r=- d=- rw=false
+e 0 285 3145845:8 t=E1[] w=- r=- d=- rw=false
+e 0 287 3145845:8 t='T w=- r=local d=- rw=false
+e 0 288 3145845:14 t='T w='T r=local d=- rw=false
+e 0 289 3145845:20 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 0 291 3145845:36 t='T w=- r=local d=- rw=false
+e 0 292 3145845:45 t='T w=- r=- d=- rw=false
+e 0 293 3145845:47 t='T w=- r=local d=- rw=false
+e 0 294 3145849:34 t=() w=- r=- d=- rw=false
+e 0 295 3145850:13 t=i64 w=- r=- d=- rw=false
+e 0 296 3145850:13 t=usize w=- r=len d=- rw=false
+e 0 297 3145850:13 t=['T] w=- r=local d=- rw=false
+e 0 298 3145851:5 t=() w=- r=- d=- rw=false
+e 0 299 3145851:8 t=bool w=bool r=- d=- rw=false
+e 0 300 3145851:8 t=i64 w=- r=local d=- rw=false
+e 0 301 3145851:12 t=intlit w=- r=- d=- rw=false
+e 0 302 3145851:16 t=never w=- r=- d=- rw=false
+e 0 303 3145852:15 t=i64 w=- r=- d=- rw=false
+e 0 304 3145852:15 t=i64 w=- r=local d=- rw=false
+e 0 305 3145852:19 t=intlit w=- r=- d=- rw=false
+e 0 306 3145853:21 t=['T] w=['T] r=- d=- rw=false
+e 0 307 3145853:21 t=['T] w=- r=local d=- rw=false
+e 0 308 3145853:24 t=range i64 w=- r=- d=- rw=false
+e 0 309 3145853:26 t=i64 w=- r=local d=- rw=false
+e 0 310 3145854:22 t=['T] w=['T] r=- d=- rw=false
+e 0 311 3145854:22 t=['T] w=- r=local d=- rw=false
+e 0 312 3145854:25 t=range i64 w=- r=- d=- rw=false
+e 0 313 3145854:25 t=i64 w=- r=local d=- rw=false
+e 0 314 3145855:5 t=() w=- r=- d=- rw=false
+e 0 316 3145855:14 t=['T] w=['T] r=local d=- rw=false
+e 0 317 3145856:5 t=() w=- r=- d=- rw=false
+e 0 319 3145856:14 t=['T] w=['T] r=local d=- rw=false
+e 0 320 3145857:13 t=intlit w=- r=- d=- rw=false
+e 0 321 3145858:13 t=intlit w=- r=- d=- rw=false
+e 0 322 3145859:13 t=intlit w=- r=- d=- rw=false
+e 0 323 3145860:5 t=() w=- r=- d=- rw=false
+e 0 324 3145860:11 t=bool w=bool r=- d=- rw=false
+e 0 325 3145860:11 t=bool w=- r=- d=- rw=false
+e 0 326 3145860:11 t=i64 w=- r=local d=- rw=false
+e 0 327 3145860:15 t=i64 w=- r=local d=- rw=false
+e 0 328 3145860:22 t=bool w=- r=- d=- rw=false
+e 0 329 3145860:22 t=i64 w=- r=local d=- rw=false
+e 0 330 3145860:26 t=i64 w=- r=- d=- rw=false
+e 0 331 3145860:26 t=i64 w=- r=local d=- rw=false
+e 0 332 3145860:30 t=i64 w=- r=local d=- rw=false
+e 0 333 3145861:9 t=() w=- r=- d=- rw=false
+e 0 334 3145861:12 t=bool w=bool r=- d=- rw=false
+e 0 335 3145861:12 t=E1[] w=- r=- d=- rw=false
+e 0 337 3145861:12 t='T w=- r=- d=- rw=false
+e 0 338 3145861:12 t=['T] w=- r=local d=- rw=false
+e 0 339 3145861:18 t=i64 w=- r=local d=- rw=false
+e 0 340 3145861:25 t='T w='T r=- d=- rw=false
+e 0 341 3145861:25 t=['T] w=- r=local d=- rw=false
+e 0 342 3145861:30 t=i64 w=- r=local d=- rw=false
+e 0 343 3145861:37 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 0 345 3145862:13 t='T w=- r=- d=- rw=false
+e 0 346 3145862:13 t=['T] w=- r=local d=- rw=false
+e 0 347 3145862:16 t=i64 w=- r=local d=- rw=false
+e 0 348 3145862:21 t='T w='T r=- d=- rw=false
+e 0 349 3145862:21 t=['T] w=- r=local d=- rw=false
+e 0 350 3145862:27 t=i64 w=- r=local d=- rw=false
+e 0 351 3145863:13 t=i64 w=- r=local d=- rw=false
+e 0 352 3145863:18 t=intlit w=- r=- d=- rw=false
+e 0 353 3145864:16 t=() w=- r=- d=- rw=false
+e 0 354 3145865:13 t='T w=- r=- d=- rw=false
+e 0 355 3145865:13 t=['T] w=- r=local d=- rw=false
+e 0 356 3145865:16 t=i64 w=- r=local d=- rw=false
+e 0 357 3145865:21 t='T w='T r=- d=- rw=false
+e 0 358 3145865:21 t=['T] w=- r=local d=- rw=false
+e 0 359 3145865:26 t=i64 w=- r=local d=- rw=false
+e 0 360 3145866:13 t=i64 w=- r=local d=- rw=false
+e 0 361 3145866:18 t=intlit w=- r=- d=- rw=false
+e 0 362 3145868:9 t=i64 w=- r=local d=- rw=false
+e 0 363 3145868:14 t=intlit w=- r=- d=- rw=false
+e 0 364 3145870:5 t=() w=- r=- d=- rw=false
+e 0 365 3145870:11 t=bool w=bool r=- d=- rw=false
+e 0 366 3145870:11 t=i64 w=- r=local d=- rw=false
+e 0 367 3145870:15 t=i64 w=- r=local d=- rw=false
+e 0 368 3145871:9 t='T w=- r=- d=- rw=false
+e 0 369 3145871:9 t=['T] w=- r=local d=- rw=false
+e 0 370 3145871:12 t=i64 w=- r=local d=- rw=false
+e 0 371 3145871:17 t='T w='T r=- d=- rw=false
+e 0 372 3145871:17 t=['T] w=- r=local d=- rw=false
+e 0 373 3145871:22 t=i64 w=- r=local d=- rw=false
+e 0 374 3145872:9 t=i64 w=- r=local d=- rw=false
+e 0 375 3145872:14 t=intlit w=- r=- d=- rw=false
+e 0 376 3145873:9 t=i64 w=- r=local d=- rw=false
+e 0 377 3145873:14 t=intlit w=- r=- d=- rw=false
+e 0 378 3145875:5 t=() w=- r=- d=- rw=false
+e 0 379 3145875:11 t=bool w=bool r=- d=- rw=false
+e 0 380 3145875:11 t=i64 w=- r=local d=- rw=false
+e 0 381 3145875:15 t=i64 w=- r=- d=- rw=false
+e 0 382 3145875:15 t=i64 w=- r=local d=- rw=false
+e 0 383 3145875:19 t=i64 w=- r=local d=- rw=false
+e 0 384 3145876:9 t='T w=- r=- d=- rw=false
+e 0 385 3145876:9 t=['T] w=- r=local d=- rw=false
+e 0 386 3145876:12 t=i64 w=- r=local d=- rw=false
+e 0 387 3145876:17 t='T w='T r=- d=- rw=false
+e 0 388 3145876:17 t=['T] w=- r=local d=- rw=false
+e 0 389 3145876:23 t=i64 w=- r=local d=- rw=false
+e 0 390 3145877:9 t=i64 w=- r=local d=- rw=false
+e 0 391 3145877:14 t=intlit w=- r=- d=- rw=false
+e 0 392 3145878:9 t=i64 w=- r=local d=- rw=false
+e 0 393 3145878:14 t=intlit w=- r=- d=- rw=false
+e 0 394 2097160:29 t=S3['T] w=- r=- d=- rw=false
+e 0 395 2097160:31 t=S3['T] w=- r=struct 3 d=- rw=false
+e 0 397 2097160:43 t=[never; 0] w=['T] r=- d=- rw=false
+e 0 398 2097163:38 t=S3['T] w=- r=- d=- rw=false
+e 0 399 2097163:40 t=S3['T] w=- r=struct 3 d=- rw=false
+e 0 401 2097163:52 t=['T] w=['T] r=local d=- rw=false
+e 0 402 2097165:29 t=i64 w=- r=- d=- rw=false
+e 0 403 2097165:31 t=i64 w=- r=- d=- rw=false
+e 0 404 2097165:31 t=usize w=- r=len d=- rw=false
+e 0 405 2097165:31 t=['T] w=- r=field 0 d=- rw=false
+e 0 406 2097165:31 t=S3['T] w=- r=local d=- rw=false
+e 0 407 2097168:30 t=['T] w=- r=- d=- rw=false
+e 0 408 2097168:32 t=['T] w=- r=field 0 d=- rw=false
+e 0 409 2097168:32 t=S3['T] w=- r=local d=- rw=false
+e 0 410 2097170:35 t=bool w=- r=- d=- rw=false
+e 0 411 2097170:37 t=bool w=- r=- d=- rw=false
+e 0 412 2097170:37 t=usize w=- r=len d=- rw=false
+e 0 413 2097170:37 t=['T] w=- r=field 0 d=- rw=false
+e 0 414 2097170:37 t=S3['T] w=- r=local d=- rw=false
+e 0 415 2097170:55 t=intlit w=- r=- d=- rw=false
+e 0 416 2097173:29 t=['T] w=- r=- d=- rw=false
+e 0 417 2097173:31 t=['T] w=- r=field 0 d=- rw=false
+e 0 418 2097173:31 t=S3['T] w=- r=local d=- rw=false
+e 0 419 2097175:36 t=() w=- r=- d=- rw=false
+e 0 420 2097175:38 t=() w=- r=builtin push d=- rw=false
+e 0 422 2097175:38 t=['T] w=- r=field 0 d=- rw=false
+e 0 423 2097175:38 t=S3['T] w=- r=local d=- rw=false
+e 0 424 2097175:54 t='T w='T r=local d=- rw=false
+e 0 425 2097178:32 t='T? w=- r=- d=- rw=false
+e 0 426 2097178:34 t='T? w=- r=builtin pop d=- rw=false
+e 0 428 2097178:34 t=['T] w=- r=field 0 d=- rw=false
+e 0 429 2097178:34 t=S3['T] w=- r=local d=- rw=false
+e 0 430 2097181:36 t='T? w=- r=- d=- rw=false
+e 0 431 2097181:38 t='T? w=- r=builtin get d=- rw=false
+e 0 433 2097181:38 t=['T] w=- r=field 0 d=- rw=false
+e 0 434 2097181:38 t=S3['T] w=- r=local d=- rw=false
+e 0 435 2097181:53 t=i64 w=i64 r=local d=- rw=false
+e 0 436 2097184:34 t='T w=- r=- d=- rw=false
+e 0 437 2097184:36 t='T w=- r=- d=- rw=false
+e 0 438 2097184:36 t=['T] w=- r=field 0 d=- rw=false
+e 0 439 2097184:36 t=S3['T] w=- r=local d=- rw=false
+e 0 440 2097184:47 t=i64 w=- r=local d=- rw=false
+e 0 441 2097187:43 t=() w=- r=- d=- rw=false
+e 0 442 2097187:45 t='T w=- r=- d=- rw=false
+e 0 443 2097187:45 t=['T] w=- r=field 0 d=- rw=false
+e 0 444 2097187:45 t=S3['T] w=- r=local d=- rw=false
+e 0 445 2097187:56 t=i64 w=- r=local d=- rw=false
+e 0 446 2097187:61 t='T w='T r=local d=- rw=false
+e 0 447 2097189:30 t='T? w=- r=- d=- rw=false
+e 0 448 2097189:32 t='T? w=- r=builtin get d=- rw=false
+e 0 450 2097189:32 t=['T] w=- r=field 0 d=- rw=false
+e 0 451 2097189:32 t=S3['T] w=- r=local d=- rw=false
+e 0 452 2097189:47 t=intlit w=usize r=- d=- rw=false
+e 0 453 2097191:29 t='T? w=- r=- d=- rw=false
+e 0 454 2097191:31 t='T? w=- r=builtin get d=- rw=false
+e 0 456 2097191:31 t=['T] w=- r=field 0 d=- rw=false
+e 0 457 2097191:31 t=S3['T] w=- r=local d=- rw=false
+e 0 458 2097191:46 t=i64 w=i64 r=- d=- rw=false
+e 0 459 2097191:46 t=i64 w=- r=- d=- rw=false
+e 0 461 2097191:46 t=S3['T] w=- r=local d=- rw=false
+e 0 462 2097191:59 t=intlit w=- r=- d=- rw=false
+e 0 463 2097195:46 t=() w=- r=- d=- rw=false
+e 0 464 2097196:17 t=i64 w=- r=- d=- rw=false
+e 0 466 2097196:17 t=S3['T] w=- r=local d=- rw=false
+e 0 467 2097197:9 t=() w=- r=- d=- rw=false
+e 0 468 2097197:12 t=bool w=bool r=- d=- rw=false
+e 0 469 2097197:12 t=bool w=- r=- d=- rw=false
+e 0 470 2097197:12 t=i64 w=- r=local d=- rw=false
+e 0 471 2097197:16 t=intlit w=- r=- d=- rw=false
+e 0 472 2097197:21 t=bool w=- r=- d=- rw=false
+e 0 473 2097197:21 t=i64 w=- r=local d=- rw=false
+e 0 474 2097197:25 t=i64 w=- r=local d=- rw=false
+e 0 475 2097197:29 t=never w=- r=builtin panic d=- rw=false
+e 0 477 2097197:35 t=str w=str r=- d=- rw=false
+e 0 478 2097197:59 t=i64 w=- r=local d=- rw=false
+e 0 479 2097197:90 t=i64 w=- r=local d=- rw=false
+e 0 480 2097198:9 t=() w=- r=builtin push d=- rw=false
+e 0 482 2097198:9 t=['T] w=- r=field 0 d=- rw=false
+e 0 483 2097198:9 t=S3['T] w=- r=local d=- rw=false
+e 0 484 2097198:25 t='T w='T r=local d=- rw=false
+e 0 485 2097199:17 t=i64 w=- r=local d=- rw=false
+e 0 486 2097200:9 t=() w=- r=- d=- rw=false
+e 0 487 2097200:15 t=bool w=bool r=- d=- rw=false
+e 0 488 2097200:15 t=i64 w=- r=local d=- rw=false
+e 0 489 2097200:19 t=i64 w=- r=local d=- rw=false
+e 0 490 2097201:13 t='T w=- r=- d=- rw=false
+e 0 491 2097201:13 t=['T] w=- r=field 0 d=- rw=false
+e 0 492 2097201:13 t=S3['T] w=- r=local d=- rw=false
+e 0 493 2097201:24 t=i64 w=- r=local d=- rw=false
+e 0 494 2097201:29 t='T w='T r=- d=- rw=false
+e 0 495 2097201:29 t=['T] w=- r=field 0 d=- rw=false
+e 0 496 2097201:29 t=S3['T] w=- r=local d=- rw=false
+e 0 497 2097201:40 t=i64 w=- r=- d=- rw=false
+e 0 498 2097201:40 t=i64 w=- r=local d=- rw=false
+e 0 499 2097201:44 t=intlit w=- r=- d=- rw=false
+e 0 500 2097202:13 t=i64 w=- r=local d=- rw=false
+e 0 501 2097202:18 t=intlit w=- r=- d=- rw=false
+e 0 502 2097204:9 t='T w=- r=- d=- rw=false
+e 0 503 2097204:9 t=['T] w=- r=field 0 d=- rw=false
+e 0 504 2097204:9 t=S3['T] w=- r=local d=- rw=false
+e 0 505 2097204:20 t=i64 w=- r=local d=- rw=false
+e 0 506 2097204:25 t='T w='T r=local d=- rw=false
+e 0 507 2097209:42 t='T w=- r=- d=- rw=false
+e 0 508 2097210:17 t=i64 w=- r=- d=- rw=false
+e 0 510 2097210:17 t=S3['T] w=- r=local d=- rw=false
+e 0 511 2097211:20 t='T w=- r=- d=- rw=false
+e 0 512 2097211:20 t=['T] w=- r=field 0 d=- rw=false
+e 0 513 2097211:20 t=S3['T] w=- r=local d=- rw=false
+e 0 514 2097211:31 t=i64 w=- r=local d=- rw=false
+e 0 515 2097212:17 t=i64 w=- r=local d=- rw=false
+e 0 516 2097213:9 t=() w=- r=- d=- rw=false
+e 0 517 2097213:15 t=bool w=bool r=- d=- rw=false
+e 0 518 2097213:15 t=i64 w=- r=local d=- rw=false
+e 0 519 2097213:19 t=i64 w=- r=- d=- rw=false
+e 0 520 2097213:19 t=i64 w=- r=local d=- rw=false
+e 0 521 2097213:23 t=intlit w=- r=- d=- rw=false
+e 0 522 2097214:13 t='T w=- r=- d=- rw=false
+e 0 523 2097214:13 t=['T] w=- r=field 0 d=- rw=false
+e 0 524 2097214:13 t=S3['T] w=- r=local d=- rw=false
+e 0 525 2097214:24 t=i64 w=- r=local d=- rw=false
+e 0 526 2097214:29 t='T w='T r=- d=- rw=false
+e 0 527 2097214:29 t=['T] w=- r=field 0 d=- rw=false
+e 0 528 2097214:29 t=S3['T] w=- r=local d=- rw=false
+e 0 529 2097214:40 t=i64 w=- r=- d=- rw=false
+e 0 530 2097214:40 t=i64 w=- r=local d=- rw=false
+e 0 531 2097214:44 t=intlit w=- r=- d=- rw=false
+e 0 532 2097215:13 t=i64 w=- r=local d=- rw=false
+e 0 533 2097215:18 t=intlit w=- r=- d=- rw=false
+e 0 534 2097217:9 t='T? w=- r=builtin pop d=- rw=false
+e 0 536 2097217:9 t=['T] w=- r=field 0 d=- rw=false
+e 0 537 2097217:9 t=S3['T] w=- r=local d=- rw=false
+e 0 538 2097218:9 t='T w=- r=local d=- rw=false
+e 0 539 2097221:28 t=() w=- r=- d=- rw=false
+e 0 540 2097221:30 t=['T] w=- r=field 0 d=- rw=false
+e 0 541 2097221:30 t=S3['T] w=- r=local d=- rw=false
+e 0 542 2097221:43 t=[never; 0] w=['T] r=- d=- rw=false
+e 0 543 2097223:40 t=() w=- r=- d=- rw=false
+e 0 544 2097224:9 t=() w=- r=- d=- rw=false
+e 0 545 2097224:21 t=['T] w=- r=local d=- rw=false
+e 0 546 2097224:28 t=() w=- r=builtin push d=- rw=false
+e 0 548 2097224:28 t=['T] w=- r=field 0 d=- rw=false
+e 0 549 2097224:28 t=S3['T] w=- r=local d=- rw=false
+e 0 550 2097224:44 t='T w='T r=local d=- rw=false
+e 0 551 2097227:30 t=() w=- r=- d=- rw=false
+e 0 552 2097228:17 t=intlit w=- r=- d=- rw=false
+e 0 553 2097229:17 t=i64 w=- r=- d=- rw=false
+e 0 554 2097229:17 t=i64 w=- r=- d=- rw=false
+e 0 556 2097229:17 t=S3['T] w=- r=local d=- rw=false
+e 0 557 2097229:30 t=intlit w=- r=- d=- rw=false
+e 0 558 2097230:9 t=() w=- r=- d=- rw=false
+e 0 559 2097230:15 t=bool w=bool r=- d=- rw=false
+e 0 560 2097230:15 t=i64 w=- r=local d=- rw=false
+e 0 561 2097230:19 t=i64 w=- r=local d=- rw=false
+e 0 562 2097231:21 t='T w=- r=- d=- rw=false
+e 0 563 2097231:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 564 2097231:21 t=S3['T] w=- r=local d=- rw=false
+e 0 565 2097231:32 t=i64 w=- r=local d=- rw=false
+e 0 566 2097232:13 t='T w=- r=- d=- rw=false
+e 0 567 2097232:13 t=['T] w=- r=field 0 d=- rw=false
+e 0 568 2097232:13 t=S3['T] w=- r=local d=- rw=false
+e 0 569 2097232:24 t=i64 w=- r=local d=- rw=false
+e 0 570 2097232:29 t='T w='T r=- d=- rw=false
+e 0 571 2097232:29 t=['T] w=- r=field 0 d=- rw=false
+e 0 572 2097232:29 t=S3['T] w=- r=local d=- rw=false
+e 0 573 2097232:40 t=i64 w=- r=local d=- rw=false
+e 0 574 2097233:13 t='T w=- r=- d=- rw=false
+e 0 575 2097233:13 t=['T] w=- r=field 0 d=- rw=false
+e 0 576 2097233:13 t=S3['T] w=- r=local d=- rw=false
+e 0 577 2097233:24 t=i64 w=- r=local d=- rw=false
+e 0 578 2097233:29 t='T w='T r=local d=- rw=false
+e 0 579 2097234:13 t=i64 w=- r=local d=- rw=false
+e 0 580 2097234:18 t=intlit w=- r=- d=- rw=false
+e 0 581 2097235:13 t=i64 w=- r=local d=- rw=false
+e 0 582 2097235:18 t=intlit w=- r=- d=- rw=false
+e 0 583 2097240:51 t=S3['U] w=- r=- d=- rw=false
+e 0 584 2097241:24 t=[never; 0] w=['U] r=- d=- rw=false
+e 0 585 2097242:9 t=() w=- r=- d=- rw=false
+e 0 586 2097242:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 587 2097242:21 t=S3['T] w=- r=local d=- rw=false
+e 0 588 2097242:34 t=() w=- r=builtin push d=- rw=false
+e 0 590 2097242:34 t=['U] w=- r=local d=- rw=false
+e 0 591 2097242:43 t='U w='U r=- d=- rw=false
+e 0 592 2097242:43 t=fn(let 'T) -> 'U w=- r=local d=- rw=false
+e 0 593 2097242:45 t='T w='T r=local d=- rw=false
+e 0 594 2097243:9 t=S3['U] w=- r=struct 3 d=- rw=false
+e 0 596 2097243:21 t=['U] w=['U] r=local d=- rw=false
+e 0 597 2097247:57 t=S3['T] w=- r=- d=- rw=false
+e 0 598 2097248:24 t=[never; 0] w=['T] r=- d=- rw=false
+e 0 599 2097249:9 t=() w=- r=- d=- rw=false
+e 0 600 2097249:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 601 2097249:21 t=S3['T] w=- r=local d=- rw=false
+e 0 602 2097250:13 t=() w=- r=- d=- rw=false
+e 0 603 2097250:16 t=bool w=bool r=- d=- rw=false
+e 0 604 2097250:16 t=fn(let 'T) -> bool w=- r=local d=- rw=false
+e 0 605 2097250:21 t='T w='T r=local d=- rw=false
+e 0 606 2097250:29 t=() w=- r=builtin push d=- rw=false
+e 0 608 2097250:29 t=['T] w=- r=local d=- rw=false
+e 0 609 2097250:38 t='T w='T r=local d=- rw=false
+e 0 610 2097252:9 t=S3['T] w=- r=struct 3 d=- rw=false
+e 0 612 2097252:21 t=['T] w=['T] r=local d=- rw=false
+e 0 613 2097256:59 t='A w=- r=- d=- rw=false
+e 0 614 2097257:22 t='A w='A r=local d=- rw=false
+e 0 615 2097258:9 t=() w=- r=- d=- rw=false
+e 0 616 2097258:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 617 2097258:21 t=S3['T] w=- r=local d=- rw=false
+e 0 618 2097258:34 t='A w=- r=local d=- rw=false
+e 0 619 2097258:40 t='A w='A r=- d=- rw=false
+e 0 620 2097258:40 t=fn(let 'A, let 'T) -> 'A w=- r=local d=- rw=false
+e 0 621 2097258:42 t='A w='A r=local d=- rw=false
+e 0 622 2097258:47 t='T w='T r=local d=- rw=false
+e 0 623 2097259:9 t='A w=- r=local d=- rw=false
+e 0 624 2097262:51 t=bool w=- r=- d=- rw=false
+e 0 625 2097263:9 t=() w=- r=- d=- rw=false
+e 0 626 2097263:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 627 2097263:21 t=S3['T] w=- r=local d=- rw=false
+e 0 628 2097264:13 t=() w=- r=- d=- rw=false
+e 0 629 2097264:16 t=bool w=bool r=- d=- rw=false
+e 0 630 2097264:16 t=fn(let 'T) -> bool w=- r=local d=- rw=false
+e 0 631 2097264:21 t='T w='T r=local d=- rw=false
+e 0 632 2097264:29 t=never w=- r=- d=- rw=false
+e 0 633 2097264:36 t=bool w=- r=- d=- rw=false
+e 0 634 2097266:9 t=bool w=- r=- d=- rw=false
+e 0 635 2097269:53 t=bool w=- r=- d=- rw=false
+e 0 636 2097270:9 t=() w=- r=- d=- rw=false
+e 0 637 2097270:21 t=['T] w=- r=field 0 d=- rw=false
+e 0 638 2097270:21 t=S3['T] w=- r=local d=- rw=false
+e 0 639 2097271:13 t=() w=- r=- d=- rw=false
+e 0 640 2097271:16 t=bool w=bool r=- d=- rw=false
+e 0 641 2097271:17 t=bool w=- r=- d=- rw=false
+e 0 642 2097271:17 t=fn(let 'T) -> bool w=- r=local d=- rw=false
+e 0 643 2097271:22 t='T w='T r=local d=- rw=false
+e 0 644 2097271:30 t=never w=- r=- d=- rw=false
+e 0 645 2097271:37 t=bool w=- r=- d=- rw=false
+e 0 646 2097273:9 t=bool w=- r=- d=- rw=false
+e 0 647 2097279:27 t=() w=- r=- d=- rw=false
+e 0 648 2097279:29 t=() w=- r=- d=- rw=false
+e 0 651 2097279:42 t=['T] w=['T] r=field 0 d=- rw=false
+e 0 652 2097279:42 t=S3['T] w=- r=local d=- rw=false
+e 0 653 2097282:44 t=never? w=- r=- d=- rw=false
+e 0 654 2097283:17 t=intlit w=- r=- d=- rw=false
+e 0 655 2097284:9 t=() w=- r=- d=- rw=false
+e 0 656 2097284:18 t=['T] w=- r=field 0 d=- rw=false
+e 0 657 2097284:18 t=S3['T] w=- r=local d=- rw=false
+e 0 658 2097285:13 t=() w=- r=- d=- rw=false
+e 0 659 2097285:16 t=bool w=bool r=- d=- rw=false
+e 0 660 2097285:16 t=E1[] w=- r=- d=- rw=false
+e 0 662 2097285:16 t='T w=- r=local d=- rw=false
+e 0 663 2097285:22 t='T w='T r=local d=- rw=false
+e 0 664 2097285:31 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 0 667 2097285:49 t=never w=- r=- d=- rw=false
+e 0 668 2097285:56 t=i64 w=- r=local d=- rw=false
+e 0 669 2097286:13 t=i64 w=- r=local d=- rw=false
+e 0 670 2097286:18 t=intlit w=- r=- d=- rw=false
+e 0 671 2097288:9 t=never? w=- r=none d=- rw=false
+e 0 672 2097291:44 t=bool w=- r=- d=- rw=false
+e 0 673 2097292:9 t=bool w=- r=- d=- rw=false
+e 0 674 2097292:15 t=i64? w=- r=- d=- rw=false
+e 0 676 2097292:15 t=S3['T] w=- r=local d=- rw=false
+e 0 677 2097292:29 t='T w='T r=local d=- rw=false
+e 0 678 2097293:24 t=bool w=- r=- d=- rw=false
+e 0 679 2097294:21 t=bool w=- r=- d=- rw=false
+e 0 680 2097298:33 t='T? w=- r=- d=- rw=false
+e 0 681 2097299:24 t=never? w='T? r=none d=- rw=false
+e 0 682 2097300:9 t=() w=- r=- d=- rw=false
+e 0 683 2097300:18 t=['T] w=- r=field 0 d=- rw=false
+e 0 684 2097300:18 t=S3['T] w=- r=local d=- rw=false
+e 0 685 2097301:13 t='T? w=- r=local d=- rw=false
+e 0 686 2097301:20 t='T? w='T? r=- d=- rw=false
+e 0 687 2097301:26 t='T? w=- r=local d=- rw=false
+e 0 688 2097302:28 t='T? w=- r=some d=- rw=false
+e 0 690 2097302:33 t='T w=- r=- d=- rw=false
+e 0 693 2097302:41 t='T w='T r=local d=- rw=false
+e 0 694 2097302:44 t='T w='T r=local d=- rw=false
+e 0 695 2097303:25 t='T? w=- r=some d=- rw=false
+e 0 697 2097303:30 t='T w=- r=local d=- rw=false
+e 0 698 2097306:9 t='T? w=- r=local d=- rw=false
+e 0 699 2097309:32 t='T? w=- r=- d=- rw=false
+e 0 700 2097310:24 t=never? w='T? r=none d=- rw=false
+e 0 701 2097311:9 t=() w=- r=- d=- rw=false
+e 0 702 2097311:18 t=['T] w=- r=field 0 d=- rw=false
+e 0 703 2097311:18 t=S3['T] w=- r=local d=- rw=false
+e 0 704 2097312:13 t='T? w=- r=local d=- rw=false
+e 0 705 2097312:20 t='T? w='T? r=- d=- rw=false
+e 0 706 2097312:26 t='T? w=- r=local d=- rw=false
+e 0 707 2097313:28 t='T? w=- r=some d=- rw=false
+e 0 709 2097313:33 t='T w=- r=- d=- rw=false
+e 0 712 2097313:41 t='T w='T r=local d=- rw=false
+e 0 713 2097313:44 t='T w='T r=local d=- rw=false
+e 0 714 2097314:25 t='T? w=- r=some d=- rw=false
+e 0 716 2097314:30 t='T w=- r=local d=- rw=false
+e 0 717 2097317:9 t='T? w=- r=local d=- rw=false
+e 0 720 28:80 t=() w=- r=- d=- rw=false
+e 1 0 3145739:40 t=E1[] w=- r=- d=- rw=false
+e 1 1 3145740:9 t=E1[] w=- r=- d=- rw=false
+e 1 2 3145740:12 t=bool w=bool r=- d=- rw=false
+e 1 3 3145740:12 t=i64 w=- r=local d=- rw=false
+e 1 4 3145740:19 t=i64 w=- r=local d=- rw=false
+e 1 5 3145740:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 7 3145740:45 t=E1[] w=- r=- d=- rw=false
+e 1 8 3145740:48 t=bool w=bool r=- d=- rw=false
+e 1 9 3145740:48 t=i64 w=- r=local d=- rw=false
+e 1 10 3145740:55 t=i64 w=- r=local d=- rw=false
+e 1 11 3145740:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 13 3145740:84 t=E1[] w=- r=- d=- rw=false
+e 1 14 3145740:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 16 3145745:40 t=E1[] w=- r=- d=- rw=false
+e 1 17 3145746:9 t=E1[] w=- r=- d=- rw=false
+e 1 18 3145746:12 t=bool w=bool r=- d=- rw=false
+e 1 19 3145746:12 t=f64 w=- r=local d=- rw=false
+e 1 20 3145746:19 t=f64 w=- r=local d=- rw=false
+e 1 21 3145746:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 23 3145746:45 t=E1[] w=- r=- d=- rw=false
+e 1 24 3145746:48 t=bool w=bool r=- d=- rw=false
+e 1 25 3145746:48 t=f64 w=- r=local d=- rw=false
+e 1 26 3145746:55 t=f64 w=- r=local d=- rw=false
+e 1 27 3145746:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 29 3145746:84 t=E1[] w=- r=- d=- rw=false
+e 1 30 3145746:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 32 3145751:40 t=E1[] w=- r=- d=- rw=false
+e 1 33 3145752:9 t=E1[] w=- r=- d=- rw=false
+e 1 34 3145752:12 t=bool w=bool r=- d=- rw=false
+e 1 35 3145752:12 t=str w=- r=local d=- rw=false
+e 1 36 3145752:19 t=str w=- r=local d=- rw=false
+e 1 37 3145752:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 39 3145752:45 t=E1[] w=- r=- d=- rw=false
+e 1 40 3145752:48 t=bool w=bool r=- d=- rw=false
+e 1 41 3145752:48 t=str w=- r=local d=- rw=false
+e 1 42 3145752:55 t=str w=- r=local d=- rw=false
+e 1 43 3145752:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 45 3145752:84 t=E1[] w=- r=- d=- rw=false
+e 1 46 3145752:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 48 3145757:40 t=E1[] w=- r=- d=- rw=false
+e 1 49 3145758:9 t=E1[] w=- r=- d=- rw=false
+e 1 50 3145758:12 t=bool w=bool r=- d=- rw=false
+e 1 51 3145758:12 t=char w=- r=local d=- rw=false
+e 1 52 3145758:19 t=char w=- r=local d=- rw=false
+e 1 53 3145758:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 55 3145758:45 t=E1[] w=- r=- d=- rw=false
+e 1 56 3145758:48 t=bool w=bool r=- d=- rw=false
+e 1 57 3145758:48 t=char w=- r=local d=- rw=false
+e 1 58 3145758:55 t=char w=- r=local d=- rw=false
+e 1 59 3145758:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 61 3145758:84 t=E1[] w=- r=- d=- rw=false
+e 1 62 3145758:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 64 3145763:40 t=E1[] w=- r=- d=- rw=false
+e 1 65 3145764:9 t=E1[] w=- r=- d=- rw=false
+e 1 66 3145764:12 t=bool w=bool r=- d=- rw=false
+e 1 67 3145764:12 t=i8 w=- r=local d=- rw=false
+e 1 68 3145764:19 t=i8 w=- r=local d=- rw=false
+e 1 69 3145764:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 71 3145764:45 t=E1[] w=- r=- d=- rw=false
+e 1 72 3145764:48 t=bool w=bool r=- d=- rw=false
+e 1 73 3145764:48 t=i8 w=- r=local d=- rw=false
+e 1 74 3145764:55 t=i8 w=- r=local d=- rw=false
+e 1 75 3145764:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 77 3145764:84 t=E1[] w=- r=- d=- rw=false
+e 1 78 3145764:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 80 3145769:40 t=E1[] w=- r=- d=- rw=false
+e 1 81 3145770:9 t=E1[] w=- r=- d=- rw=false
+e 1 82 3145770:12 t=bool w=bool r=- d=- rw=false
+e 1 83 3145770:12 t=i16 w=- r=local d=- rw=false
+e 1 84 3145770:19 t=i16 w=- r=local d=- rw=false
+e 1 85 3145770:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 87 3145770:45 t=E1[] w=- r=- d=- rw=false
+e 1 88 3145770:48 t=bool w=bool r=- d=- rw=false
+e 1 89 3145770:48 t=i16 w=- r=local d=- rw=false
+e 1 90 3145770:55 t=i16 w=- r=local d=- rw=false
+e 1 91 3145770:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 93 3145770:84 t=E1[] w=- r=- d=- rw=false
+e 1 94 3145770:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 96 3145775:40 t=E1[] w=- r=- d=- rw=false
+e 1 97 3145776:9 t=E1[] w=- r=- d=- rw=false
+e 1 98 3145776:12 t=bool w=bool r=- d=- rw=false
+e 1 99 3145776:12 t=i32 w=- r=local d=- rw=false
+e 1 100 3145776:19 t=i32 w=- r=local d=- rw=false
+e 1 101 3145776:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 103 3145776:45 t=E1[] w=- r=- d=- rw=false
+e 1 104 3145776:48 t=bool w=bool r=- d=- rw=false
+e 1 105 3145776:48 t=i32 w=- r=local d=- rw=false
+e 1 106 3145776:55 t=i32 w=- r=local d=- rw=false
+e 1 107 3145776:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 109 3145776:84 t=E1[] w=- r=- d=- rw=false
+e 1 110 3145776:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 112 3145781:40 t=E1[] w=- r=- d=- rw=false
+e 1 113 3145782:9 t=E1[] w=- r=- d=- rw=false
+e 1 114 3145782:12 t=bool w=bool r=- d=- rw=false
+e 1 115 3145782:12 t=i128 w=- r=local d=- rw=false
+e 1 116 3145782:19 t=i128 w=- r=local d=- rw=false
+e 1 117 3145782:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 119 3145782:45 t=E1[] w=- r=- d=- rw=false
+e 1 120 3145782:48 t=bool w=bool r=- d=- rw=false
+e 1 121 3145782:48 t=i128 w=- r=local d=- rw=false
+e 1 122 3145782:55 t=i128 w=- r=local d=- rw=false
+e 1 123 3145782:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 125 3145782:84 t=E1[] w=- r=- d=- rw=false
+e 1 126 3145782:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 128 3145787:40 t=E1[] w=- r=- d=- rw=false
+e 1 129 3145788:9 t=E1[] w=- r=- d=- rw=false
+e 1 130 3145788:12 t=bool w=bool r=- d=- rw=false
+e 1 131 3145788:12 t=isize w=- r=local d=- rw=false
+e 1 132 3145788:19 t=isize w=- r=local d=- rw=false
+e 1 133 3145788:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 135 3145788:45 t=E1[] w=- r=- d=- rw=false
+e 1 136 3145788:48 t=bool w=bool r=- d=- rw=false
+e 1 137 3145788:48 t=isize w=- r=local d=- rw=false
+e 1 138 3145788:55 t=isize w=- r=local d=- rw=false
+e 1 139 3145788:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 141 3145788:84 t=E1[] w=- r=- d=- rw=false
+e 1 142 3145788:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 144 3145793:40 t=E1[] w=- r=- d=- rw=false
+e 1 145 3145794:9 t=E1[] w=- r=- d=- rw=false
+e 1 146 3145794:12 t=bool w=bool r=- d=- rw=false
+e 1 147 3145794:12 t=u8 w=- r=local d=- rw=false
+e 1 148 3145794:19 t=u8 w=- r=local d=- rw=false
+e 1 149 3145794:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 151 3145794:45 t=E1[] w=- r=- d=- rw=false
+e 1 152 3145794:48 t=bool w=bool r=- d=- rw=false
+e 1 153 3145794:48 t=u8 w=- r=local d=- rw=false
+e 1 154 3145794:55 t=u8 w=- r=local d=- rw=false
+e 1 155 3145794:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 157 3145794:84 t=E1[] w=- r=- d=- rw=false
+e 1 158 3145794:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 160 3145799:40 t=E1[] w=- r=- d=- rw=false
+e 1 161 3145800:9 t=E1[] w=- r=- d=- rw=false
+e 1 162 3145800:12 t=bool w=bool r=- d=- rw=false
+e 1 163 3145800:12 t=u16 w=- r=local d=- rw=false
+e 1 164 3145800:19 t=u16 w=- r=local d=- rw=false
+e 1 165 3145800:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 167 3145800:45 t=E1[] w=- r=- d=- rw=false
+e 1 168 3145800:48 t=bool w=bool r=- d=- rw=false
+e 1 169 3145800:48 t=u16 w=- r=local d=- rw=false
+e 1 170 3145800:55 t=u16 w=- r=local d=- rw=false
+e 1 171 3145800:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 173 3145800:84 t=E1[] w=- r=- d=- rw=false
+e 1 174 3145800:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 176 3145805:40 t=E1[] w=- r=- d=- rw=false
+e 1 177 3145806:9 t=E1[] w=- r=- d=- rw=false
+e 1 178 3145806:12 t=bool w=bool r=- d=- rw=false
+e 1 179 3145806:12 t=u32 w=- r=local d=- rw=false
+e 1 180 3145806:19 t=u32 w=- r=local d=- rw=false
+e 1 181 3145806:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 183 3145806:45 t=E1[] w=- r=- d=- rw=false
+e 1 184 3145806:48 t=bool w=bool r=- d=- rw=false
+e 1 185 3145806:48 t=u32 w=- r=local d=- rw=false
+e 1 186 3145806:55 t=u32 w=- r=local d=- rw=false
+e 1 187 3145806:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 189 3145806:84 t=E1[] w=- r=- d=- rw=false
+e 1 190 3145806:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 192 3145811:40 t=E1[] w=- r=- d=- rw=false
+e 1 193 3145812:9 t=E1[] w=- r=- d=- rw=false
+e 1 194 3145812:12 t=bool w=bool r=- d=- rw=false
+e 1 195 3145812:12 t=u64 w=- r=local d=- rw=false
+e 1 196 3145812:19 t=u64 w=- r=local d=- rw=false
+e 1 197 3145812:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 199 3145812:45 t=E1[] w=- r=- d=- rw=false
+e 1 200 3145812:48 t=bool w=bool r=- d=- rw=false
+e 1 201 3145812:48 t=u64 w=- r=local d=- rw=false
+e 1 202 3145812:55 t=u64 w=- r=local d=- rw=false
+e 1 203 3145812:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 205 3145812:84 t=E1[] w=- r=- d=- rw=false
+e 1 206 3145812:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 208 3145817:40 t=E1[] w=- r=- d=- rw=false
+e 1 209 3145818:9 t=E1[] w=- r=- d=- rw=false
+e 1 210 3145818:12 t=bool w=bool r=- d=- rw=false
+e 1 211 3145818:12 t=u128 w=- r=local d=- rw=false
+e 1 212 3145818:19 t=u128 w=- r=local d=- rw=false
+e 1 213 3145818:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 215 3145818:45 t=E1[] w=- r=- d=- rw=false
+e 1 216 3145818:48 t=bool w=bool r=- d=- rw=false
+e 1 217 3145818:48 t=u128 w=- r=local d=- rw=false
+e 1 218 3145818:55 t=u128 w=- r=local d=- rw=false
+e 1 219 3145818:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 221 3145818:84 t=E1[] w=- r=- d=- rw=false
+e 1 222 3145818:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 224 3145823:40 t=E1[] w=- r=- d=- rw=false
+e 1 225 3145824:9 t=E1[] w=- r=- d=- rw=false
+e 1 226 3145824:12 t=bool w=bool r=- d=- rw=false
+e 1 227 3145824:12 t=usize w=- r=local d=- rw=false
+e 1 228 3145824:19 t=usize w=- r=local d=- rw=false
+e 1 229 3145824:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 231 3145824:45 t=E1[] w=- r=- d=- rw=false
+e 1 232 3145824:48 t=bool w=bool r=- d=- rw=false
+e 1 233 3145824:48 t=usize w=- r=local d=- rw=false
+e 1 234 3145824:55 t=usize w=- r=local d=- rw=false
+e 1 235 3145824:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 237 3145824:84 t=E1[] w=- r=- d=- rw=false
+e 1 238 3145824:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 240 3145829:40 t=E1[] w=- r=- d=- rw=false
+e 1 241 3145830:9 t=E1[] w=- r=- d=- rw=false
+e 1 242 3145830:12 t=bool w=bool r=- d=- rw=false
+e 1 243 3145830:12 t=f32 w=- r=local d=- rw=false
+e 1 244 3145830:19 t=f32 w=- r=local d=- rw=false
+e 1 245 3145830:27 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 247 3145830:45 t=E1[] w=- r=- d=- rw=false
+e 1 248 3145830:48 t=bool w=bool r=- d=- rw=false
+e 1 249 3145830:48 t=f32 w=- r=local d=- rw=false
+e 1 250 3145830:55 t=f32 w=- r=local d=- rw=false
+e 1 251 3145830:63 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 253 3145830:84 t=E1[] w=- r=- d=- rw=false
+e 1 254 3145830:86 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 256 3145835:40 t=E1[] w=- r=- d=- rw=false
+e 1 257 3145836:9 t=E1[] w=- r=- d=- rw=false
+e 1 258 3145836:12 t=bool w=bool r=- d=- rw=false
+e 1 259 3145836:12 t=bool w=- r=local d=- rw=false
+e 1 260 3145836:20 t=bool w=- r=local d=- rw=false
+e 1 261 3145836:28 t=E1[] w=- r=variant 1.1 d=- rw=false
+e 1 263 3145836:47 t=E1[] w=- r=- d=- rw=false
+e 1 264 3145836:50 t=bool w=bool r=local d=- rw=false
+e 1 265 3145836:58 t=E1[] w=- r=variant 1.0 d=- rw=false
+e 1 267 3145836:76 t=E1[] w=- r=- d=- rw=false
+e 1 268 3145836:78 t=E1[] w=- r=variant 1.2 d=- rw=false
+e 1 718 26:34 t=() w=- r=- d=- rw=false
+e 1 719 27:20 t=() w=- r=- d=- rw=false
+e 1 723 31:11 t=() w=- r=- d=- rw=false
+unseen 0

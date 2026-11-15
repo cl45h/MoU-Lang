@@ -1,0 +1,6 @@
+4 ["ya estaba", "hola, mundo", "", "3"]
+7 ["uno", "dos"] ["0", "1", "2"]
+5 0 ["antes", "antes", "después"]
+["desde una tarea", "1"]
+fin
+status 0

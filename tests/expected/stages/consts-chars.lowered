@@ -1,0 +1,1479 @@
+fn 0 chars params=1 locals=12 body=0 limits=0 ret=_ at=1048582:1
+  names 0=s 2=out 8=c
+  once 
+  scalars _
+  hints 8=char
+  copies 
+  b0 1048584:14
+    L1 = array[] @1048583:23
+    L2 = use L1 @1048583:23
+    L3 = use L0 @1048584:14
+    L4 = use int 0 @1048584:14
+    L5 = chars L3 @1048584:14
+    L6 = len L5 @1048584:14
+    goto b1
+  b1 1048584:14
+    L7 = < dyn L4, L6 @1048584:14
+    branch L7 b2 b4
+  b2 1048584:27
+    L8 = use L5[L4] @1048584:14
+    L9 = use L8 @1048584:27
+    L10 = push L2, L9 @1048584:27
+    goto b3
+  b3 1048584:5
+    L4 = + usize L4, int 1 @1048584:5
+    goto b1
+  b4 1048585:5
+    L11 = use L2 @1048585:5
+    return L11
+fn 1 count params=1 locals=11 body=0 limits=0 ret=i64 at=1048589:1
+  names 0=s 2=n 8=c
+  once 
+  scalars _
+  hints 8=char 9=i64
+  copies 
+  b0 1048591:14
+    L1 = use int 0 @1048590:13
+    L2 = use L1 @1048590:13
+    L3 = use L0 @1048591:14
+    L4 = use int 0 @1048591:14
+    L5 = chars L3 @1048591:14
+    L6 = len L5 @1048591:14
+    goto b1
+  b1 1048591:14
+    L7 = < dyn L4, L6 @1048591:14
+    branch L7 b2 b4
+  b2 1048591:18
+    L8 = use L5[L4] @1048591:14
+    L9 = use L2 @1048591:23
+    L2 = + i64 L9, int 1 @1048591:18
+    goto b3
+  b3 1048591:5
+    L4 = + usize L4, int 1 @1048591:5
+    goto b1
+  b4 1048592:5
+    L10 = use L2 @1048592:5
+    return L10
+fn 2 from_chars params=1 locals=3 body=0 limits=0 ret=_ at=1048595:1
+  names 0=cs
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048595:40
+    L1 = use L0 @1048595:55
+    call native raw.from_chars(L1) back[] -> L2 b1
+  b1 1048595:40
+    return L2
+fn 3 concat params=1 locals=3 body=0 limits=0 ret=_ at=1048598:1
+  names 0=parts
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048598:38
+    L1 = use L0 @1048598:49
+    call native raw.concat(L1) back[] -> L2 b1
+  b1 1048598:38
+    return L2
+fn 4 std.text.Builder.new params=0 locals=2 body=0 limits=0 ret=_ at=1048606:5
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 1048606:46
+    L0 = array[] @1048606:46
+    L1 = struct 0(L0) @1048606:46
+    return L1
+fn 5 std.text.Builder.add params=2 locals=4 body=0 limits=0 ret=_ at=1048608:5
+  names 0=self 1=piece
+  once 
+  scalars _ _
+  hints 
+  copies 
+  b0 1048608:56
+    L2 = use L1 @1048608:56
+    L3 = push L0.0, L2 @1048608:56
+    return L3
+fn 6 std.text.Builder.add_char params=2 locals=5 body=0 limits=0 ret=_ at=1048610:5
+  names 0=self 1=c
+  once 
+  scalars _ char
+  hints 
+  copies 
+  b0 1048610:58
+    L2 = use L1 @1048610:60
+    L3 = format(L2) @1048610:58
+    L4 = push L0.0, L3 @1048610:58
+    return L4
+fn 7 std.text.Builder.line params=2 locals=5 body=0 limits=0 ret=_ at=1048613:5
+  names 0=self 1=piece
+  once 
+  scalars _ _
+  hints 
+  copies 
+  b0 1048615:25
+    L2 = use L1 @1048614:25
+    L3 = push L0.0, L2 @1048614:25
+    L4 = push L0.0, str "\n" @1048615:25
+    return L4
+fn 8 std.text.Builder.is_empty params=1 locals=3 body=0 limits=0 ret=bool at=1048618:5
+  names 0=self
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048618:37
+    L1 = len L0.0 @1048618:37
+    L2 = == dyn L1, int 0 @1048618:37
+    return L2
+fn 9 std.text.Builder.build params=1 locals=3 body=0 limits=0 ret=_ at=1048620:5
+  names 0=self
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048620:33
+    L1 = use L0.0 @1048620:44
+    call native raw.concat(L1) back[] -> L2 b1
+  b1 1048620:33
+    return L2
+fn 10 width params=1 locals=14 body=0 limits=0 ret=i64 at=1048624:1
+  names 0=c 3=n
+  once 
+  scalars char
+  hints 3=i64
+  copies 
+  b0 1048626:8
+    L1 = use L0 @1048625:13
+    L2 = castint i64 L1 @1048625:13
+    L3 = use L2 @1048625:13
+    L5 = use L3 @1048626:8
+    L6 = < dyn L5, int 128 @1048626:8
+    branch L6 b3 b1
+  b1 1048626:30
+    L8 = use L3 @1048626:30
+    L9 = < dyn L8, int 2048 @1048626:30
+    branch L9 b6 b4
+  b2 1048626:76
+    L13 = convert fit i64 L4 @1048626:76
+    return L13
+  b3 1048626:18
+    L4 = use int 1 @1048626:18
+    goto b2
+  b4 1048626:53
+    L11 = use L3 @1048626:53
+    L12 = < dyn L11, int 65536 @1048626:53
+    branch L12 b9 b7
+  b5 1048626:76
+    L4 = use L7 @1048626:76
+    goto b2
+  b6 1048626:41
+    L7 = use int 2 @1048626:41
+    goto b5
+  b7 1048626:76
+    L10 = use int 4 @1048626:76
+    goto b8
+  b8 1048626:76
+    L7 = use L10 @1048626:76
+    goto b5
+  b9 1048626:65
+    L10 = use int 3 @1048626:65
+    goto b8
+fn 11 is_space params=1 locals=12 body=0 limits=0 ret=bool at=1048629:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048629:36
+    L4 = use L0 @1048629:36
+    L5 = == dyn L4, char 32 @1048629:36
+    L3 = use L5 @1048629:36
+    branch L3 b2 b1
+  b1 1048629:48
+    L6 = use L0 @1048629:48
+    L7 = == dyn L6, char 9 @1048629:48
+    L3 = use L7 @1048629:48
+    goto b2
+  b2 1048629:48
+    L2 = use L3 @1048629:48
+    branch L2 b4 b3
+  b3 1048629:61
+    L8 = use L0 @1048629:61
+    L9 = == dyn L8, char 10 @1048629:61
+    L2 = use L9 @1048629:61
+    goto b4
+  b4 1048629:61
+    L1 = use L2 @1048629:61
+    branch L1 b6 b5
+  b5 1048629:74
+    L10 = use L0 @1048629:74
+    L11 = == dyn L10, char 13 @1048629:74
+    L1 = use L11 @1048629:74
+    goto b6
+  b6 1048629:74
+    return L1
+fn 12 is_digit params=1 locals=6 body=0 limits=0 ret=bool at=1048631:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048631:36
+    L2 = use L0 @1048631:36
+    L3 = >= dyn L2, char 48 @1048631:36
+    L1 = use L3 @1048631:36
+    branch L1 b1 b2
+  b1 1048631:48
+    L4 = use L0 @1048631:48
+    L5 = <= dyn L4, char 57 @1048631:48
+    L1 = use L5 @1048631:48
+    goto b2
+  b2 1048631:48
+    return L1
+fn 13 is_alpha params=1 locals=12 body=0 limits=0 ret=bool at=1048633:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048633:37
+    L3 = use L0 @1048633:37
+    L4 = >= dyn L3, char 97 @1048633:37
+    L2 = use L4 @1048633:37
+    branch L2 b1 b2
+  b1 1048633:49
+    L5 = use L0 @1048633:49
+    L6 = <= dyn L5, char 122 @1048633:49
+    L2 = use L6 @1048633:49
+    goto b2
+  b2 1048633:49
+    L1 = use L2 @1048633:49
+    branch L1 b4 b3
+  b3 1048633:63
+    L8 = use L0 @1048633:63
+    L9 = >= dyn L8, char 65 @1048633:63
+    L7 = use L9 @1048633:63
+    branch L7 b5 b6
+  b4 1048633:75
+    return L1
+  b5 1048633:75
+    L10 = use L0 @1048633:75
+    L11 = <= dyn L10, char 90 @1048633:75
+    L7 = use L11 @1048633:75
+    goto b6
+  b6 1048633:75
+    L1 = use L7 @1048633:75
+    goto b4
+fn 14 is_letter params=1 locals=5 body=0 limits=0 ret=bool at=1048636:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048636:37
+    L1 = use L0 @1048636:52
+    call native raw.char_class(L1) back[] -> L2 b1
+  b1 1048636:37
+    L3 = & dyn L2, int 1 @1048636:37
+    L4 = != dyn L3, int 0 @1048636:37
+    return L4
+fn 15 is_number params=1 locals=5 body=0 limits=0 ret=bool at=1048639:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048639:37
+    L1 = use L0 @1048639:52
+    call native raw.char_class(L1) back[] -> L2 b1
+  b1 1048639:37
+    L3 = & dyn L2, int 2 @1048639:37
+    L4 = != dyn L3, int 0 @1048639:37
+    return L4
+fn 16 is_blank params=1 locals=5 body=0 limits=0 ret=bool at=1048642:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048642:36
+    L1 = use L0 @1048642:51
+    call native raw.char_class(L1) back[] -> L2 b1
+  b1 1048642:36
+    L3 = & dyn L2, int 4 @1048642:36
+    L4 = != dyn L3, int 0 @1048642:36
+    return L4
+fn 17 is_upper params=1 locals=5 body=0 limits=0 ret=bool at=1048644:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048644:36
+    L1 = use L0 @1048644:51
+    call native raw.char_class(L1) back[] -> L2 b1
+  b1 1048644:36
+    L3 = & dyn L2, int 8 @1048644:36
+    L4 = != dyn L3, int 0 @1048644:36
+    return L4
+fn 18 is_lower params=1 locals=5 body=0 limits=0 ret=bool at=1048646:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048646:36
+    L1 = use L0 @1048646:51
+    call native raw.char_class(L1) back[] -> L2 b1
+  b1 1048646:36
+    L3 = & dyn L2, int 16 @1048646:36
+    L4 = != dyn L3, int 0 @1048646:36
+    return L4
+fn 19 to_upper params=1 locals=3 body=0 limits=0 ret=char at=1048649:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048649:36
+    L1 = use L0 @1048649:50
+    call native raw.char_case(L1, bool true) back[] -> L2 b1
+  b1 1048649:36
+    return L2
+fn 20 to_lower params=1 locals=3 body=0 limits=0 ret=char at=1048651:1
+  names 0=c
+  once 
+  scalars char
+  hints 
+  copies 
+  b0 1048651:36
+    L1 = use L0 @1048651:50
+    call native raw.char_case(L1, bool false) back[] -> L2 b1
+  b1 1048651:36
+    return L2
+fn 21 upper params=1 locals=14 body=0 limits=0 ret=_ at=1048654:1
+  names 0=s 2=out 8=c
+  once 
+  scalars _
+  hints 8=char
+  copies 
+  b0 1048656:14
+    L1 = array[] @1048655:23
+    L2 = use L1 @1048655:23
+    L3 = use L0 @1048656:14
+    L4 = use int 0 @1048656:14
+    L5 = chars L3 @1048656:14
+    L6 = len L5 @1048656:14
+    goto b1
+  b1 1048656:14
+    L7 = < dyn L4, L6 @1048656:14
+    branch L7 b2 b4
+  b2 1048656:27
+    L8 = use L5[L4] @1048656:14
+    L9 = use L8 @1048656:41
+    call native raw.char_case(L9, bool true) back[] -> L10 b5
+  b3 1048656:5
+    L4 = + usize L4, int 1 @1048656:5
+    goto b1
+  b4 1048657:5
+    L12 = use L2 @1048657:20
+    call native raw.from_chars(L12) back[] -> L13 b6
+  b5 1048656:27
+    L11 = push L2, L10 @1048656:27
+    goto b3
+  b6 1048657:5
+    return L13
+fn 22 lower params=1 locals=14 body=0 limits=0 ret=_ at=1048661:1
+  names 0=s 2=out 8=c
+  once 
+  scalars _
+  hints 8=char
+  copies 
+  b0 1048663:14
+    L1 = array[] @1048662:23
+    L2 = use L1 @1048662:23
+    L3 = use L0 @1048663:14
+    L4 = use int 0 @1048663:14
+    L5 = chars L3 @1048663:14
+    L6 = len L5 @1048663:14
+    goto b1
+  b1 1048663:14
+    L7 = < dyn L4, L6 @1048663:14
+    branch L7 b2 b4
+  b2 1048663:27
+    L8 = use L5[L4] @1048663:14
+    L9 = use L8 @1048663:41
+    call native raw.char_case(L9, bool false) back[] -> L10 b5
+  b3 1048663:5
+    L4 = + usize L4, int 1 @1048663:5
+    goto b1
+  b4 1048664:5
+    L12 = use L2 @1048664:20
+    call native raw.from_chars(L12) back[] -> L13 b6
+  b5 1048663:27
+    L11 = push L2, L10 @1048663:27
+    goto b3
+  b6 1048664:5
+    return L13
+fn 23 digit params=1 locals=9 body=0 limits=0 ret=opt2 at=1048668:1
+  names 0=c
+  once 
+  scalars char
+  hints 1=opt2
+  copies 
+  b0 1048669:8
+    L2 = use L0 @1048669:17
+    call fn 12(L2) back[] -> L3 b4
+  b1 1048669:59
+    L1 = use none @1048669:59
+    goto b2
+  b2 1048669:59
+    return L1
+  b3 1048669:27
+    L4 = use L0 @1048669:27
+    L5 = castint i64 L4 @1048669:27
+    L6 = castint i64 char 48 @1048669:38
+    L7 = - i64 L5, L6 @1048669:27
+    L8 = some L7 @1048669:27
+    L1 = use L8 @1048669:27
+    goto b2
+  b4 1048669:8
+    branch L3 b3 b1
+fn 24 split params=2 locals=42 body=0 limits=0 ret=_ at=1048673:1
+  names 0=s 1=sep 3=parts 5=start 7=at 13=c
+  once 
+  scalars _ char
+  hints 13=char 32=i64
+  copies 
+  b0 1048677:14
+    L2 = array[] @1048674:24
+    L3 = use L2 @1048674:24
+    L4 = use int 0 @1048675:17
+    L5 = use L4 @1048675:17
+    L6 = use int 0 @1048676:14
+    L7 = use L6 @1048676:14
+    L8 = use L0 @1048677:14
+    L9 = use int 0 @1048677:14
+    L10 = chars L8 @1048677:14
+    L11 = len L10 @1048677:14
+    goto b1
+  b1 1048677:14
+    L12 = < dyn L9, L11 @1048677:14
+    branch L12 b2 b4
+  b2 1048678:12
+    L13 = use L10[L9] @1048677:14
+    L15 = use L13 @1048678:12
+    L16 = use L1 @1048678:17
+    L17 = == dyn L15, L16 @1048678:12
+    branch L17 b7 b5
+  b3 1048677:5
+    L9 = + usize L9, int 1 @1048677:5
+    goto b1
+  b4 1048685:5
+    L33 = use L0 @1048684:16
+    L34 = use L5 @1048684:18
+    L35 = some L34 @1048684:18
+    L36 = use L7 @1048684:25
+    L37 = some L36 @1048684:25
+    L38 = tuple(L35, L37, bool false) @1048684:25
+    L39 = slice L33, L38 @1048684:16
+    L40 = push L3, L39 @1048684:16
+    L41 = use L3 @1048685:5
+    return L41
+  b5 1048680:13
+    goto b6
+  b6 1048682:15
+    L30 = use L13 @1048682:21
+    call fn 10(L30) back[] -> L31 b9
+  b7 1048680:26
+    L18 = use L0 @1048679:24
+    L19 = use L5 @1048679:26
+    L20 = some L19 @1048679:26
+    L21 = use L7 @1048679:33
+    L22 = some L21 @1048679:33
+    L23 = tuple(L20, L22, bool false) @1048679:33
+    L24 = slice L18, L23 @1048679:24
+    L25 = push L3, L24 @1048679:24
+    L26 = use L7 @1048680:21
+    L27 = use L13 @1048680:32
+    call fn 10(L27) back[] -> L28 b8
+  b8 1048680:13
+    L29 = + i64 L26, L28 @1048680:21
+    L5 = use L29 @1048680:13
+    goto b6
+  b9 1048682:9
+    L32 = use L7 @1048682:15
+    L7 = + i64 L32, L31 @1048682:9
+    goto b3
+fn 25 words params=1 locals=45 body=0 limits=0 ret=_ at=1048689:1
+  names 0=s 2=parts 4=start 6=at 8=inside 14=c
+  once 
+  scalars _
+  hints 8=bool 14=char 33=i64
+  copies 
+  b0 1048694:14
+    L1 = array[] @1048690:24
+    L2 = use L1 @1048690:24
+    L3 = use int 0 @1048691:17
+    L4 = use L3 @1048691:17
+    L5 = use int 0 @1048692:14
+    L6 = use L5 @1048692:14
+    L7 = use bool false @1048693:18
+    L8 = use L7 @1048693:18
+    L9 = use L0 @1048694:14
+    L10 = use int 0 @1048694:14
+    L11 = chars L9 @1048694:14
+    L12 = len L11 @1048694:14
+    goto b1
+  b1 1048694:14
+    L13 = < dyn L10, L12 @1048694:14
+    branch L13 b2 b4
+  b2 1048695:12
+    L14 = use L11[L10] @1048694:14
+    L16 = use L14 @1048695:21
+    call fn 11(L16) back[] -> L17 b8
+  b3 1048694:5
+    L10 = + usize L10, int 1 @1048694:5
+    goto b1
+  b4 1048704:8
+    L35 = use L8 @1048704:8
+    branch L35 b18 b16
+  b5 1048698:20
+    L29 = use L8 @1048698:20
+    branch L29 b12 b14
+  b6 1048702:15
+    L31 = use L14 @1048702:21
+    call fn 10(L31) back[] -> L32 b15
+  b7 1048696:16
+    L19 = use L8 @1048696:16
+    branch L19 b11 b9
+  b8 1048695:12
+    branch L17 b7 b5
+  b9 1048696:36
+    goto b10
+  b10 1048697:13
+    L8 = use bool false @1048697:13
+    L15 = use () @1048697:13
+    goto b6
+  b11 1048696:36
+    L20 = use L0 @1048696:36
+    L21 = use L4 @1048696:38
+    L22 = some L21 @1048696:38
+    L23 = use L6 @1048696:45
+    L24 = some L23 @1048696:45
+    L25 = tuple(L22, L24, bool false) @1048696:45
+    L26 = slice L20, L25 @1048696:36
+    L27 = push L2, L26 @1048696:36
+    goto b10
+  b12 1048700:13
+    goto b13
+  b13 1048700:13
+    L15 = use () @1048700:13
+    goto b6
+  b14 1048700:13
+    L8 = use bool true @1048699:13
+    L30 = use L6 @1048700:21
+    L4 = use L30 @1048700:13
+    goto b13
+  b15 1048702:9
+    L33 = use L6 @1048702:15
+    L6 = + i64 L33, L32 @1048702:9
+    goto b3
+  b16 1048704:28
+    goto b17
+  b17 1048705:5
+    L44 = use L2 @1048705:5
+    return L44
+  b18 1048704:28
+    L36 = use L0 @1048704:28
+    L37 = use L4 @1048704:30
+    L38 = some L37 @1048704:30
+    L39 = use L6 @1048704:37
+    L40 = some L39 @1048704:37
+    L41 = tuple(L38, L40, bool false) @1048704:37
+    L42 = slice L36, L41 @1048704:28
+    L43 = push L2, L42 @1048704:28
+    goto b17
+fn 26 lines params=1 locals=3 body=0 limits=0 ret=_ at=1048708:1
+  names 0=s
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048708:33
+    L1 = use L0 @1048708:39
+    call fn 24(L1, char 10) back[] -> L2 b1
+  b1 1048708:33
+    return L2
+fn 27 join params=2 locals=18 body=0 limits=0 ret=_ at=1048710:1
+  names 0=parts 1=sep 3=all 8=p
+  once 
+  scalars _ _
+  hints 
+  copies 
+  b0 1048712:14
+    L2 = array[] @1048711:22
+    L3 = use L2 @1048711:22
+    L4 = use L0 @1048712:14
+    L5 = use int 0 @1048712:14
+    L6 = len L4 @1048712:14
+    goto b1
+  b1 1048712:14
+    L7 = < dyn L5, L6 @1048712:14
+    branch L7 b2 b4
+  b2 1048713:12
+    L8 = use L4[L5] @1048712:14
+    L10 = len L3 @1048713:12
+    L11 = > dyn L10, int 0 @1048713:12
+    branch L11 b7 b5
+  b3 1048712:5
+    L5 = + usize L5, int 1 @1048712:5
+    goto b1
+  b4 1048716:5
+    L16 = use L3 @1048716:16
+    call native raw.concat(L16) back[] -> L17 b8
+  b5 1048713:35
+    goto b6
+  b6 1048714:18
+    L14 = use L8 @1048714:18
+    L15 = push L3, L14 @1048714:18
+    goto b3
+  b7 1048713:35
+    L12 = use L1 @1048713:35
+    L13 = push L3, L12 @1048713:35
+    goto b6
+  b8 1048716:5
+    return L17
+fn 28 trim params=1 locals=37 body=0 limits=0 ret=_ at=1048720:1
+  names 0=s 2=start 4=end 6=at 8=seen 14=c
+  once 
+  scalars _
+  hints 8=bool 14=char 27=i64
+  copies 
+  b0 1048725:14
+    L1 = use int 0 @1048721:17
+    L2 = use L1 @1048721:17
+    L3 = use int 0 @1048722:15
+    L4 = use L3 @1048722:15
+    L5 = use int 0 @1048723:14
+    L6 = use L5 @1048723:14
+    L7 = use bool false @1048724:16
+    L8 = use L7 @1048724:16
+    L9 = use L0 @1048725:14
+    L10 = use int 0 @1048725:14
+    L11 = chars L9 @1048725:14
+    L12 = len L11 @1048725:14
+    goto b1
+  b1 1048725:14
+    L13 = < dyn L10, L12 @1048725:14
+    branch L13 b2 b4
+  b2 1048726:13
+    L14 = use L11[L10] @1048725:14
+    L16 = use L14 @1048726:22
+    call fn 11(L16) back[] -> L17 b8
+  b3 1048725:5
+    L10 = + usize L10, int 1 @1048725:5
+    goto b1
+  b4 1048733:8
+    L29 = use L8 @1048733:8
+    branch L29 b16 b14
+  b5 1048729:13
+    goto b6
+  b6 1048731:15
+    L25 = use L14 @1048731:21
+    call fn 10(L25) back[] -> L26 b13
+  b7 1048727:17
+    L19 = use L8 @1048727:17
+    branch L19 b9 b11
+  b8 1048726:13
+    branch L17 b5 b7
+  b9 1048727:24
+    goto b10
+  b10 1048729:24
+    L8 = use bool true @1048728:13
+    L21 = use L6 @1048729:19
+    L22 = use L14 @1048729:30
+    call fn 10(L22) back[] -> L23 b12
+  b11 1048727:24
+    L20 = use L6 @1048727:32
+    L2 = use L20 @1048727:24
+    goto b10
+  b12 1048729:13
+    L24 = + i64 L21, L23 @1048729:19
+    L4 = use L24 @1048729:13
+    goto b6
+  b13 1048731:9
+    L27 = use L6 @1048731:15
+    L6 = + i64 L27, L26 @1048731:9
+    goto b3
+  b14 1048733:38
+    L28 = use str "" @1048733:38
+    goto b15
+  b15 1048733:38
+    return L28
+  b16 1048733:15
+    L30 = use L0 @1048733:15
+    L31 = use L2 @1048733:17
+    L32 = some L31 @1048733:17
+    L33 = use L4 @1048733:24
+    L34 = some L33 @1048733:24
+    L35 = tuple(L32, L34, bool false) @1048733:24
+    L36 = slice L30, L35 @1048733:15
+    L28 = use L36 @1048733:15
+    goto b15
+fn 29 starts_with params=2 locals=13 body=0 limits=0 ret=bool at=1048736:1
+  names 0=s 1=prefix
+  once 
+  scalars _ _
+  hints 
+  copies 
+  b0 1048737:5
+    L3 = len L0 @1048737:5
+    L4 = len L1 @1048737:14
+    L5 = >= dyn L3, L4 @1048737:5
+    L2 = use L5 @1048737:5
+    branch L2 b1 b2
+  b1 1048737:28
+    L6 = use L0 @1048737:28
+    L7 = len L1 @1048737:32
+    L8 = some L7 @1048737:32
+    L9 = tuple(none, L8, bool false) @1048737:32
+    L10 = slice L6, L9 @1048737:28
+    L11 = use L1 @1048737:47
+    L12 = == dyn L10, L11 @1048737:28
+    L2 = use L12 @1048737:28
+    goto b2
+  b2 1048737:28
+    return L2
+fn 30 ends_with params=2 locals=15 body=0 limits=0 ret=bool at=1048740:1
+  names 0=s 1=suffix
+  once 
+  scalars _ _
+  hints 
+  copies 
+  b0 1048741:5
+    L3 = len L0 @1048741:5
+    L4 = len L1 @1048741:14
+    L5 = >= dyn L3, L4 @1048741:5
+    L2 = use L5 @1048741:5
+    branch L2 b1 b2
+  b1 1048741:28
+    L6 = use L0 @1048741:28
+    L7 = len L0 @1048741:30
+    L8 = len L1 @1048741:38
+    L9 = - usize L7, L8 @1048741:30
+    L10 = some L9 @1048741:30
+    L11 = tuple(L10, none, bool false) @1048741:30
+    L12 = slice L6, L11 @1048741:28
+    L13 = use L1 @1048741:55
+    L14 = == dyn L12, L13 @1048741:28
+    L2 = use L14 @1048741:28
+    goto b2
+  b2 1048741:28
+    return L2
+fn 31 find params=2 locals=47 body=0 limits=0 ret=opt2 at=1048745:1
+  names 0=s 1=part 4=hay 7=needle 10=n 13=m 15=at 17=i 24=j
+  once 
+  scalars _ _
+  hints 10=i64 13=i64 31=char 33=char 35=i64 43=char 45=i64 46=i64
+  copies 
+  b0 1048746:15
+    L2 = use L0 @1048746:21
+    call fn 0(L2) back[] -> L3 b1
+  b1 1048747:18
+    L4 = use L3 @1048746:15
+    L5 = use L1 @1048747:24
+    call fn 0(L5) back[] -> L6 b2
+  b2 1048752:5
+    L7 = use L6 @1048747:18
+    L8 = len L4 @1048748:13
+    L9 = castint i64 L8 @1048748:13
+    L10 = use L9 @1048748:13
+    L11 = len L7 @1048749:13
+    L12 = castint i64 L11 @1048749:13
+    L13 = use L12 @1048749:13
+    L14 = use int 0 @1048750:14
+    L15 = use L14 @1048750:14
+    L16 = use int 0 @1048751:13
+    L17 = use L16 @1048751:13
+    goto b3
+  b3 1048752:11
+    L18 = use L17 @1048752:11
+    L19 = use L13 @1048752:15
+    L20 = + i64 L18, L19 @1048752:11
+    L21 = use L10 @1048752:20
+    L22 = <= dyn L20, L21 @1048752:11
+    branch L22 b5 b4
+  b4 1048759:5
+    return none
+  b5 1048754:9
+    L23 = use int 0 @1048753:17
+    L24 = use L23 @1048753:17
+    goto b6
+  b6 1048754:15
+    L25 = use L24 @1048754:15
+    L26 = use L13 @1048754:19
+    L27 = < dyn L25, L26 @1048754:15
+    branch L27 b9 b7
+  b7 1048755:12
+    L37 = use L24 @1048755:12
+    L38 = use L13 @1048755:17
+    L39 = == dyn L37, L38 @1048755:12
+    branch L39 b12 b10
+  b8 1048754:50
+    L35 = use L24 @1048754:55
+    L24 = + i64 L35, int 1 @1048754:50
+    goto b6
+  b9 1048754:24
+    L28 = use L17 @1048754:28
+    L29 = use L24 @1048754:32
+    L30 = + i64 L28, L29 @1048754:28
+    L31 = use L4[L30] @1048754:24
+    L32 = use L24 @1048754:45
+    L33 = use L7[L32] @1048754:38
+    L34 = == dyn L31, L33 @1048754:24
+    branch L34 b8 b7
+  b10 1048755:21
+    goto b11
+  b11 1048756:15
+    L42 = use L17 @1048756:25
+    L43 = use L4[L42] @1048756:21
+    call fn 10(L43) back[] -> L44 b14
+  b12 1048755:21
+    L40 = use L15 @1048755:28
+    L41 = convert wrap(_) L40 @1048755:28
+    return L41
+  b13 1048755:21
+    goto b11
+  b14 1048757:9
+    L45 = use L15 @1048756:15
+    L15 = + i64 L45, L44 @1048756:9
+    L46 = use L17 @1048757:14
+    L17 = + i64 L46, int 1 @1048757:9
+    goto b3
+fn 32 contains params=2 locals=8 body=0 limits=0 ret=bool at=1048762:1
+  names 0=s 1=part
+  once 
+  scalars _ _
+  hints 4=opt2
+  copies 
+  b0 1048763:11
+    L2 = use L0 @1048763:16
+    L3 = use L1 @1048763:19
+    call fn 31(L2, L3) back[] -> L4 b1
+  b1 1048763:11
+    L6 = is 1 L4 @1048763:11
+    branch L6 b4 b3
+  b2 1048763:5
+    return L5
+  b3 1048764:20
+    L7 = is 0 L4 @1048764:20
+    branch L7 b6 b5
+  b4 1048764:20
+    L5 = use bool true @1048764:20
+    goto b2
+  b5 1048763:5
+    panic "no arm of this `match` matched the value"
+  b6 1048765:17
+    L5 = use bool false @1048765:17
+    goto b2
+fn 33 repeat params=2 locals=15 body=1 limits=0 ret=_ at=1048769:1
+  names 0=s 1=times 5=parts 10=i
+  once 
+  scalars _ i64
+  hints 7=i64 8=i64 10=i64
+  copies 
+  b0 1048769:48
+    L2 = use L1 @1048769:48
+    L3 = >= dyn L2, int 0 @1048769:48
+    branch L3 b1 b2
+  b1 1048771:17
+    L4 = array[] @1048770:24
+    L5 = use L4 @1048770:24
+    L6 = use L1 @1048771:17
+    L7 = use int 0 @1048771:17
+    L8 = use L6 @1048771:17
+    goto b3
+  b2 1048769:48
+    panic "a `where` condition of `repeat` does not hold"
+  b3 1048771:17
+    L9 = < dyn L7, L8 @1048771:17
+    branch L9 b4 b6
+  b4 1048771:36
+    L10 = use L7 @1048771:17
+    L11 = use L0 @1048771:36
+    L12 = push L5, L11 @1048771:36
+    goto b5
+  b5 1048771:5
+    L7 = succ i64 L7 @1048771:5
+    goto b3
+  b6 1048772:5
+    L13 = use L5 @1048772:16
+    call native raw.concat(L13) back[] -> L14 b7
+  b7 1048772:5
+    return L14
+fn 34 parse_int params=1 locals=56 body=0 limits=0 ret=opt2 at=1048777:1
+  names 0=s 2=n 4=any 6=negative 8=first 14=c 27=d
+  once 
+  scalars _
+  hints 4=bool 6=bool 8=bool 14=char 27=i64 47=opt2
+  copies 
+  b0 1048782:14
+    L1 = use int 0 @1048778:13
+    L2 = use L1 @1048778:13
+    L3 = use bool false @1048779:15
+    L4 = use L3 @1048779:15
+    L5 = use bool false @1048780:20
+    L6 = use L5 @1048780:20
+    L7 = use bool true @1048781:17
+    L8 = use L7 @1048781:17
+    L9 = use L0 @1048782:14
+    L10 = use int 0 @1048782:14
+    L11 = chars L9 @1048782:14
+    L12 = len L11 @1048782:14
+    goto b1
+  b1 1048782:14
+    L13 = < dyn L10, L12 @1048782:14
+    branch L13 b2 b4
+  b2 1048783:12
+    L14 = use L11[L10] @1048782:14
+    L16 = use L8 @1048783:12
+    branch L16 b8 b5
+  b3 1048782:5
+    L10 = + usize L10, int 1 @1048782:5
+    goto b1
+  b4 1048794:9
+    L42 = use L4 @1048794:9
+    branch L42 b17 b19
+  b5 1048786:21
+    L23 = use L14 @1048786:27
+    call fn 23(L23) back[] -> L24 b10
+  b6 1048792:9
+    L8 = use bool false @1048792:9
+    goto b3
+  b7 1048784:13
+    L21 = use L14 @1048784:24
+    L22 = == dyn L21, char 45 @1048784:24
+    L6 = use L22 @1048784:13
+    L15 = use () @1048784:13
+    goto b6
+  b8 1048783:22
+    L17 = use L14 @1048783:22
+    L18 = == dyn L17, char 45 @1048783:22
+    branch L18 b7 b9
+  b9 1048783:34
+    L19 = use L14 @1048783:34
+    L20 = == dyn L19, char 43 @1048783:34
+    branch L20 b7 b5
+  b10 1048786:21
+    L25 = is 1 L24 @1048786:21
+    branch L25 b11 b12
+  b11 1048788:16
+    L26 = use L24.0 @1048786:21
+    L27 = use L26 @1048786:21
+    L29 = use L2 @1048788:16
+    L30 = neg lit int 9223372036854775807 @1048788:21
+    L31 = - lit L30, int 1 @1048788:21
+    L32 = convert fit i64 L31 @1048788:21
+    L33 = use L27 @1048788:48
+    L34 = + i64 L32, L33 @1048788:21
+    L35 = / i64 L34, int 10 @1048788:21
+    L36 = < dyn L29, L35 @1048788:16
+    branch L36 b15 b13
+  b12 1048786:21
+    return none
+  b13 1048788:58
+    goto b14
+  b14 1048790:13
+    L37 = use L2 @1048789:17
+    L38 = * i64 L37, int 10 @1048789:17
+    L39 = use L27 @1048789:26
+    L40 = - i64 L38, L39 @1048789:17
+    L2 = use L40 @1048789:13
+    L4 = use bool true @1048790:13
+    L15 = use () @1048790:13
+    goto b6
+  b15 1048788:58
+    return none
+  b16 1048788:58
+    goto b14
+  b17 1048794:15
+    goto b18
+  b18 1048795:8
+    L44 = use L6 @1048795:8
+    branch L44 b23 b21
+  b19 1048794:15
+    return none
+  b20 1048794:15
+    goto b18
+  b21 1048795:19
+    goto b22
+  b22 1048796:8
+    L48 = use L2 @1048796:8
+    L49 = neg lit int 9223372036854775807 @1048796:13
+    L50 = - lit L49, int 1 @1048796:13
+    L51 = convert fit i64 L50 @1048796:13
+    L52 = == dyn L48, L51 @1048796:8
+    branch L52 b27 b25
+  b23 1048795:19
+    L45 = use L2 @1048795:26
+    L46 = convert wrap(_) L45 @1048795:26
+    return L46
+  b24 1048795:19
+    goto b22
+  b25 1048796:59
+    L53 = use L2 @1048796:63
+    L54 = - i64 int 0, L53 @1048796:59
+    L55 = some L54 @1048796:59
+    L47 = use L55 @1048796:59
+    goto b26
+  b26 1048796:59
+    return L47
+  b27 1048796:40
+    L47 = use none @1048796:40
+    goto b26
+fn 35 parse_float params=1 locals=3 body=0 limits=0 ret=opt3 at=1048801:1
+  names 0=s
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 1048801:38
+    L1 = use L0 @1048801:54
+    call native raw.parse_float(L1) back[] -> L2 b1
+  b1 1048801:38
+    return L2
+fn 36 bytes params=1 locals=73 body=0 limits=0 ret=_ at=1048804:1
+  names 0=s 2=out 8=ch 11=c
+  once 
+  scalars _
+  hints 8=char 11=i64
+  copies 
+  b0 1048806:15
+    L1 = array[] @1048805:21
+    L2 = use L1 @1048805:21
+    L3 = use L0 @1048806:21
+    call fn 0(L3) back[] -> L4 b1
+  b1 1048806:15
+    L5 = use int 0 @1048806:15
+    L6 = len L4 @1048806:15
+    goto b2
+  b2 1048806:15
+    L7 = < dyn L5, L6 @1048806:15
+    branch L7 b3 b5
+  b3 1048808:12
+    L8 = use L4[L5] @1048806:15
+    L9 = use L8 @1048807:17
+    L10 = castint i64 L9 @1048807:17
+    L11 = use L10 @1048807:17
+    L13 = use L11 @1048808:12
+    L14 = < dyn L13, int 128 @1048808:12
+    branch L14 b8 b6
+  b4 1048806:5
+    L5 = + usize L5, int 1 @1048806:5
+    goto b2
+  b5 1048824:5
+    L72 = use L2 @1048824:5
+    return L72
+  b6 1048810:19
+    L19 = use L11 @1048810:19
+    L20 = < dyn L19, int 2048 @1048810:19
+    branch L20 b11 b9
+  b7 1048821:23
+    goto b4
+  b8 1048809:22
+    L15 = use L11 @1048809:22
+    L16 = castint u8 L15 @1048809:22
+    L17 = push L2, L16 @1048809:22
+    L12 = use L17 @1048809:22
+    goto b7
+  b9 1048813:19
+    L32 = use L11 @1048813:19
+    L33 = < dyn L32, int 65536 @1048813:19
+    branch L33 b14 b12
+  b10 1048821:23
+    L12 = use L18 @1048821:23
+    goto b7
+  b11 1048812:23
+    L21 = use L11 @1048811:29
+    L22 = / i64 L21, int 64 @1048811:29
+    L23 = + i64 int 192, L22 @1048811:23
+    L24 = castint u8 L23 @1048811:23
+    L25 = push L2, L24 @1048811:23
+    L26 = use L11 @1048812:29
+    L27 = % i64 L26, int 64 @1048812:29
+    L28 = + i64 int 128, L27 @1048812:23
+    L29 = castint u8 L28 @1048812:23
+    L30 = push L2, L29 @1048812:23
+    L18 = use L30 @1048812:23
+    goto b10
+  b12 1048821:23
+    L50 = use L11 @1048818:29
+    L51 = / i64 L50, int 262144 @1048818:29
+    L52 = + i64 int 240, L51 @1048818:23
+    L53 = castint u8 L52 @1048818:23
+    L54 = push L2, L53 @1048818:23
+    L55 = use L11 @1048819:29
+    L56 = / i64 L55, int 4096 @1048819:29
+    L57 = % i64 L56, int 64 @1048819:29
+    L58 = + i64 int 128, L57 @1048819:23
+    L59 = castint u8 L58 @1048819:23
+    L60 = push L2, L59 @1048819:23
+    L61 = use L11 @1048820:29
+    L62 = / i64 L61, int 64 @1048820:29
+    L63 = % i64 L62, int 64 @1048820:29
+    L64 = + i64 int 128, L63 @1048820:23
+    L65 = castint u8 L64 @1048820:23
+    L66 = push L2, L65 @1048820:23
+    L67 = use L11 @1048821:29
+    L68 = % i64 L67, int 64 @1048821:29
+    L69 = + i64 int 128, L68 @1048821:23
+    L70 = castint u8 L69 @1048821:23
+    L71 = push L2, L70 @1048821:23
+    L31 = use L71 @1048821:23
+    goto b13
+  b13 1048821:23
+    L18 = use L31 @1048821:23
+    goto b10
+  b14 1048816:23
+    L34 = use L11 @1048814:29
+    L35 = / i64 L34, int 4096 @1048814:29
+    L36 = + i64 int 224, L35 @1048814:23
+    L37 = castint u8 L36 @1048814:23
+    L38 = push L2, L37 @1048814:23
+    L39 = use L11 @1048815:29
+    L40 = / i64 L39, int 64 @1048815:29
+    L41 = % i64 L40, int 64 @1048815:29
+    L42 = + i64 int 128, L41 @1048815:23
+    L43 = castint u8 L42 @1048815:23
+    L44 = push L2, L43 @1048815:23
+    L45 = use L11 @1048816:29
+    L46 = % i64 L45, int 64 @1048816:29
+    L47 = + i64 int 128, L46 @1048816:23
+    L48 = castint u8 L47 @1048816:23
+    L49 = push L2, L48 @1048816:23
+    L31 = use L49 @1048816:23
+    goto b13
+fn 37 from_bytes params=1 locals=80 body=0 limits=0 ret=_ at=1048828:1
+  names 0=data 2=out 4=i 11=b 13=more 15=c 17=least 43=k 52=next
+  once 
+  scalars _
+  hints 4=usize 9=u8 11=i64 15=i64 40=i64 41=i64 43=i64 44=usize 50=u8 52=i64 76=usize
+  copies 
+  b0 1048831:5
+    L1 = array[] @1048829:23
+    L2 = use L1 @1048829:23
+    L3 = use int 0 @1048830:20
+    L4 = use L3 @1048830:20
+    goto b1
+  b1 1048831:11
+    L5 = use L4 @1048831:11
+    L6 = len L0 @1048831:15
+    L7 = < dyn L5, L6 @1048831:11
+    branch L7 b3 b2
+  b2 1048864:10
+    L77 = use L2 @1048864:21
+    call fn 2(L77) back[] -> L78 b42
+  b3 1048836:12
+    L8 = use L4 @1048832:22
+    L9 = use L0[L8] @1048832:17
+    L10 = castint i64 L9 @1048832:17
+    L11 = use L10 @1048832:17
+    L12 = use int 0 @1048833:20
+    L13 = use L12 @1048833:20
+    L14 = use L11 @1048834:17
+    L15 = use L14 @1048834:17
+    L16 = use int 0 @1048835:21
+    L17 = use L16 @1048835:21
+    L19 = use L11 @1048836:12
+    L20 = >= dyn L19, int 240 @1048836:12
+    branch L20 b6 b4
+  b4 1048840:19
+    L24 = use L11 @1048840:19
+    L25 = >= dyn L24, int 224 @1048840:19
+    branch L25 b9 b7
+  b5 1048851:12
+    L37 = use L11 @1048851:12
+    L38 = >= dyn L37, int 248 @1048851:12
+    branch L38 b19 b17
+  b6 1048839:13
+    L13 = use int 3 @1048837:13
+    L21 = use L11 @1048838:17
+    L22 = - i64 L21, int 240 @1048838:17
+    L15 = use L22 @1048838:13
+    L17 = use int 65536 @1048839:13
+    L18 = use () @1048839:13
+    goto b5
+  b7 1048844:19
+    L29 = use L11 @1048844:19
+    L30 = >= dyn L29, int 192 @1048844:19
+    branch L30 b12 b10
+  b8 1048849:13
+    L18 = use L23 @1048849:13
+    goto b5
+  b9 1048843:13
+    L13 = use int 2 @1048841:13
+    L26 = use L11 @1048842:17
+    L27 = - i64 L26, int 224 @1048842:17
+    L15 = use L27 @1048842:13
+    L17 = use int 2048 @1048843:13
+    L23 = use () @1048843:13
+    goto b8
+  b10 1048848:19
+    L34 = use L11 @1048848:19
+    L35 = >= dyn L34, int 128 @1048848:19
+    branch L35 b15 b13
+  b11 1048849:13
+    L23 = use L28 @1048849:13
+    goto b8
+  b12 1048847:13
+    L13 = use int 1 @1048845:13
+    L31 = use L11 @1048846:17
+    L32 = - i64 L31, int 192 @1048846:17
+    L15 = use L32 @1048846:13
+    L17 = use int 128 @1048847:13
+    L28 = use () @1048847:13
+    goto b11
+  b13 1048849:13
+    goto b14
+  b14 1048849:13
+    L28 = use () @1048849:13
+    goto b11
+  b15 1048849:13
+    return none
+  b16 1048849:13
+    goto b14
+  b17 1048851:23
+    goto b18
+  b18 1048852:21
+    L39 = use L13 @1048852:21
+    L40 = use int 0 @1048852:21
+    L41 = use L39 @1048852:21
+    goto b21
+  b19 1048851:23
+    return none
+  b20 1048851:23
+    goto b18
+  b21 1048852:21
+    L42 = < dyn L40, L41 @1048852:21
+    branch L42 b22 b24
+  b22 1048854:16
+    L43 = use L40 @1048852:21
+    L44 = use L4 @1048853:18
+    L4 = + usize L44, int 1 @1048853:13
+    L46 = use L4 @1048854:16
+    L47 = len L0 @1048854:21
+    L48 = >= dyn L46, L47 @1048854:16
+    branch L48 b27 b25
+  b23 1048852:9
+    L40 = succ i64 L40 @1048852:9
+    goto b21
+  b24 1048860:12
+    L64 = use L15 @1048860:12
+    L65 = use L17 @1048860:16
+    L66 = < dyn L64, L65 @1048860:12
+    branch L66 b36 b38
+  b25 1048854:32
+    goto b26
+  b26 1048856:16
+    L49 = use L4 @1048855:29
+    L50 = use L0[L49] @1048855:24
+    L51 = castint i64 L50 @1048855:24
+    L52 = use L51 @1048855:24
+    L54 = use L52 @1048856:16
+    L55 = < dyn L54, int 128 @1048856:16
+    branch L55 b31 b32
+  b27 1048854:32
+    return none
+  b28 1048854:32
+    goto b26
+  b29 1048856:44
+    goto b30
+  b30 1048857:13
+    L58 = use L15 @1048857:17
+    L59 = * i64 L58, int 64 @1048857:17
+    L60 = use L52 @1048857:27
+    L61 = - i64 L60, int 128 @1048857:27
+    L62 = + i64 L59, L61 @1048857:17
+    L15 = use L62 @1048857:13
+    goto b23
+  b31 1048856:44
+    return none
+  b32 1048856:30
+    L56 = use L52 @1048856:30
+    L57 = >= dyn L56, int 192 @1048856:30
+    branch L57 b31 b29
+  b33 1048856:44
+    goto b30
+  b34 1048860:69
+    goto b35
+  b35 1048861:18
+    L73 = use L15 @1048861:18
+    call native raw.to_char(L73) back[] -> L74 b41
+  b36 1048860:69
+    return none
+  b37 1048860:41
+    L69 = use L15 @1048860:41
+    L70 = >= dyn L69, int 55296 @1048860:41
+    branch L70 b39 b34
+  b38 1048860:25
+    L67 = use L15 @1048860:25
+    L68 = > dyn L67, int 1114111 @1048860:25
+    branch L68 b36 b37
+  b39 1048860:55
+    L71 = use L15 @1048860:55
+    L72 = <= dyn L71, int 57343 @1048860:55
+    branch L72 b36 b34
+  b40 1048860:69
+    goto b35
+  b41 1048862:9
+    L75 = push L2, L74 @1048861:18
+    L76 = use L4 @1048862:14
+    L4 = + usize L76, int 1 @1048862:9
+    goto b1
+  b42 1048864:10
+    L79 = some L78 @1048864:10
+    return L79
+fn 38 letters params=0 locals=13 body=0 limits=0 ret=_ at=2:1
+  names 1=out 7=c
+  once 
+  scalars 
+  hints 7=char
+  copies 
+  b0 4:20
+    L0 = array[] @3:23
+    L1 = use L0 @3:23
+    L2 = some char 97 @4:14
+    L3 = some char 102 @4:20
+    L4 = tuple(L2, L3, bool true) @4:20
+    L5 = rangestart dyn L4 @4:20
+    goto b1
+  b1 4:20
+    L6 = rangehas L4, L5 @4:20
+    branch L6 b2 b4
+  b2 4:35
+    L7 = use L5 @4:20
+    L8 = use L7 @4:35
+    L9 = push L1, L8 @4:35
+    goto b3
+  b3 4:5
+    L10 = rangelast L4, L5 @4:5
+    branch L10 b4 b5
+  b4 5:5
+    L11 = use L1 @5:21
+    call fn 2(L11) back[] -> L12 b6
+  b5 4:5
+    L5 = succ dyn L5 @4:5
+    goto b1
+  b6 5:5
+    return L12
+fn 39 constant ABC params=0 locals=1 body=0 limits=0 ret=_ at=7:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 7:16
+    call fn 38() back[] -> L0 b1
+  b1 7:16
+    return L0
+fn 40 constant PI params=0 locals=0 body=0 limits=0 ret=_ at=8:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 8:15
+    return float 3.141592653589793
+fn 41 constant TINY params=0 locals=0 body=0 limits=0 ret=_ at=9:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 9:17
+    return float 1.2345678901234568e-21
+fn 42 constant HALF params=0 locals=1 body=0 limits=0 ret=_ at=10:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 10:18
+    call fn 35(str "0.5") back[] -> L0 b1
+  b1 10:18
+    return L0
+fn 43 constant Z params=0 locals=1 body=0 limits=0 ret=_ at=11:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 11:15
+    call native raw.to_char(int 90) back[] -> L0 b1
+  b1 11:15
+    return L0
+fn 44 constant SUM params=0 locals=2 body=0 limits=0 ret=_ at=12:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 12:16
+    L0 = const 1 @12:16
+    L1 = + f64 L0, float 1.0 @12:16
+    return L1
+fn 45 constant CUT params=0 locals=3 body=0 limits=0 ret=_ at=13:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 13:17
+    L0 = const 1 @13:17
+    L1 = * f64 L0, float 100.0 @13:17
+    L2 = castint i64 L1 @13:17
+    return L2
+fn 46 constant NEG params=0 locals=2 body=0 limits=0 ret=_ at=14:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 14:15
+    L0 = neg f64 float 7.9 @14:15
+    L1 = castint i8 L0 @14:15
+    return L1
+fn 47 constant BACK params=0 locals=3 body=0 limits=0 ret=_ at=15:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 15:17
+    L0 = const 6 @15:17
+    L1 = castfloat false L0 @15:17
+    L2 = / f64 L1, float 4.0 @15:17
+    return L2
+fn 48 main params=0 locals=6 body=0 limits=0 ret=i64 at=16:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 16:21
+    L0 = const 0 @16:21
+    L1 = len L0 @16:21
+    L2 = castint i64 L1 @16:21
+    L3 = const 4 @16:40
+    L4 = castint i64 L3 @16:40
+    L5 = + i64 L2, L4 @16:21
+    return L5
+consts 39 40 41 42 43 44 45 46 47
+main 48
+tests 
+struct 0 Builder (parts) record[] boxed=false
+dyn_from 1

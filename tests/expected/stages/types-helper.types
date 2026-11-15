@@ -1,0 +1,21 @@
+checked 5 skipped_exprs 0
+const 0 i64
+e 1 0 3:31 t=i64 w=- r=- d=- rw=false
+e 1 1 3:33 t=i64 w=- r=local d=- rw=false
+e 1 2 4:27 t=i64 w=- r=- d=- rw=false
+e 1 3 4:29 t=i64 w=- r=local d=- rw=false
+e 1 4 7:29 t=i64 w=- r=- d=- rw=false
+e 1 5 7:31 t=i64 w=- r=- d=- rw=false
+e 1 6 7:31 t=i64 w=- r=field 0 d=- rw=false
+e 1 7 7:31 t=S0[] w=- r=local d=- rw=false
+e 1 8 7:40 t=i64 w=- r=field 1 d=- rw=false
+e 1 9 7:40 t=S0[] w=- r=local d=- rw=false
+e 1 10 8:28 t=i64 w=- r=- d=- rw=false
+e 1 11 8:30 t=i64 w=- r=field 0 d=- rw=false
+e 1 12 8:30 t=S0[] w=- r=local d=- rw=false
+e 1 13 9:30 t=S0[] w=- r=- d=- rw=false
+e 1 14 9:32 t=S0[] w=- r=struct 0 d=- rw=false
+e 1 16 9:38 t=intlit w=i64 r=- d=- rw=false
+e 1 17 9:41 t=intlit w=i64 r=- d=- rw=false
+e 1 18 11:22 t=intlit w=i64 r=- d=- rw=false
+unseen 0

@@ -1,0 +1,43 @@
+fn 0 noisy params=0 locals=5 body=0 limits=0 ret=i64 at=2:1
+  names 3=e
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 3:5
+    call print(str "x") back[] -> L0 b1
+  b1 3:5
+    L2 = is 1 L0 @3:5
+    branch L2 b3 b2
+  b2 3:5
+    L4 = use L0.0 @3:5
+    L1 = use L4 @3:5
+    goto b4
+  b3 3:5
+    L3 = use L0.0 @3:5
+    L1 = use () @3:5
+    goto b4
+  b4 4:5
+    return int 1
+fn 1 constant A params=0 locals=1 body=0 limits=0 ret=_ at=6:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 6:14
+    call fn 0() back[] -> L0 b1
+  b1 6:14
+    return L0
+fn 2 main params=0 locals=0 body=0 limits=0 ret=_ at=7:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 7:11
+    return ()
+consts 1
+main 2
+tests 
+dyn_from 0

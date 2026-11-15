@@ -1,0 +1,75 @@
+checked 6 skipped_exprs 0
+const 0 i64
+e 1 0 4:23 t=i64 w=- r=- d=- rw=false
+e 1 1 5:5 t=i64 w=- r=- d=- rw=false
+e 1 2 5:8 t=bool w=bool r=- d=- rw=false
+e 1 3 5:8 t=i64 w=- r=local d=- rw=false
+e 1 4 5:12 t=intlit w=- r=- d=- rw=false
+e 1 5 5:16 t=i64 w=- r=local d=- rw=false
+e 1 6 5:25 t=i64 w=- r=- d=- rw=false
+e 1 7 5:27 t=i64 w=- r=- d=- rw=false
+e 1 8 5:27 t=i64 w=- r=fn 0 d=- rw=false
+e 1 10 5:31 t=i64 w=i64 r=- d=- rw=false
+e 1 11 5:31 t=i64 w=- r=local d=- rw=false
+e 1 12 5:36 t=intlit w=- r=- d=- rw=false
+e 1 13 5:42 t=i64 w=- r=fn 0 d=- rw=false
+e 1 15 5:46 t=i64 w=i64 r=- d=- rw=false
+e 1 16 5:46 t=i64 w=- r=local d=- rw=false
+e 1 17 5:51 t=intlit w=- r=- d=- rw=false
+e 1 18 10:19 t=i64 w=- r=- d=- rw=false
+e 1 19 11:5 t=i64 w=- r=- d=- rw=false
+e 1 20 12:17 t=task i64 w=- r=builtin task.spawn d=- rw=false
+e 1 22 12:17 t=scope w=- r=local d=- rw=false
+e 1 23 12:25 t=i64 w=- r=fn 0 d=- rw=false
+e 1 25 12:29 t=intlit w=i64 r=- d=- rw=false
+e 1 26 13:17 t=task i64 w=- r=builtin task.spawn d=- rw=false
+e 1 28 13:17 t=scope w=- r=local d=- rw=false
+e 1 29 13:25 t=i64 w=- r=fn 0 d=- rw=false
+e 1 31 13:29 t=intlit w=i64 r=- d=- rw=false
+e 1 32 14:9 t=i64 w=- r=- d=- rw=false
+e 1 33 14:9 t=i64 w=- r=builtin task.wait d=- rw=false
+e 1 35 14:9 t=task i64 w=- r=local d=- rw=false
+e 1 36 14:21 t=i64 w=- r=builtin task.wait d=- rw=false
+e 1 38 14:21 t=task i64 w=- r=local d=- rw=false
+e 1 39 19:18 t=intlit w=- r=- d=- rw=false
+e 1 40 20:5 t=intlit w=- r=- d=- rw=false
+e 1 41 21:17 t=task () w=- r=builtin task.spawn d=- rw=false
+e 1 43 21:17 t=scope w=- r=local d=- rw=false
+e 1 44 21:25 t=() w=- r=- d=- rw=false
+e 1 45 21:25 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 48 21:34 t=str w=str r=- d=- rw=false
+e 1 49 22:9 t=() w=- r=builtin task.wait d=- rw=false
+e 1 51 22:9 t=task () w=- r=local d=- rw=false
+e 1 52 23:9 t=intlit w=- r=- d=- rw=false
+e 1 53 28:20 t=i64 w=- r=- d=- rw=false
+e 1 54 29:5 t=i64 w=- r=- d=- rw=false
+e 1 55 30:17 t=task i64 w=- r=builtin task.spawn d=- rw=false
+e 1 57 30:17 t=scope w=- r=local d=- rw=false
+e 1 58 30:25 t=intlit w=- r=- d=- rw=false
+e 1 59 31:9 t=i64 w=- r=builtin task.wait d=- rw=false
+e 1 61 31:9 t=task i64 w=- r=local d=- rw=false
+e 1 62 36:31 t=i64 w=- r=- d=- rw=false
+e 1 63 37:5 t=i64 w=- r=- d=- rw=false
+e 1 64 38:17 t=task i64 w=- r=builtin task.spawn d=- rw=false
+e 1 66 38:17 t=scope w=- r=local d=- rw=false
+e 1 67 38:25 t=i64 w=- r=- d=- rw=false
+e 1 68 38:25 t=[i64] w=- r=local d=- rw=false
+e 1 69 38:28 t=intlit w=- r=- d=- rw=false
+e 1 70 39:9 t=i64 w=- r=builtin task.wait d=- rw=false
+e 1 72 39:9 t=task i64 w=- r=local d=- rw=false
+e 1 73 43:18 t=i64 w=i64 r=fn 1 d=- rw=false
+e 1 75 45:22 t=() w=- r=- d=- rw=false
+e 1 76 46:5 t=() w=- r=- d=- rw=false
+e 1 77 46:5 t=() ! io.Error w=- r=builtin io.print d=- rw=false
+e 1 80 46:14 t=str w=str r=- d=- rw=false
+e 1 81 46:16 t=i64 w=- r=const 0 d=- rw=false
+e 1 82 46:24 t=i64 w=- r=fn 1 d=- rw=false
+e 1 84 46:34 t=i64 w=- r=fn 2 d=- rw=false
+e 1 86 46:43 t=i64 w=- r=fn 3 d=- rw=false
+e 1 88 46:54 t=i64 w=- r=fn 4 d=- rw=false
+e 1 90 46:63 t=[intlit; 4] w=[i64] r=- d=- rw=false
+e 1 91 46:64 t=intlit w=- r=- d=- rw=false
+e 1 92 46:67 t=intlit w=- r=- d=- rw=false
+e 1 93 46:70 t=intlit w=- r=- d=- rw=false
+e 1 94 46:73 t=intlit w=- r=- d=- rw=false
+unseen 0

@@ -1,0 +1,17 @@
+false true false
+again: File exists (os error 17)
+[0, 255, 10, 200, 65, 66, 67]
+uno
+dos ñ
+
+["a.txt", "b.bin"] true true
+missing: No such file or directory (os error 2)
+not a directory: Not a directory (os error 20)
+File(handle: 0) File(handle: 1) [108, 105, 110, 101, 32, 48, 10] []
+closed: the file is closed
+closed twice: the file is closed
+37 File(handle: 0) ["line 0", "line 1", "line 2", "line 3", "line 4", "!", "end", ""]
+["b.bin", "parts.txt", "z.txt"]
+not empty: Directory not empty (os error 39)
+false
+status 0

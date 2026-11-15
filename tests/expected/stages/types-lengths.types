@@ -1,0 +1,63 @@
+error 1:36 index 3 is out of range for an array of 3 items
+error 4:23 initializer: expected `[i64; 3]`, found `[integer literal; 2]`
+error 6:18 the length of an array type has to be known when compiling: a number, a constant or a `comptime` parameter
+error 7:23 initializer: expected `[i64; 2]`, found `[integer literal; 3]`
+error 9:15 index 5 is out of range for an array of 3 items
+error 9:22 index -1 is out of range for an array of 3 items
+error 10:11 argument: expected `[i64; 3]`, found `[integer literal; 4]`
+error 11:12 argument: expected `[i64; 2]`, found `[i64; 3]`
+error 13:23 initializer: expected `[i64; 2]`, found `[i64]`
+error 14:18 the length of an array cannot be -1
+checked 3 skipped_exprs 0
+instance 0 fn 1 [=2] <2> (let n: i64 false, let xs: [i64; 2] false) -> i64
+e 0 4 2:46 t=i64 w=- r=- d=- rw=false
+e 0 5 2:48 t=i64 w=- r=- d=- rw=false
+e 0 6 2:48 t=[i64; n] w=- r=local d=- rw=false
+e 0 7 2:51 t=intlit w=- r=- d=- rw=false
+e 1 0 1:31 t=i64 w=- r=- d=- rw=false
+e 1 1 1:33 t=i64 w=- r=- d=- rw=false
+e 1 2 1:33 t=[i64; 3] w=- r=local d=- rw=false
+e 1 3 1:36 t=intlit w=- r=- d=- rw=false
+e 1 8 3:11 t=() w=- r=- d=- rw=false
+e 1 9 4:23 t=[intlit; 2] w=- r=- d=- rw=false
+e 1 10 4:24 t=intlit w=- r=- d=- rw=false
+e 1 11 4:27 t=intlit w=- r=- d=- rw=false
+e 1 12 5:13 t=intlit w=- r=- d=- rw=false
+e 1 13 6:23 t=[intlit; 2] w=[i64; _] r=- d=- rw=false
+e 1 14 6:24 t=intlit w=- r=- d=- rw=false
+e 1 15 6:27 t=intlit w=- r=- d=- rw=false
+e 1 16 7:23 t=[intlit; 3] w=- r=- d=- rw=false
+e 1 17 7:24 t=intlit w=- r=- d=- rw=false
+e 1 18 7:27 t=intlit w=usize r=- d=- rw=false
+e 1 19 8:13 t=[intlit; 3] w=- r=- d=- rw=false
+e 1 20 8:14 t=intlit w=- r=- d=- rw=false
+e 1 21 8:17 t=intlit w=- r=- d=- rw=false
+e 1 22 8:20 t=intlit w=- r=- d=- rw=false
+e 1 23 9:13 t=i64 w=- r=- d=- rw=false
+e 1 24 9:13 t=i64 w=- r=- d=- rw=false
+e 1 25 9:13 t=[i64; 3] w=- r=local d=- rw=false
+e 1 26 9:15 t=intlit w=- r=- d=- rw=false
+e 1 27 9:20 t=i64 w=- r=- d=- rw=false
+e 1 28 9:20 t=[i64; 3] w=- r=local d=- rw=false
+e 1 29 9:22 t=intlit w=- r=- d=- rw=false
+e 1 30 9:22 t=intlit w=- r=- d=- rw=false
+e 1 31 9:26 t=intlit w=- r=- d=- rw=false
+e 1 32 10:5 t=i64 w=- r=fn 0 d=- rw=false
+e 1 34 10:11 t=[intlit; 4] w=- r=- d=- rw=false
+e 1 35 10:12 t=intlit w=- r=- d=- rw=false
+e 1 36 10:15 t=intlit w=- r=- d=- rw=false
+e 1 37 10:18 t=intlit w=- r=- d=- rw=false
+e 1 38 10:21 t=intlit w=- r=- d=- rw=false
+e 1 39 11:5 t=i64 w=- r=generic 0 d=- rw=false
+e 1 41 11:9 t=intlit w=i64 r=- d=- rw=false
+e 1 42 11:12 t=[i64; 3] w=- r=local d=- rw=false
+e 1 43 12:20 t=[intlit; 2] w=[i64] r=- d=- rw=false
+e 1 44 12:21 t=intlit w=- r=- d=- rw=false
+e 1 45 12:24 t=intlit w=- r=- d=- rw=false
+e 1 46 13:23 t=[i64] w=- r=local d=- rw=false
+e 1 47 14:27 t=[never; 0] w=[i64; _] r=- d=- rw=false
+e 2 4 2:46 t=i64 w=- r=- d=- rw=false
+e 2 5 2:48 t=i64 w=- r=- d=- rw=false
+e 2 6 2:48 t=[i64; 2] w=- r=local d=- rw=false
+e 2 7 2:51 t=intlit w=- r=- d=- rw=false
+unseen 0

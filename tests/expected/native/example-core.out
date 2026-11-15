@@ -1,0 +1,7 @@
+final balance: 69
+checksum: 1091
+needs 50, has 20
+balance of 2: 250
+balance of 9: 0
+account: Account(id: 2, balance: 250, frozen: false)
+status 0

@@ -1,0 +1,316 @@
+fn 0 Sq.area params=1 locals=4 body=0 limits=0 ret=f64 at=8:20
+  names 0=self
+  once 
+  scalars _
+  hints 1=f64 2=f64
+  copies 
+  b0 8:43
+    L1 = use L0.0 @8:43
+    L2 = use L0.0 @8:52
+    L3 = * f64 L1, L2 @8:43
+    return L3
+fn 1 constant PI params=0 locals=0 body=0 limits=0 ret=_ at=9:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 9:15
+    return float 3.14159
+fn 2 constant BIG params=0 locals=0 body=0 limits=0 ret=_ at=10:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 10:16
+    return int 1000000
+fn 3 constant NAMES params=0 locals=1 body=0 limits=0 ret=_ at=11:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 11:20
+    L0 = array[str "a", str "b"] @11:26
+    return L0
+fn 4 grow params=2 locals=7 body=1 limits=0 ret=i64 at=13:1
+  names 0=xs 1=n
+  once 
+  scalars _ i64
+  hints 6=i64
+  copies 
+  b0 13:57
+    L2 = use L1 @13:57
+    L3 = > dyn L2, int 0 @13:57
+    branch L3 b1 b2
+  b1 15:5
+    L4 = use L1 @14:13
+    L5 = push L0, L4 @14:13
+    L6 = use L0[int 0] @15:5
+    return L6
+  b2 13:57
+    panic "a `where` condition of `grow` does not hold"
+fn 5 sum params=1 locals=19 body=0 limits=0 ret=i64 at=18:1
+  names 0=t 5=n 9=n 12=a 13=b
+  once 
+  scalars _
+  hints 5=i64 9=i64
+  copies 
+  b0 19:11
+    L1 = use L0 @19:11
+    L3 = is 0 L1 @19:11
+    branch L3 b3 b2
+  b1 19:5
+    return L2
+  b2 20:22
+    L4 = is 2 L1 @20:22
+    branch L4 b5 b4
+  b3 20:22
+    L2 = use int 0 @20:22
+    goto b1
+  b4 21:34
+    L8 = is 2 L1 @21:34
+    branch L8 b8 b7
+  b5 21:24
+    L5 = use L1.0 @20:22
+    L6 = use L5 @21:24
+    L7 = > dyn L6, int 10 @21:24
+    branch L7 b6 b4
+  b6 21:34
+    L2 = use int 10 @21:34
+    goto b1
+  b7 22:24
+    L11 = is 1 L1 @22:24
+    branch L11 b10 b9
+  b8 22:24
+    L9 = use L1.0 @21:34
+    L10 = use L9 @22:24
+    L2 = use L10 @22:24
+    goto b1
+  b9 19:5
+    panic "no arm of this `match` matched the value"
+  b10 23:28
+    L12 = use L1.0 @22:24
+    L13 = use L1.1 @22:24
+    L14 = use L12 @23:32
+    call fn 5(L14) back[] -> L15 b11
+  b11 23:37
+    L16 = use L13 @23:41
+    call fn 5(L16) back[] -> L17 b12
+  b12 23:28
+    L18 = + i64 L15, L17 @23:28
+    L2 = use L18 @23:28
+    goto b1
+fn 6 shapes params=1 locals=15 body=0 limits=0 ret=f64 at=27:1
+  names 0=all 2=total 7=s
+  once 
+  scalars _
+  hints 11=f64
+  copies 
+  b0 29:14
+    L1 = use float 0.0 @28:17
+    L2 = use L1 @28:17
+    L3 = use L0 @29:14
+    L4 = use int 0 @29:14
+    L5 = len L3 @29:14
+    goto b1
+  b1 29:14
+    L6 = < dyn L4, L5 @29:14
+    branch L6 b2 b4
+  b2 29:29
+    L7 = use L3[L4] @29:14
+    L8 = use L7.2 @29:29
+    L9 = use L7.0 @29:29
+    call indirect L8(L9) back[] -> L10 b5
+  b3 29:5
+    L4 = + usize L4, int 1 @29:5
+    goto b1
+  b4 30:11
+    L12 = use L2 @31:5
+    L13 = use L2 @30:16
+    call fn 7(L13) back[] -> L14 b6
+  b5 29:20
+    L11 = use L2 @29:29
+    L2 = + f64 L11, L10 @29:20
+    goto b3
+  b6 30:11
+    return L12
+fn 7 note params=1 locals=1 body=0 limits=0 ret=_ at=34:1
+  names 0=x
+  once 
+  scalars f64
+  hints 
+  copies 
+  b0 34:17
+    return ()
+fn 8 main params=0 locals=65 body=0 limits=0 ret=i64 at=36:1
+  names 1=xs 8=sq 11=d 13=a 14=z 16=col 19=t 23=i 32=ch 40=h 42=first 48=parts 52=big
+  once 
+  scalars 
+  hints 4=i64 5=i64 20=i64 21=i64 32=char 40=i64 42=i64 52=f64
+  copies 
+  b0 38:5
+    L0 = array[int 1, int 2, int 3] @37:21
+    L1 = use L0 @37:21
+    call fn 10(L1, int 2) back[0->L1] -> L2 b1
+  b1 39:5
+    L1@2 = use int 7 @38:5
+    call fn 10(L1, int 5) back[0->L1] -> L3 b2
+  b2 45:18
+    L4 = use L1@3 @39:5
+    L5 = + i64 L4, int 1 @39:5
+    L1@3 = use L5 @39:5
+    L6 = array[] @7:35
+    L7 = struct 2(float 2.0, L6, int 3) @7:48
+    L8 = use L7 @7:48
+    L9 = use L8 @41:13
+    L10 = struct 3(L9, fn 0, fn 9) @41:13
+    L11 = use L10 @41:13
+    L12 = tuple(int 1, int 4) @42:22
+    L13 = use L12.0 @42:22
+    L14 = use L12.1 @42:22
+    L15 = use enum 1.1 @43:15
+    L16 = use L15 @43:15
+    L17 = enum 0.2(int 1) @44:32
+    L18 = enum 0.1(L17, enum 0.0) @44:36
+    L19 = use L18 @44:36
+    L20 = use int 0 @45:18
+    L21 = use int 3 @45:18
+    goto b3
+  b3 45:18
+    L22 = <= dyn L20, L21 @45:18
+    branch L22 b4 b6
+  b4 45:25
+    L23 = use L20 @45:18
+    L25 = use L23 @45:25
+    L26 = == dyn L25, int 2 @45:25
+    branch L26 b9 b7
+  b5 45:5
+    L27 = == dyn L20, L21 @45:5
+    branch L27 b6 b11
+  b6 46:15
+    L28 = use int 0 @46:15
+    L29 = chars str "hey" @46:15
+    L30 = len L29 @46:15
+    goto b12
+  b7 45:34
+    goto b8
+  b8 45:34
+    goto b5
+  b9 45:34
+    goto b5
+  b10 45:34
+    goto b8
+  b11 45:5
+    L20 = succ i64 L20 @45:5
+    goto b3
+  b12 46:15
+    L31 = < dyn L28, L30 @46:15
+    branch L31 b13 b15
+  b13 46:26
+    L32 = use L29[L28] @46:15
+    L34 = use L32 @46:26
+    L35 = == dyn L34, char 101 @46:26
+    branch L35 b18 b16
+  b14 46:5
+    L28 = + usize L28, int 1 @46:5
+    goto b12
+  b15 47:23
+    L36 = use L1 @47:23
+    L38 = len L36 @47:23
+    L39 = >= dyn L38, int 1 @47:23
+    branch L39 b22 b21
+  b16 46:38
+    goto b17
+  b17 46:38
+    goto b14
+  b18 46:38
+    goto b15
+  b19 46:38
+    goto b17
+  b20 51:12
+    L42 = use L37 @47:17
+    L43 = len L1 @49:21
+    L44 = const 0 @49:33
+    L45 = const 2 @49:38
+    L46 = use L45[int 0] @49:38
+    L47 = format("n=", L43, " pi=", L44, " ", L46) @49:17
+    L48 = use L47 @49:17
+    L49 = + f64 float 1e21, float 2.5e-5 @50:15
+    L50 = castfloat false float 0.0001 @50:31
+    L51 = + f64 L49, L50 @50:15
+    L52 = use L51 @50:15
+    L53 = use L13 @51:12
+    L54 = use L14 @51:16
+    L55 = < dyn L53, L54 @51:12
+    branch L55 b24 b25
+  b21 48:14
+    L37 = use int 0 @48:14
+    goto b20
+  b22 47:39
+    L40 = use L36[int 0] @47:23
+    L41 = use L40 @47:39
+    L37 = use L41 @47:39
+    goto b20
+  b23 47:17
+    panic "no arm of this `match` matched the value"
+  b24 52:5
+    L59 = use L19 @52:9
+    call fn 5(L59) back[] -> L60 b27
+  b25 51:5
+    L56 = use L13 @51:29
+    L57 = format("ordered ", L56) @51:19
+    call panic(L57) back[] -> L58 b26
+  b26 51:5
+    goto b24
+  b27 52:5
+    L61 = use L42 @52:14
+    L62 = + i64 L60, L61 @52:5
+    L63 = const 1 @52:22
+    L64 = + i64 L62, L63 @52:5
+    return L64
+fn 9 Sq.twice params=1 locals=4 body=0 limits=0 ret=f64 at=6:5
+  names 0=self
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 6:29
+    L1 = use L0 @6:29
+    call fn 0(L1) back[] -> L2 b1
+  b1 6:29
+    L3 = * f64 L2, float 2.0 @6:29
+    return L3
+fn 10 grow (place) params=2 locals=7 body=1 limits=0 ret=_ at=13:1
+  names 0=xs 1=n
+  once 
+  scalars _ i64
+  hints 
+  copies 
+  b0 13:57
+    L2 = use L1 @13:57
+    L3 = > dyn L2, int 0 @13:57
+    branch L3 b1 b2
+  b1 15:5
+    L4 = use L1 @14:13
+    L5 = push L0, L4 @14:13
+    L6 = array[int 1, int 0] @15:5
+    return L6
+  b2 13:57
+    panic "a `where` condition of `grow (place)` does not hold"
+consts 1 2 3
+main 8
+tests 
+struct 0 P (x, y, ok, c) record[2 3 1 4] boxed=false
+struct 1 Node (next, v) record[] boxed=true
+struct 2 Sq (s, tags, n) record[] boxed=false
+struct 3 dyn Area (value, area, twice) record[] boxed=true
+enum 0 Tree boxed=true
+  variant Leaf ()
+  variant Fork (_, _)
+  variant Tip (_)
+enum 1 Color boxed=false
+  variant Red ()
+  variant Green ()
+dyn_from 3

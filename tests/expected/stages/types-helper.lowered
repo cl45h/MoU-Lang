@@ -1,0 +1,66 @@
+fn 0 visible params=1 locals=2 body=0 limits=0 ret=i64 at=3:1
+  names 0=a
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 3:33
+    L1 = use L0 @3:33
+    return L1
+fn 1 private params=1 locals=2 body=0 limits=0 ret=i64 at=4:1
+  names 0=a
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 4:29
+    L1 = use L0 @4:29
+    return L1
+fn 2 Point.sum params=1 locals=4 body=0 limits=0 ret=i64 at=7:5
+  names 0=self
+  once 
+  scalars rec0
+  hints 1=i64 2=i64
+  copies 
+  b0 7:31
+    L1 = use L0.0 @7:31
+    L2 = use L0.1 @7:40
+    L3 = + i64 L1, L2 @7:31
+    return L3
+fn 3 Point.secret params=1 locals=2 body=0 limits=0 ret=i64 at=8:5
+  names 0=self
+  once 
+  scalars rec0
+  hints 1=i64
+  copies 
+  b0 8:30
+    L1 = use L0.0 @8:30
+    return L1
+fn 4 Point.origin params=0 locals=1 body=0 limits=0 ret=rec0 at=9:5
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 9:41
+    L0 = struct 0(int 0, int 0) @9:41
+    return L0
+fn 5 constant LIMIT params=0 locals=0 body=0 limits=0 ret=_ at=11:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 11:22
+    return int 10
+consts 5
+main _
+tests 
+struct 0 Point (x, y) record[2 2] boxed=false
+struct 1 Hidden (v) record[2] boxed=false
+enum 0 Shape boxed=false
+  variant Dot ()
+  variant Circle (_)
+  variant Rect (w, h)
+dyn_from 2
+sum 0 (6, 2, 2)

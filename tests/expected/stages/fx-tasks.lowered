@@ -1,0 +1,220 @@
+fn 0 fib params=1 locals=12 body=0 limits=0 ret=i64 at=4:1
+  names 0=n
+  once 
+  scalars i64
+  hints 
+  copies 
+  b0 5:8
+    L2 = use L0 @5:8
+    L3 = < dyn L2, int 2 @5:8
+    branch L3 b3 b1
+  b1 5:27
+    L5 = use L0 @5:31
+    L6 = -% i64 L5, int 1 @5:31
+    call fn 0(L6) back[] -> L7 b4
+  b2 5:27
+    return L1
+  b3 5:16
+    L4 = use L0 @5:16
+    L1 = use L4 @5:16
+    goto b2
+  b4 5:42
+    L8 = use L0 @5:46
+    L9 = -% i64 L8, int 2 @5:46
+    call fn 0(L9) back[] -> L10 b5
+  b5 5:27
+    L11 = +% i64 L7, L10 @5:27
+    L1 = use L11 @5:27
+    goto b2
+fn 1 quiet params=0 locals=14 body=0 limits=6 ret=i64 at=8:1
+  names 1=s 4=a 7=b
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 11:5
+    call native task.open() back[] -> L0 b1
+  b1 12:17
+    L1 = use L0 @11:5
+    L2 = closure 7() @12:17
+    call native task.spawn(L2) back[] -> L3 b2
+  b2 13:17
+    L4 = use L3 @12:17
+    L5 = closure 8() @13:17
+    call native task.spawn(L5) back[] -> L6 b3
+  b3 14:9
+    L7 = use L6 @13:17
+    L8 = use L4 @14:9
+    call native task.wait(L8) back[] -> L9 b4
+  b4 14:21
+    L10 = use L7 @14:21
+    call native task.wait(L10) back[] -> L11 b5
+  b5 11:5
+    L12 = +% i64 L9, L11 @14:9
+    call native task.close(L1) back[] -> L13 b6
+  b6 11:5
+    return L12
+fn 2 loud params=0 locals=8 body=0 limits=4 ret=i64 at=18:1
+  names 1=s 4=a
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 20:5
+    call native task.open() back[] -> L0 b1
+  b1 21:17
+    L1 = use L0 @20:5
+    L2 = closure 9() @21:17
+    call native task.spawn(L2) back[] -> L3 b2
+  b2 22:9
+    L4 = use L3 @21:17
+    L5 = use L4 @22:9
+    call native task.wait(L5) back[] -> L6 b3
+  b3 20:5
+    call native task.close(L1) back[] -> L7 b4
+  b4 20:5
+    return int 1
+fn 3 frugal params=0 locals=8 body=0 limits=1 ret=i64 at=27:1
+  names 1=s 4=a
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 29:5
+    call native task.open() back[] -> L0 b1
+  b1 30:17
+    L1 = use L0 @29:5
+    L2 = closure 10() @30:17
+    call native task.spawn(L2) back[] -> L3 b2
+  b2 31:9
+    L4 = use L3 @30:17
+    L5 = use L4 @31:9
+    call native task.wait(L5) back[] -> L6 b3
+  b3 29:5
+    call native task.close(L1) back[] -> L7 b4
+  b4 29:5
+    return L6
+fn 4 careless params=1 locals=9 body=0 limits=2 ret=i64 at=35:1
+  names 0=xs 2=s 5=a
+  once 
+  scalars _
+  hints 
+  copies 
+  b0 37:5
+    call native task.open() back[] -> L1 b1
+  b1 38:17
+    L2 = use L1 @37:5
+    L3 = closure 11(L0) @38:17
+    call native task.spawn(L3) back[] -> L4 b2
+  b2 39:9
+    L5 = use L4 @38:17
+    L6 = use L5 @39:9
+    call native task.wait(L6) back[] -> L7 b3
+  b3 37:5
+    call native task.close(L2) back[] -> L8 b4
+  b4 37:5
+    return L7
+fn 5 constant TOTAL params=0 locals=1 body=0 limits=0 ret=_ at=43:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 43:18
+    call fn 1() back[] -> L0 b1
+  b1 43:18
+    return L0
+fn 6 main params=0 locals=14 body=0 limits=0 ret=_ at=45:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 46:24
+    L0 = const 0 @46:16
+    call fn 1() back[] -> L1 b1
+  b1 46:34
+    call fn 2() back[] -> L2 b2
+  b2 46:43
+    call fn 3() back[] -> L3 b3
+  b3 46:54
+    L4 = array[int 1, int 2, int 3, int 4] @46:73
+    L5 = convert elems(fit i64) L4 @46:63
+    call fn 4(L5) back[] -> L6 b4
+  b4 46:5
+    L7 = format(L0, " ", L1, " ", L2, " ", L3, " ", L6) @46:14
+    call print(L7) back[] -> L8 b5
+  b5 46:5
+    L9 = is 1 L8 @46:5
+    branch L9 b7 b6
+  b6 46:5
+    L12 = use L8.0 @46:5
+    L13 = ok L12 @46:5
+    return L13
+  b7 46:5
+    L10 = use L8.0 @46:5
+    L11 = err L10 @46:5
+    return L11
+fn 7 task params=0 locals=1 body=0 limits=0 ret=_ at=12:17
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 12:25
+    call fn 0(int 10) back[] -> L0 b1
+  b1 12:25
+    return L0
+fn 8 task params=0 locals=1 body=0 limits=0 ret=_ at=13:17
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 13:25
+    call fn 0(int 11) back[] -> L0 b1
+  b1 13:25
+    return L0
+fn 9 task params=0 locals=5 body=0 limits=0 ret=_ at=21:17
+  names 3=e
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 21:25
+    call print(str "in a task") back[] -> L0 b1
+  b1 21:25
+    L2 = is 1 L0 @21:25
+    branch L2 b3 b2
+  b2 21:25
+    L4 = use L0.0 @21:25
+    L1 = use L4 @21:25
+    goto b4
+  b3 21:25
+    L3 = use L0.0 @21:25
+    L1 = use () @21:25
+    goto b4
+  b4 21:25
+    return L1
+fn 10 task params=0 locals=0 body=0 limits=0 ret=_ at=30:17
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 30:25
+    return int 1
+fn 11 task params=0 locals=2 body=0 limits=0 ret=_ at=38:17
+  names 
+  once 
+  scalars 
+  hints 1=i64
+  copies 
+  b0 38:25
+    L0 = capture 0 @38:25
+    L1 = use L0[int 3] @38:25
+    return L1
+consts 5
+main 6
+tests 
+dyn_from 0

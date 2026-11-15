@@ -1,0 +1,10 @@
+0 None false None
+1000 Some("v1") Some("v999") None nada
+1000 Some("otro")
+666 334 true 334 334 None
+Some(3) Some(2) Some(1) None 5
+Some(true) Some(false) None
+Some(2) Some(1) 1
+01234ñ!
+a, b, c ababab ok |
+status 0

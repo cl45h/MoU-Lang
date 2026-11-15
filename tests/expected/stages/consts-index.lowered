@@ -1,0 +1,43 @@
+fn 0 constant XS params=0 locals=2 body=0 limits=0 ret=_ at=1:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 1:17
+    L0 = array[int 1, int 2, int 3] @1:24
+    L1 = convert elems(fit i64) L0 @1:17
+    return L1
+fn 1 at params=1 locals=4 body=0 limits=0 ret=i64 at=2:1
+  names 0=i
+  once 
+  scalars i64
+  hints 3=i64
+  copies 
+  b0 2:24
+    L1 = const 0 @2:24
+    L2 = use L0 @2:27
+    L3 = use L1[L2] @2:24
+    return L3
+fn 2 constant A params=0 locals=1 body=0 limits=0 ret=_ at=3:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 3:14
+    call fn 1(int 7) back[] -> L0 b1
+  b1 3:14
+    return L0
+fn 3 main params=0 locals=0 body=0 limits=0 ret=_ at=4:1
+  names 
+  once 
+  scalars 
+  hints 
+  copies 
+  b0 4:11
+    return ()
+consts 0 2
+main 3
+tests 
+dyn_from 0

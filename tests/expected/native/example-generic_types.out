@@ -1,0 +1,11 @@
+Box <3>
+3 10
+n=10
+Box(v: Box(v: 2.5)) 2.5
+7 4 false
+Just(9) 9
+44
+Nothing
+4 Node(Node(Node(Leaf, 1, Leaf), 2, Leaf), 5, Node(Leaf, 8, Leaf))
+3
+status 0

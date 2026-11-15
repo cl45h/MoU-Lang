@@ -1,0 +1,9 @@
+25
+11 14 16 true
+Line(a: Point(x: 11, y: 2), b: Point(x: 14, y: 16), wide: true)
+Line(a: Point(x: 0, y: 0), b: Point(x: 8, y: 6), wide: true)
+8 Point(x: 0, y: 0) Line(a: Point(x: 0, y: 0), b: Point(x: 8, y: 6), wide: true)
+Box3(edge: Line(a: Point(x: 11, y: 99), b: Point(x: 14, y: 16), wide: true), depth: 1.75)
+7203 99 false true
+8 14
+status 0

@@ -1,0 +1,34 @@
+error 2:1 `S` is a value parameter of a type, and for now it has to be an `int`
+error 6:1 `N`, a parameter of `Grid`, takes a number known when compiling
+error 6:1 `T`, a parameter of `Grid`, takes a type
+error 6:1 `Grid` takes 2 type arguments, found 1: write `Grid[...]`
+error 6:1 `Maybe` takes types, not numbers
+error 7:37 argument: expected `[i64; 2]`, found `[integer literal; 3]`
+error 8:38 unknown type `x`
+error 9:1 `NAME` is not a number known when compiling
+error 10:1 `N` is a value parameter of a type, and for now it has to be an `int`
+checked 5 skipped_exprs 0
+const 0 i64
+const 1 str
+e 0 21 11:26 t=i64 w=- r=- d=- rw=false
+e 0 22 11:28 t=i64 w=- r=- d=- rw=false
+e 1 0 4:12 t=intlit w=- r=- d=- rw=false
+e 1 1 5:12 t=str w=- r=- d=- rw=false
+e 1 2 6:91 t=intlit w=- r=- d=- rw=false
+e 1 3 6:93 t=intlit w=- r=- d=- rw=false
+e 1 4 7:30 t=S0[i64, =2] w=- r=- d=- rw=false
+e 1 5 7:32 t=S0[i64, =2] w=- r=struct 0 d=- rw=false
+e 1 7 7:37 t=[intlit; 3] w=- r=- d=- rw=false
+e 1 8 7:38 t=intlit w=- r=- d=- rw=false
+e 1 9 7:41 t=intlit w=- r=- d=- rw=false
+e 1 10 7:44 t=intlit w=- r=- d=- rw=false
+e 1 11 8:14 t=() w=- r=- d=- rw=false
+e 1 12 8:38 t=S0[i64, never] w=S0[i64, _] r=struct 0 d=- rw=false
+e 1 14 8:43 t=[intlit; 1] w=[i64; _] r=- d=- rw=false
+e 1 15 8:44 t=intlit w=- r=- d=- rw=false
+e 1 16 9:53 t=i64 w=- r=- d=- rw=false
+e 1 17 9:55 t=i64 w=- r=- d=- rw=false
+e 1 18 9:55 t=usize w=- r=len d=- rw=false
+e 1 19 9:55 t=[i64; 2] w=- r=field 0 d=- rw=false
+e 1 20 9:55 t=S0[i64, =2] w=- r=local d=- rw=false
+unseen 0

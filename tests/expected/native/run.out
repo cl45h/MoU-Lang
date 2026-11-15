@@ -1,0 +1,11 @@
+ok: 13 <hola
+ñandú
+>
+ok: 5 <GRITA>
+error: `sh` failed: dos
+error: `sh` failed: status 4
+error: No such file or directory (os error 2)
+ok: 0 <>
+300000
+true None
+status 0
