@@ -38,8 +38,8 @@ fn main() ! io.Error {
 - A standard library written in Mou: lists, maps, hash tables, text with Unicode, math, files and directories (`std.fs`), and `std.pool` with `Pool[T]` and `Handle[T]` for graphs and cyclic structures.
 - Python inside the program: `import py "math" as m` and then `m.sqrt(2.0)?.as_float()?`. It is built on `std.py`, a library on top of the C interface of CPython; exceptions arrive as errors.
 - Integer conversions that never lose anything silently: `as` keeps the value or panics, and `u8.truncate(x)`, `u8.saturate(x)` and `u8.try_from(x)` say what to do when it does not fit.
-- Native binaries through C: `mou build` leaves them built and `mou run` compiles and runs.
-- Tools: `mou test` (with a name filter and `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check` and `mou bind` (writes the declarations of a C header).
+- Two ways to run: native binaries through C (`mou build`, and `mou run` which compiles and runs) and an interpreter written in Mou (`mou interp`), which needs no C compiler.
+- Tools: `mou test` (with a name filter and `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check`, `mou interp` and `mou bind` (writes the declarations of a C header).
 - The compiler written in Mou (`compiler/`): lexer, parser, module loader, type checker, lowering to MIR, ownership, effects, compile-time constants and C emitter. It is the only compiler and **it compiles itself**: the resulting compiler writes exactly the same C again.
 
 ## What is missing

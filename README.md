@@ -38,8 +38,8 @@ fn main() ! io.Error {
 - Librería estándar escrita en Mou: listas, mapas, tablas hash, texto con Unicode, matemática, archivos y directorios (`std.fs`), y `std.pool` con `Pool[T]` y `Handle[T]` para grafos y estructuras cíclicas.
 - Python dentro del programa: `import py "math" as m` y después `m.sqrt(2.0)?.as_float()?`. Está hecho sobre `std.py`, una librería sobre la interfaz de C de CPython; las excepciones llegan como errores.
 - Conversiones de enteros que no pierden nada en silencio: `as` conserva el valor o hace panic, y `u8.truncate(x)`, `u8.saturate(x)` y `u8.try_from(x)` dicen qué hacer cuando no entra.
-- Binarios nativos a través de C: `mou build` los deja hechos y `mou run` compila y ejecuta.
-- Herramientas: `mou test` (con filtro por nombre y `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check` y `mou bind` (escribe las declaraciones de un header de C).
+- Dos formas de ejecutar: binarios nativos a través de C (`mou build`, y `mou run` que compila y ejecuta) y un intérprete escrito en Mou (`mou interp`), que no necesita compilador de C.
+- Herramientas: `mou test` (con filtro por nombre y `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check`, `mou interp` y `mou bind` (escribe las declaraciones de un header de C).
 - El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Es el único compilador y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
 
 ## Qué le falta
