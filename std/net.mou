@@ -1,4 +1,4 @@
-// TCP connections and UDP datagrams over IPv4.
+// TCP connections and UDP datagrams, over IPv4 and IPv6.
 //
 // Every function here waits until it is done. To serve several
 // connections at once, each one goes in a task (a task that waits does
@@ -14,7 +14,8 @@ import std.text
 
 pub enum Error {
     /// The address is not four numbers from 0 to 255 with dots between,
-    /// nor a name that anyone answers for.
+    /// nor groups of hex digits with colons between, nor a name that
+    /// anyone answers for.
     BadAddress(str)
     /// The system said no: what was being done.
     Failed(str)
@@ -46,10 +47,142 @@ fn numbers(host: str) -> [u8]? {
     Some(out)
 }
 
+/// What a hex digit is worth, or nothing when the character is not one.
+fn hex(c: char) -> int? {
+    var k = 0
+    for d in "0123456789abcdef" {
+        if d == text.to_lower(c) { return Some(k) }
+        k += 1
+    }
+    None
+}
+
+/// The 16 bytes of an address of IPv6: up to eight groups of hex digits
+/// with colons between, where `::` stands, once, for the groups of zeros
+/// that are missing. Nothing when the text is not that.
+fn six(host: str) -> [u8]? {
+    let cs = text.chars(host)
+    let n = cs.len as int
+    var before: [int] = []
+    var after: [int] = []
+    var gap = false
+    // Whether the last thing read was the `::`.
+    var at_gap = false
+    var group = 0
+    var digits = 0
+    var k = 0
+    while k < n {
+        let c = cs[k]
+        if c == ':' {
+            let double = k + 1 < n && cs[k + 1] == ':'
+            if double && gap { return None }
+            if digits > 0 {
+                if gap { after.push(group) } else { before.push(group) }
+            } else if !double || k > 0 {
+                return None
+            }
+            group = 0
+            digits = 0
+            if double {
+                gap = true
+                at_gap = true
+                k += 2
+            } else {
+                k += 1
+            }
+            continue
+        }
+        match hex(c) {
+            Some(d) => {
+                if digits == 4 { return None }
+                group = group * 16 + d
+                digits += 1
+                at_gap = false
+            }
+            None => return None
+        }
+        k += 1
+    }
+    if digits > 0 {
+        if gap { after.push(group) } else { before.push(group) }
+    } else if !at_gap {
+        return None
+    }
+    let have = before.len as int + after.len as int
+    if gap && have > 7 { return None }
+    if !gap && have != 8 { return None }
+    var out: [u8] = []
+    for g in before {
+        out.push((g / 256) as u8)
+        out.push((g % 256) as u8)
+    }
+    for zero in 0..((8 - have) * 2) { out.push(0) }
+    for g in after {
+        out.push((g / 256) as u8)
+        out.push((g % 256) as u8)
+    }
+    Some(out)
+}
+
+/// An address of IPv6 as it is written: the groups in hex without the
+/// zeros in front, and `::` for the longest run of two or more groups of
+/// zeros (the first one when two are as long).
+fn six_text(bytes: [u8]) -> str {
+    var groups: [int] = []
+    for k in 0..8 { groups.push((bytes[k * 2] as int) * 256 + (bytes[k * 2 + 1] as int)) }
+    var best = -1
+    var best_len = 1
+    var k = 0
+    while k < 8 {
+        var run = 0
+        while k + run < 8 && groups[k + run] == 0 { run += 1 }
+        if run > best_len {
+            best = k
+            best_len = run
+        }
+        k += if run > 0 { run } else { 1 }
+    }
+    let digits = text.chars("0123456789abcdef")
+    var out = text.Builder.new()
+    k = 0
+    while k < 8 {
+        if k == best {
+            out.add("::")
+            k += best_len
+            continue
+        }
+        if k > 0 && k != best + best_len { out.add(":") }
+        var started = false
+        for unit in [4096, 256, 16, 1] {
+            let d = (groups[k] / unit) % 16
+            if d != 0 || started || unit == 1 {
+                out.add_char(digits[d])
+                started = true
+            }
+        }
+        k += 1
+    }
+    out.build()
+}
+
+/// The bytes of an address that is written out, with dots or with
+/// colons: 4 or 16. Nothing when the text is neither.
+fn written(host: str) -> [u8]? {
+    if text.contains(host, ":") { return six(host) }
+    numbers(host)
+}
+
 /// The addresses a name stands for, as the system finds them (its file of
-/// hosts, DNS): each one written with dots. A name written with dots
+/// hosts, DNS): the ones of IPv4 first, written with dots, and then the
+/// ones of IPv6, written with colons. An address that is written out
 /// already gives itself.
 pub fn resolve(host: str) -> [str] ! Error {
+    if text.contains(host, ":") {
+        match six(host) {
+            Some(_) => return [host]
+            None => return Error.BadAddress(host)
+        }
+    }
     // Numbers and dots are an address, well written or not: never a name.
     var name = false
     for c in host {
@@ -66,32 +199,46 @@ pub fn resolve(host: str) -> [str] ! Error {
     found
 }
 
-/// The address as the system takes it: 16 bytes. A name is looked up, and
-/// the first address it has is the one used.
+/// The address as the system takes it: 16 bytes for IPv4, 28 for IPv6.
+/// A name is looked up, and the first address it has is the one used.
 fn address(host: str, port: int) -> [u8] ! Error {
     if port < 0 || port > 65535 { return Error.BadAddress("{host}:{port}") }
-    var out: [u8] = [2, 0, (port / 256) as u8, (port % 256) as u8]
-    var four: [u8] = []
-    match numbers(host) {
-        Some(ns) => { four = ns }
+    var bytes: [u8] = []
+    match written(host) {
+        Some(ns) => { bytes = ns }
         None => {
-            match numbers(resolve(host)?[0]) {
-                Some(ns) => { four = ns }
+            match written(resolve(host)?[0]) {
+                Some(ns) => { bytes = ns }
                 None => return Error.BadAddress(host)
             }
         }
     }
-    for n in four { out.push(n) }
+    if bytes.len == 16 {
+        // The family, the port, four bytes of flow, the address and four
+        // bytes of scope.
+        var out: [u8] = [10, 0, (port / 256) as u8, (port % 256) as u8, 0, 0, 0, 0]
+        for n in bytes { out.push(n) }
+        for k in 0..4 { out.push(0) }
+        return out
+    }
+    var out: [u8] = [2, 0, (port / 256) as u8, (port % 256) as u8]
+    for n in bytes { out.push(n) }
     for k in 0..8 { out.push(0) }
     out
 }
 
+/// The address a socket gave, as it is written.
+fn shown(addr: [u8]) -> str {
+    if addr[0] == 10 { return six_text(addr[8..24]) }
+    "{addr[4]}.{addr[5]}.{addr[6]}.{addr[7]}"
+}
+
 /// Starts to wait for connections on a port of an address of this
-/// machine: `"127.0.0.1"` for programs of this machine only, `"0.0.0.0"`
-/// for anyone. With port 0 the system picks a free one.
+/// machine: `"127.0.0.1"` or `"::1"` for programs of this machine only,
+/// `"0.0.0.0"` or `"::"` for anyone. With port 0 the system picks a free one.
 pub fn listen(host: str, port: int) -> Listener ! Error {
     let addr = address(host, port)?
-    let fd = socket.open()
+    let fd = socket.open(addr.len > 16)
     if fd < 0 { return Error.Failed("open a socket") }
     let one: [i32] = [1]
     if !socket.reuse(fd, one) || !socket.bind(fd, addr) || !socket.listen(fd) {
@@ -104,7 +251,7 @@ pub fn listen(host: str, port: int) -> Listener ! Error {
 /// Connects to a port of an address.
 pub fn connect(host: str, port: int) -> Conn ! Error {
     let addr = address(host, port)?
-    let fd = socket.open()
+    let fd = socket.open(addr.len > 16)
     if fd < 0 { return Error.Failed("open a socket") }
     if !socket.connect(fd, addr) {
         socket.close(fd)
@@ -157,8 +304,8 @@ pub fn wait(server: Listener?, conns: [Conn], ms: int) -> Ready ! Error {
 impl Listener {
     /// The port it waits on: the one the system picked when it was 0.
     pub fn port(self) -> int ! Error {
-        var addr: [u8] = [0; 16]
-        var len: [u32] = [16]
+        var addr: [u8] = [0; 28]
+        var len: [u32] = [28]
         if !socket.name(self.fd, mut addr, mut len) { return Error.Failed("ask for the port") }
         (addr[2] as int) * 256 + (addr[3] as int)
     }
@@ -225,7 +372,7 @@ pub struct Packet { data: [u8], host: str, port: int }
 /// the system picks a free one.
 pub fn udp(host: str, port: int) -> Udp ! Error {
     let addr = address(host, port)?
-    let fd = socket.open_datagram()
+    let fd = socket.open_datagram(addr.len > 16)
     if fd < 0 { return Error.Failed("open a socket") }
     if !socket.bind(fd, addr) {
         socket.close(fd)
@@ -237,8 +384,8 @@ pub fn udp(host: str, port: int) -> Udp ! Error {
 impl Udp {
     /// The port it has: the one the system picked when it was 0.
     pub fn port(self) -> int ! Error {
-        var addr: [u8] = [0; 16]
-        var len: [u32] = [16]
+        var addr: [u8] = [0; 28]
+        var len: [u32] = [28]
         if !socket.name(self.fd, mut addr, mut len) { return Error.Failed("ask for the port") }
         (addr[2] as int) * 256 + (addr[3] as int)
     }
@@ -252,11 +399,11 @@ impl Udp {
     /// Waits for a datagram: its first `max` bytes at most, and who sent it.
     pub fn receive(self, max: int) -> Packet ! Error where max > 0 {
         var data: [u8] = [0; max as usize]
-        var addr: [u8] = [0; 16]
-        var len: [u32] = [16]
+        var addr: [u8] = [0; 28]
+        var len: [u32] = [28]
         let n = socket.recv_from(self.fd, mut data, mut addr, mut len)
         if n < 0 { return Error.Failed("receive a datagram") }
-        Packet(data[..(n as usize)], "{addr[4]}.{addr[5]}.{addr[6]}.{addr[7]}", (addr[2] as int) * 256 + (addr[3] as int))
+        Packet(data[..(n as usize)], shown(addr), (addr[2] as int) * 256 + (addr[3] as int))
     }
 
     pub fn close(self) { socket.close(self.fd) }

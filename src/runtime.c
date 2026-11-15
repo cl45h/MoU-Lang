@@ -3435,7 +3435,7 @@ static kv kio_rename(kv from, kv to) {
 static kv kio_resolve(kv host) {
     struct addrinfo hints, *found = NULL;
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     int code = getaddrinfo(kbytes(host), NULL, &hints, &found);
     krelease(host);
@@ -3445,9 +3445,13 @@ static kv kio_resolve(kv host) {
         return kfailed(buf);
     }
     kv v = karray_new(P_NONE, 0);
+    /* The addresses of IPv4 first, and then the ones of IPv6. */
+    for (int six = 0; six < 2; six++)
     for (struct addrinfo *a = found; a; a = a->ai_next) {
-        char name[INET_ADDRSTRLEN];
-        if (a->ai_family != AF_INET || !inet_ntop(AF_INET, &((struct sockaddr_in *)a->ai_addr)->sin_addr, name, sizeof name)) continue;
+        char name[INET6_ADDRSTRLEN];
+        if (a->ai_family != (six ? AF_INET6 : AF_INET)) continue;
+        const void *bytes = six ? (const void *)&((struct sockaddr_in6 *)a->ai_addr)->sin6_addr : (const void *)&((struct sockaddr_in *)a->ai_addr)->sin_addr;
+        if (!inet_ntop(a->ai_family, bytes, name, sizeof name)) continue;
         bool seen = false;
         for (int64_t i = 0; i < klen(v) && !seen; i++) {
             kv had = kelem(v.u.o, i);

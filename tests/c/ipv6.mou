@@ -1,0 +1,74 @@
+import std.io
+import std.net
+import std.text
+
+// Addresses of IPv6: written out, looked up, and used for a connection
+// and for datagrams on this machine.
+
+fn echo(server: net.Listener) -> int ! net.Error {
+    let conn = server.accept()?
+    let got = conn.read_all()?
+    conn.write(got)?
+    conn.close()
+    got.len as int
+}
+
+fn talk() ! net.Error {
+    io.print("{net.resolve("::1")?} {net.resolve("2001:db8::8a2e:370:7334")?}") catch e {}
+
+    let server = net.listen("::1", 0)?
+    let port = server.port()?
+    scope s {
+        let served = s.spawn(echo(server))
+        let conn = net.connect("::1", port)?
+        conn.send("over six")?
+        conn.finish()
+        let back = conn.read_all()?
+        conn.close()
+        io.print("{text.from_bytes(back)} {served.wait()?}") catch e {}
+    }
+    server.close()
+
+    let a = net.udp("::1", 0)?
+    let b = net.udp("0:0:0:0:0:0:0:1", 0)?
+    let (pa, pb) = (a.port()?, b.port()?)
+    a.send_to("::1", pb, text.bytes("ping"))?
+    let first = b.receive(100)?
+    b.send_to(first.host, first.port, text.bytes("pong"))?
+    let second = a.receive(100)?
+    io.print("{text.from_bytes(first.data)} {first.host} {first.port == pa} {text.from_bytes(second.data)} {second.host}") catch e {}
+    a.close()
+    b.close()
+
+    // One that takes both kinds: a connection of IPv4 comes in too.
+    let both = net.listen("::", 0)?
+    let shared = both.port()?
+    scope s {
+        let served = s.spawn(echo(both))
+        let conn = net.connect("127.0.0.1", shared)?
+        conn.send("four")?
+        conn.finish()
+        let back = conn.read_all()?
+        conn.close()
+        io.print("{text.from_bytes(back)} {served.wait()?}") catch e {}
+    }
+    both.close()
+}
+
+fn main() ! io.Error {
+    talk() catch e { io.print("failed: {e}")? }
+    for bad in ["1::2::3", ":1", "1:", "12345::", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "g::1", ":::", "1:2:3:4:5:6:7::8"] {
+        let found = net.resolve(bad) catch e {
+            io.print("{e}")?
+            continue
+        }
+        io.print("{bad} taken as {found}")?
+    }
+    for good in ["::", "1::", "::ffff:102:304", "1:2:3:4:5:6:7:8", "A:b::C"] {
+        let found = net.resolve(good) catch e {
+            io.print("{good} refused")?
+            continue
+        }
+        io.print("{found}")?
+    }
+}

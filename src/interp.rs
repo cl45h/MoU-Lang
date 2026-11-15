@@ -474,11 +474,13 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             use std::net::ToSocketAddrs;
             let host = text(0)?;
             done((&*host, 0).to_socket_addrs().map(|found| {
-                // The addresses of IPv4, each one once, in the order given.
+                // The addresses of IPv4 and then the ones of IPv6, each one
+                // once, in the order given.
+                let found: Vec<std::net::SocketAddr> = found.collect();
                 let mut names: Vec<String> = Vec::new();
-                for a in found {
-                    if let std::net::SocketAddr::V4(v4) = a {
-                        let name = v4.ip().to_string();
+                for six in [false, true] {
+                    for a in found.iter().filter(|a| a.is_ipv6() == six) {
+                        let name = a.ip().to_string();
                         if !names.contains(&name) {
                             names.push(name);
                         }
