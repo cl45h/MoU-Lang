@@ -1,0 +1,43 @@
+import std.io
+import std.text
+
+// A function that reads and writes files, tried without touching a disk.
+
+fn count_lines(path: str) -> int ! io.Error {
+    let body = io.read_file(path)?
+    text.lines(body).len as int
+}
+
+fn save_report(names: [str]) ! io.Error {
+    var out = text.Builder.new()
+    for n in names { out.line("{n}: {count_lines(n)?}") }
+    io.write_file("report.txt", out.build())?
+}
+
+fn main() ! io.Error {
+    var files: [(str, str)] = [("a.txt", "one\ntwo"), ("b.txt", "x")]
+    with files = files {
+        save_report(["a.txt", "b.txt"])?
+        io.write_file("b.txt", "x\ny\nz")?
+        io.print("{count_lines("b.txt")?} {io.read_file("report.txt")?}")?
+        let missing = io.read_file("nothing.txt") catch e { "no: {e}" }
+        io.print(missing)?
+        var inner: [(str, str)] = []
+        with files = inner {
+            let hidden = io.read_file("a.txt") catch e { "not here" }
+            io.write_file("deep.txt", hidden)?
+        }
+        io.print("{inner} {io.read_file("a.txt")?}")?
+    }
+    io.print("{files.len} {files[1]} {files[2].0}")?
+    let real = io.read_file("/this/does/not/exist") catch e { "outside again: {e}" }
+    io.print(real)?
+    for round in 0..3 {
+        var tmp: [(str, str)] = []
+        with files = tmp {
+            if round == 1 { continue }
+            io.write_file("r", "{round}")?
+        }
+        io.print("{tmp}")?
+    }
+}

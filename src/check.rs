@@ -4525,6 +4525,15 @@ impl<'a> Checker<'a> {
                             self.err(value.span, format!("`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`"));
                         }
                     }
+                    [(name, value)] if name == "files" => {
+                        let t = self.expr(value);
+                        let pairs = Ty::Slice(Box::new(Ty::Tuple(vec![Ty::Str, Ty::Str])));
+                        if !assignable(&pairs, &t) {
+                            let shown = self.show(&t);
+                            self.err(value.span, format!("`with files = ...` takes a variable of type `[(str, str)]`, the paths and the text of the files `io.read_file` and `io.write_file` see inside the block, and this is `{shown}`"));
+                        }
+                        self.require_mut_place(value);
+                    }
                     [(name, value)] if name == "args" => {
                         let t = self.expr(value);
                         if !assignable(&Ty::Slice(Box::new(Ty::Str)), &t) {
@@ -4540,7 +4549,7 @@ impl<'a> Checker<'a> {
                             self.err(value.span, format!("`with env = ...` takes the names and values `io.env` finds inside the block, a `[(str, str)]`, and this is `{shown}`"));
                         }
                     }
-                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }`, `with io = lines { }`, `with err = lines { }`, `with input = lines { }`, `with args = list { }` and `with env = pairs { }`"),
+                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }`, `with io = lines { }`, `with err = lines { }`, `with input = lines { }`, `with args = list { }`, `with env = pairs { }` and `with files = pairs { }`"),
                     _ => {}
                 }
                 self.scopes.push(HashMap::new());

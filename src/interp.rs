@@ -39,6 +39,7 @@ pub fn run(p: &Program, main: usize, out: &mut dyn Write) -> Result<Value, Panic
     OPEN_LINE.set(false);
     INPUT.with(|c| c.borrow_mut().clear());
     GIVEN.with(|c| *c.borrow_mut() = [Vec::new(), Vec::new()]);
+    VFS.with(|c| c.borrow_mut().clear());
     let mut consts = Vec::new();
     for (k, &f) in p.consts.iter().enumerate() {
         // A constant computed while compiling is not computed again.
@@ -65,6 +66,8 @@ thread_local! {
     /// The lines `io.read_line` gives inside `with input` blocks, and how
     /// many of each were read: the innermost block is the last.
     static INPUT: std::cell::RefCell<Vec<(Rc<Vec<Value>>, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The files of the open `with files` blocks.
+    static VFS: std::cell::RefCell<Vec<Vec<Value>>> = const { std::cell::RefCell::new(Vec::new()) };
     /// What the open `with args` and `with env` blocks gave.
     static GIVEN: std::cell::RefCell<[Vec<Rc<Vec<Value>>>; 2]> = const { std::cell::RefCell::new([Vec::new(), Vec::new()]) };
     /// Whether what runs is a constant being computed, and not the program.
@@ -378,6 +381,45 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
                 }
                 Value::Some(Box::new(Value::Str(line.into())))
             }))
+        }
+        "vfs.open" => {
+            let Some(Value::Array(given)) = args.first() else { return Err(internal("`with files` without an array")) };
+            VFS.with(|c| c.borrow_mut().push(given.to_vec()));
+            Value::Unit
+        }
+        "vfs.close" => Value::Array(Rc::new(VFS.with(|c| c.borrow_mut().pop()).unwrap_or_default())),
+        // Inside a `with files` block a file is a pair of the block.
+        "io.read_file" if VFS.with(|c| !c.borrow().is_empty()) => {
+            let path = text(0)?;
+            let found = VFS.with(|c| {
+                c.borrow().last().and_then(|files| {
+                    files.iter().rev().find_map(|pair| match pair {
+                        Value::Tuple(kv) => match (kv.first(), kv.get(1)) {
+                            (Some(Value::Str(k)), Some(v)) if **k == *path => Some(v.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                })
+            });
+            match found {
+                Some(v) => Value::Ok(Box::new(v)),
+                None => Value::Err(Box::new(Value::Str("No such file or directory (os error 2)".into()))),
+            }
+        }
+        "io.write_file" if VFS.with(|c| !c.borrow().is_empty()) => {
+            let (path, body) = (text(0)?, text(1)?);
+            let made = Value::Tuple(vec![Value::Str(path.clone()), Value::Str(body)]);
+            VFS.with(|c| {
+                let mut c = c.borrow_mut();
+                let Some(files) = c.last_mut() else { return };
+                let at = files.iter().position(|pair| matches!(pair, Value::Tuple(kv) if matches!(kv.first(), Some(Value::Str(k)) if **k == *path)));
+                match at {
+                    Some(i) => files[i] = made,
+                    None => files.push(made),
+                }
+            });
+            Value::Ok(Box::new(Value::Unit))
         }
         "io.read_file" => done(std::fs::read_to_string(&*text(0)?).map(|s| Value::Str(s.into()))),
         "io.write_file" => done(std::fs::write(&*text(0)?, text(1)?.as_bytes()).map(|()| Value::Unit)),

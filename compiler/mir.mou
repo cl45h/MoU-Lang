@@ -1624,6 +1624,7 @@ impl Lower {
                 let here = self.at
                 var close = "capture.close"
                 if self.scopes[k].input == 4 { close = "errors.close" }
+                if self.scopes[k].input == 5 { close = "vfs.close" }
                 let all = self.finish_call(Callee.Native(close), [Operand.At(capture[0])], [], here)
                 self.emit(capture[0], Rvalue.Use(all))
             }
@@ -2728,18 +2729,27 @@ impl Lower {
                     let _ = self.scopes.pop()
                     return Operand.At(kept)
                 }
-                if bindings.len > 0 && (bindings[0].name == "io" || bindings[0].name == "err") {
+                if bindings.len > 0 && (bindings[0].name == "io" || bindings[0].name == "err" || bindings[0].name == "files") {
                     // What is printed is kept until the block is left.
                     let lines = self.place(bindings[0].value)
                     self.at = at
                     self.scopes.push(Scope([], [], -1, -1, [], 0))
                     let err = bindings[0].name == "err"
+                    let files = bindings[0].name == "files"
                     var open = "capture.open"
                     if err { open = "errors.open" }
-                    let _ = self.finish_call(Callee.Native(open), [], [], at)
+                    // The files of a `with files` block start as the variable has them.
+                    var given: [Operand] = []
+                    if files {
+                        open = "vfs.open"
+                        given = [Operand.At(lines)]
+                    }
+                    let _ = self.finish_call(Callee.Native(open), given, [], at)
                     let top = self.scopes.len - 1
-                    // 4 says the lines kept are the ones `io.eprint` writes.
+                    // 4 says the lines kept are the ones `io.eprint` writes,
+                    // and 5 that what is kept is the files.
                     if err { self.scopes[top].input = 4 }
+                    if files { self.scopes[top].input = 5 }
                     self.scopes[top].capture = [lines]
                     let v = self.block(body)
                     let kept = self.stash(v)

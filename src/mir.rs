@@ -805,7 +805,8 @@ struct Scope<'a> {
     /// The scope of a `with input = lines` block: on the way out,
     /// `io.read_line` reads again from where it did before.
     /// A `with input`, `with args` or `with env` block: 1, 2 or 3. And 4
-    /// when what `capture` keeps is what `io.eprint` writes (`with err`).
+    /// when what `capture` keeps is what `io.eprint` writes (`with err`),
+    /// and 5 when it is the files of a `with files` block.
     input: u8,
 }
 
@@ -1513,7 +1514,11 @@ impl<'a> Lower<'a> {
             if let Some(lines) = self.scopes[k].capture.clone() {
                 // The lines go after the ones the variable already has.
                 let span = self.span;
-                let close = if self.scopes[k].input == 4 { "errors.close" } else { "capture.close" };
+                let close = match self.scopes[k].input {
+                    4 => "errors.close",
+                    5 => "vfs.close",
+                    _ => "capture.close",
+                };
                 let all = self.finish_call(Callee::Native(close), vec![Operand::Place(lines.clone())], Vec::new(), span);
                 self.emit(lines, Rvalue::Use(all));
             }
@@ -2483,15 +2488,20 @@ impl<'a> Lower<'a> {
                 self.scopes.pop();
                 Operand::Place(kept)
             }
-            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io" || b.0 == "err") => {
+            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io" || b.0 == "err" || b.0 == "files") => {
                 // What is printed is kept until the block is left.
                 let lines = self.place(&bindings[0].1);
                 self.span = span;
                 self.scopes.push(Scope::default());
-                let err = bindings[0].0 == "err";
-                self.finish_call(Callee::Native(if err { "errors.open" } else { "capture.open" }), Vec::new(), Vec::new(), span);
+                // The files of a `with files` block start as the variable has them.
+                let (open, kind, given) = match bindings[0].0.as_str() {
+                    "err" => ("errors.open", 4, Vec::new()),
+                    "files" => ("vfs.open", 5, vec![Operand::Place(lines.clone())]),
+                    _ => ("capture.open", 0, Vec::new()),
+                };
+                self.finish_call(Callee::Native(open), given, Vec::new(), span);
                 if let Some(scope) = self.scopes.last_mut() {
-                    scope.input = if err { 4 } else { 0 };
+                    scope.input = kind;
                     scope.capture = Some(lines);
                 }
                 let v = self.block(body);

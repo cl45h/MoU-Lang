@@ -1953,7 +1953,55 @@ static bool kutf8(const unsigned char *s, size_t n) {
     return true;
 }
 
+/* The files `io.read_file` and `io.write_file` see inside `with files =
+   pairs` blocks: each a list of pairs of a path and a text, the innermost
+   one last. */
+static struct {
+    kv vals[KINPUT_MAX];
+    int depth;
+} kvfs;
+
+static kv kvfs_open(kv pairs) {
+    KCAP_LOCK();
+    if (kvfs.depth == KINPUT_MAX) kpanic("too many `with files` blocks, one inside another");
+    kvfs.vals[kvfs.depth++] = pairs;
+    KCAP_UNLOCK();
+    return KUNIT;
+}
+
+/* Ends the innermost block: what its files are now. */
+static kv kvfs_close(kv old) {
+    krelease(old);
+    kv now = karray_new(P_NONE, 0);
+    KCAP_LOCK();
+    if (kvfs.depth) {
+        krelease(now);
+        now = kvfs.vals[--kvfs.depth];
+    }
+    KCAP_UNLOCK();
+    return now;
+}
+
+/* Where the file with that path is among the innermost files, or -1. */
+static int64_t kvfs_find(kv path) {
+    kv files = kvfs.vals[kvfs.depth - 1];
+    size_t len = (size_t)klen(path);
+    for (int64_t i = klen(files) - 1; i >= 0; i--) {
+        const kv *pair = ITEMS(kelem(files.u.o, i).u.o);
+        if ((size_t)klen(pair[0]) == len && !memcmp(kbytes(pair[0]), kbytes(path), len)) return i;
+    }
+    return -1;
+}
+
 static kv kio_read_file(kv path) {
+    if (kvfs.depth) {
+        KCAP_LOCK();
+        int64_t at = kvfs_find(path);
+        kv r = at < 0 ? kfailed("No such file or directory (os error 2)") : kbox(T_OK, kretain(ITEMS(kelem(kvfs.vals[kvfs.depth - 1].u.o, at).u.o)[1]));
+        KCAP_UNLOCK();
+        krelease(path);
+        return r;
+    }
     FILE *f = fopen(kbytes(path), "rb");
     krelease(path);
     if (!f) return kos_error();
@@ -1971,6 +2019,16 @@ static kv kio_read_file(kv path) {
 }
 
 static kv kio_write_file(kv path, kv text) {
+    if (kvfs.depth) {
+        KCAP_LOCK();
+        int64_t at = kvfs_find(path);
+        kv *files = &kvfs.vals[kvfs.depth - 1];
+        kv pair = kagg(T_TUPLE, 0, 0, 2, (kv[]){path, text});
+        if (at < 0) kpush(files, 0, NULL, pair);
+        else kitem_put(files, at, pair);
+        KCAP_UNLOCK();
+        return kbox(T_OK, KUNIT);
+    }
     FILE *f = fopen(kbytes(path), "wb");
     kv r;
     if (!f) {

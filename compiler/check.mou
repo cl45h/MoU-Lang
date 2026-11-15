@@ -4816,6 +4816,14 @@ impl Checker {
                         let shown = self.show(t)
                         self.err(at_expr(value), "`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`")
                     }
+                } else if bindings.len == 1 && bindings[0].name == "files" {
+                    let value = bindings[0].value
+                    let t = self.expr(value)
+                    if !types.assignable(types.Ty.Slice(types.Ty.Tuple([types.Ty.Str, types.Ty.Str])), t) {
+                        let shown = self.show(t)
+                        self.err(at_expr(value), "`with files = ...` takes a variable of type `[(str, str)]`, the paths and the text of the files `io.read_file` and `io.write_file` see inside the block, and this is `{shown}`")
+                    }
+                    self.require_mut_place(value)
                 } else if bindings.len == 1 && bindings[0].name == "args" {
                     let value = bindings[0].value
                     let t = self.expr(value)
@@ -4831,7 +4839,7 @@ impl Checker {
                         self.err(at_expr(value), "`with env = ...` takes the names and values `io.env` finds inside the block, a `[(str, str)]`, and this is `{shown}`")
                     }
                 } else {
-                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}`, `with io = lines {{ }}`, `with err = lines {{ }}`, `with input = lines {{ }}`, `with args = list {{ }}` and `with env = pairs {{ }}`") }
+                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}`, `with io = lines {{ }}`, `with err = lines {{ }}`, `with input = lines {{ }}`, `with args = list {{ }}`, `with env = pairs {{ }}` and `with files = pairs {{ }}`") }
                 }
                 self.scopes.push([])
                 let t = self.block(body)

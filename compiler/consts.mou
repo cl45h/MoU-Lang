@@ -937,11 +937,11 @@ fn native(name: str, args: [mir.Value]) -> mir.Value ! Oops {
     if name == "task.close" || name == "task.cancel" || name == "arena.close" { return mir.Value.Unit }
     if name == "arena.open" { return mir.Value.Int(0) }
     // A constant cannot print, so a `with io` block keeps nothing.
-    if name == "capture.open" || name == "errors.open" { return mir.Value.Unit }
+    if name == "capture.open" || name == "errors.open" || name == "vfs.open" { return mir.Value.Unit }
     // A constant cannot read either.
     if name == "input.open" || name == "input.close" { return mir.Value.Unit }
     if name == "args.open" || name == "args.close" || name == "env.open" || name == "env.close" { return mir.Value.Unit }
-    if name == "capture.close" || name == "errors.close" {
+    if name == "capture.close" || name == "errors.close" || name == "vfs.close" {
         if args.len > 0 { return args[0] }
         return internal("`with io` without an array")
     }
