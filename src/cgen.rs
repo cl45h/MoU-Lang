@@ -312,8 +312,9 @@ enum Rep {
     Rec(usize),
     /// An optional number or boolean, kept as whether it is there and the
     /// value: 1 a boolean, 2 an integer with sign, 3 an `f64`, 4 an
-    /// integer without sign, 5 a character.
-    Opt(u8),
+    /// integer without sign, 5 a character. And 16 plus the number of a
+    /// struct of C, for an optional one of those.
+    Opt(u32),
     /// A tagged value, in `L`.
     Boxed,
 }
@@ -322,14 +323,16 @@ enum Rep {
 fn agg(r: Rep) -> Option<String> {
     match r {
         Rep::Rec(i) => Some(format!("KS{i}")),
+        Rep::Opt(k) if k >= 16 => Some(format!("KOR{}", k - 16)),
         Rep::Opt(k) => Some(format!("KO{}", ['B', 'I', 'F', 'U', 'C'][(k as usize - 1).min(4)])),
         _ => None,
     }
 }
 
 /// How what an optional holds is stored.
-fn opt_inner(k: u8) -> Rep {
+fn opt_inner(k: u32) -> Rep {
     match k {
+        k if k >= 16 => Rep::Rec(k as usize - 16),
         1 => Rep::Bool,
         3 => Rep::F64,
         4 => Rep::Int("u64"),
@@ -339,8 +342,9 @@ fn opt_inner(k: u8) -> Rep {
 }
 
 /// The kind of optional that holds a value stored that way.
-fn opt_of(r: Rep) -> Option<u8> {
+fn opt_of(r: Rep) -> Option<u32> {
     match r {
+        Rep::Rec(i) => Some(16 + i as u32),
         Rep::Bool => Some(1),
         Rep::F64 => Some(3),
         Rep::Char => Some(5),
@@ -354,17 +358,20 @@ fn opt_of(r: Rep) -> Option<u8> {
 fn part(reps: &[Rep], recs: &[Vec<u32>], p: &Place) -> Option<Rep> {
     match (reps[p.local], p.proj.as_slice()) {
         (_, []) => None,
-        (Rep::Opt(k), [Proj::Field(0)]) => Some(opt_inner(k)),
-        (Rep::Rec(_), steps) => {
-            // A field of a struct, and of the struct that field is.
+        (Rep::Rec(_) | Rep::Opt(_), steps) => {
+            // What an optional holds, a field of a struct, and of the
+            // struct that field is.
             let mut r = reps[p.local];
             for pr in steps {
-                let (Rep::Rec(i), Proj::Field(k)) = (r, pr) else {
-                    return None;
+                r = match (r, pr) {
+                    (Rep::Opt(k), Proj::Field(0)) => opt_inner(k),
+                    (Rep::Rec(i), Proj::Field(k)) => {
+                        let kinds = kinds_of(recs, i);
+                        // The fields of an enum come after which variant it is.
+                        field_rep(*kinds.get(*k + (kinds.first() == Some(&6)) as usize)?)
+                    }
+                    _ => return None,
                 };
-                let kinds = kinds_of(recs, i);
-                // The fields of an enum come after which variant it is.
-                r = field_rep(*kinds.get(*k + (kinds.first() == Some(&6)) as usize)?);
             }
             Some(r)
         }
@@ -1211,7 +1218,7 @@ impl Cx<'_> {
                     Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Opt(k) => Ok(format!("s{l} = s{};", q.local)),
                     // What an array gives is read where it is, with no
                     // block made for the optional.
-                    Rvalue::Get(..) | Rvalue::Pop(_) => {
+                    Rvalue::Get(..) | Rvalue::Pop(_) if k < 16 => {
                         let found = match rv {
                             Rvalue::Get(a, i) => format!("kget_raw({}, {}, &it_)", operand(self, a)?, operand(self, i)?),
                             Rvalue::Pop(p) => match self.ptr(p.local, &p.proj, true) {
@@ -1342,6 +1349,17 @@ impl Cx<'_> {
             _ => format!("L[{}]", self.at(l)),
         }
     }
+}
+
+/// An optional struct of C: whether it is there and the struct, and how it
+/// is read from a tagged value and made into one.
+fn optional(i: usize) -> String {
+    format!(
+        "struct KOR{i} {{ bool has; struct KS{i} v; }};\n\
+         static struct KOR{i} KOR{i}_get(kv v) {{ return v.tag == T_SOME ? (struct KOR{i}){{true, KS{i}_get(ITEMS(v.u.o)[0])}} : (struct KOR{i}){{0}}; }}\n\
+         static struct KOR{i} KOR{i}_take(kv v) {{ struct KOR{i} r = KOR{i}_get(v); krelease(v); return r; }}\n\
+         static kv KOR{i}_box(struct KOR{i} s) {{ return s.has ? kbox(T_SOME, KS{i}_box(s.v)) : KNONE; }}\n"
+    )
 }
 
 /// The C declaration of the machine version of a function.
@@ -1793,10 +1811,14 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     let mut tuples: Vec<usize> = Vec::new();
     for f in &p.fns {
         for s in f.scalars.iter().chain(&f.hints).chain(std::iter::once(&f.ret)) {
-            if let Some(Scalar::Rec(i)) = s {
-                if *i >= TUPLE_BASE && !tuples.contains(i) {
-                    tuples.push(*i);
-                }
+            // A tuple, or an optional one.
+            let i = match s {
+                Some(Scalar::Rec(i)) => *i,
+                Some(Scalar::Opt(k)) if *k >= 16 => *k as usize - 16,
+                _ => 0,
+            };
+            if i >= TUPLE_BASE && !tuples.contains(&i) {
+                tuples.push(i);
             }
         }
     }
@@ -1824,6 +1846,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}").unwrap();
         let made: Vec<String> = kinds.iter().enumerate().map(|(f, k)| tagged(field_rep(*k), &format!("s.f{f}"))).collect();
         writeln!(out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {}, (kv[]){{{}}}); }}", kinds.len(), made.join(", ")).unwrap();
+        out.push_str(&optional(i));
     }
     // The enums kept as structs of C: which variant, and a field for
     // each position. How many fields a variant has says how many are read
@@ -1857,6 +1880,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
         writeln!(out, "    static const int8_t count[] = {{{}}};", counts.join(", ")).unwrap();
         writeln!(out, "    return kagg(T_ENUM, {e}, (uint32_t)s.f0, count[s.f0], (kv[]){{{}}});", made.join(", ")).unwrap();
         writeln!(out, "}}").unwrap();
+        out.push_str(&optional(i));
     }
     // The functions C is given to call: each as a function of C that
     // makes tagged values of what it gets and calls the one of the program.

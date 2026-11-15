@@ -360,6 +360,14 @@ fn struct_kinds(structs: [check.StructInfo], i: int, seen: mut [int]) -> [int] {
     kinds
 }
 
+// The optional of what is kept as a struct of C.
+fn opt_rec(s: Scalar?) -> Scalar? {
+    match s {
+        Some(Scalar.Rec(i)) => Some(Scalar.Opt(16 + i))
+        _ => None
+    }
+}
+
 fn scalar_of(c: check.Checker, t: types.Ty) -> Scalar? {
     let structs = c.structs
     match t {
@@ -387,6 +395,10 @@ fn scalar_of(c: check.Checker, t: types.Ty) -> Scalar? {
                     if text.starts_with(k, "u") { return Some(Scalar.Opt(4)) }
                     Some(Scalar.Opt(2))
                 }
+                // An optional struct, tuple or enum that is kept as a struct of C.
+                types.Ty.Struct(_, _) => opt_rec(scalar_of(c, inner))
+                types.Ty.Tuple(_) => opt_rec(scalar_of(c, inner))
+                types.Ty.Enum(_, _) => opt_rec(scalar_of(c, inner))
                 _ => None
             }
         }

@@ -352,8 +352,9 @@ pub enum Scalar {
     Rec(usize),
     /// An optional boolean (1), integer with sign of up to 64 bits (2),
     /// `f64` (3), integer without sign of up to 64 bits (4) or character
-    /// (5): it is kept as whether it is there and the value.
-    Opt(u8),
+    /// (5): it is kept as whether it is there and the value. And 16 plus
+    /// the number of a struct kept as a struct of C, for an optional one.
+    Opt(u32),
 }
 
 /// A tuple of two or three plain fields is kept as a struct of C too: its
@@ -454,6 +455,11 @@ fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
             Ty::Char => Some(Scalar::Opt(5)),
             Ty::Float("f64") => Some(Scalar::Opt(3)),
             Ty::Int(k) if !k.ends_with("128") => Some(Scalar::Opt(if k.starts_with('u') { 4 } else { 2 })),
+            // An optional struct, tuple or enum that is kept as a struct of C.
+            Ty::Struct(..) | Ty::Tuple(_) | Ty::Enum(..) => match scalar_of(info, inner) {
+                Some(Scalar::Rec(i)) => Some(Scalar::Opt(16 + i as u32)),
+                _ => None,
+            },
             _ => None,
         },
         Ty::Tuple(ts) if (2..=3).contains(&ts.len()) && ts.iter().all(plain_field) => {

@@ -472,6 +472,7 @@ fn agg(r: Rep) -> str {
     match r {
         Rep.Rec(i) => "KS{i}"
         Rep.Opt(k) => {
+            if k >= 16 { return "KOR{k - 16}" }
             if k == 1 { return "KOB" }
             if k == 2 { return "KOI" }
             if k == 3 { return "KOF" }
@@ -484,6 +485,7 @@ fn agg(r: Rep) -> str {
 
 // How what an optional holds is stored.
 fn opt_inner(k: int) -> Rep {
+    if k >= 16 { return Rep.Rec(k - 16) }
     if k == 1 { return Rep.Bool }
     if k == 3 { return Rep.F64 }
     if k == 4 { return Rep.Int("u64") }
@@ -494,6 +496,7 @@ fn opt_inner(k: int) -> Rep {
 // The kind of optional that holds a value stored that way, or 0.
 fn opt_of(r: Rep) -> int {
     match r {
+        Rep.Rec(i) => 16 + i
         Rep.Bool => 1
         Rep.F64 => 3
         Rep.Char => 5
@@ -535,28 +538,24 @@ fn part(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep {
 fn piece(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep? {
     if p.proj.len == 0 { return None }
     var r = reps[p.local]
-    let o = opt_kind(r)
-    if o > 0 {
-        if p.proj.len != 1 { return None }
-        match p.proj[0] {
-            mir.Proj.Field(k) => {
-                if k == 0 { return Some(opt_inner(o)) }
-                return None
-            }
-            _ => return None
-        }
-    }
+    if rec_of(r) < 0 && opt_kind(r) == 0 { return None }
     for pr in p.proj {
-        let i = rec_of(r)
-        if i < 0 { return None }
         match pr {
             mir.Proj.Field(k) => {
-                let kinds = kinds_of(recs, i)
-                var at = k
-                // The fields of an enum come after which variant it is.
-                if kinds.len > 0 && kinds[0] == 6 { at = k + 1 }
-                if at >= (kinds.len as int) { return None }
-                r = field_rep(kinds[at])
+                let o = opt_kind(r)
+                let i = rec_of(r)
+                if o > 0 {
+                    if k != 0 { return None }
+                    r = opt_inner(o)
+                } else {
+                    if i < 0 { return None }
+                    let kinds = kinds_of(recs, i)
+                    var at = k
+                    // The fields of an enum come after which variant it is.
+                    if kinds.len > 0 && kinds[0] == 6 { at = k + 1 }
+                    if at >= (kinds.len as int) { return None }
+                    r = field_rep(kinds[at])
+                }
             }
             _ => return None
         }
@@ -583,6 +582,15 @@ fn after(i: int, records: [[int]], order: mut [int]) {
         if kind >= 16 { after(kind - 16, records, mut order) }
     }
     order.push(i)
+}
+
+// An optional struct of C: whether it is there and the struct, and how it
+// is read from a tagged value and made into one.
+fn optional(out: mut [str], i: int) {
+    line(mut out, "struct KOR{i} {{ bool has; struct KS{i} v; }};")
+    line(mut out, "static struct KOR{i} KOR{i}_get(kv v) {{ return v.tag == T_SOME ? (struct KOR{i}){{true, KS{i}_get(ITEMS(v.u.o)[0])}} : (struct KOR{i}){{0}}; }}")
+    line(mut out, "static struct KOR{i} KOR{i}_take(kv v) {{ struct KOR{i} r = KOR{i}_get(v); krelease(v); return r; }}")
+    line(mut out, "static kv KOR{i}_box(struct KOR{i} s) {{ return s.has ? kbox(T_SOME, KS{i}_box(s.v)) : KNONE; }}")
 }
 
 // Whether a struct can be kept as a struct of C.
@@ -1945,15 +1953,19 @@ impl Cx {
                     // What an array gives is read where it is, with no
                     // block made for the optional.
                     mir.Rvalue.Get(a, i) => {
-                        let x = self.operand(a)?
-                        let y = self.operand(i)?
-                        return raw_item(l, made, k, "kget_raw({x}, {y}, &it_)")
+                        if k < 16 {
+                            let x = self.operand(a)?
+                            let y = self.operand(i)?
+                            return raw_item(l, made, k, "kget_raw({x}, {y}, &it_)")
+                        }
                     }
                     mir.Rvalue.Pop(p) => {
-                        if has_path(p.proj) {
-                            if let Some(ptr) = self.ptr(p.local, p.proj, true) { return raw_item(l, made, k, "kpop_raw({ptr}, 0, NULL, &it_)") }
+                        if k < 16 {
+                            if has_path(p.proj) {
+                                if let Some(ptr) = self.ptr(p.local, p.proj, true) { return raw_item(l, made, k, "kpop_raw({ptr}, 0, NULL, &it_)") }
+                            }
+                            return raw_item(l, made, k, "kpop_raw({self.target(p)?}, &it_)")
                         }
-                        return raw_item(l, made, k, "kpop_raw({self.target(p)?}, &it_)")
                     }
                     _ => {}
                 }
@@ -2787,6 +2799,15 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
                     }
                     if !seen { tuples.push(i) }
                 }
+                // An optional tuple.
+                Some(mir.Scalar.Opt(k)) => {
+                    let i = k - 16
+                    var seen = i < mir.TUPLE_BASE
+                    for t in tuples {
+                        if t == i { seen = true }
+                    }
+                    if !seen { tuples.push(i) }
+                }
                 _ => {}
             }
         }
@@ -2838,6 +2859,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "static struct KS{i} KS{i}_get(kv v) {{ const kv *it = ITEMS(v.u.o); return (struct KS{i}){{{text.join(read, ", ")}}}; }}")
         line(mut out, "static struct KS{i} KS{i}_take(kv v) {{ struct KS{i} r = KS{i}_get(v); krelease(v); return r; }}")
         line(mut out, "static kv KS{i}_box(struct KS{i} s) {{ return kagg({tag}, {shown}, 0, {kinds.len}, (kv[]){{{text.join(made, ", ")}}}); }}")
+        optional(mut out, i)
     }
     // The enums kept as structs of C: which variant, and a field for
     // each position. How many fields a variant has says how many are read
@@ -2877,6 +2899,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         line(mut out, "    static const int8_t count[] = {{{text.join(counts, ", ")}}};")
         line(mut out, "    return kagg(T_ENUM, {e}, (uint32_t)s.f0, count[s.f0], (kv[]){{{text.join(made, ", ")}}});")
         line(mut out, "}}")
+        optional(mut out, i)
     }
     c_callbacks(mut out, p)
     c_structs(mut out, p)

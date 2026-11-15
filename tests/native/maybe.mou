@@ -1,0 +1,70 @@
+import std.io
+
+struct Point { x: int, y: int }
+struct Line { a: Point, b: Point }
+enum Shape { Dot, Circle(f64), Rect(f64, f64) }
+
+fn first_positive(ps: [Point]) -> Point? {
+    for p in ps {
+        if p.x > 0 && p.y > 0 { return Some(p) }
+    }
+    None
+}
+
+fn middle(l: Line?) -> Point? {
+    match l {
+        Some(line) => Some(Point((line.a.x + line.b.x) / 2, (line.a.y + line.b.y) / 2))
+        None => None
+    }
+}
+
+fn halves(n: int) -> (int, int)? {
+    if n < 0 { return None }
+    Some((n / 2, n - n / 2))
+}
+
+fn bigger(s: Shape?) -> Shape? {
+    let shape = s?
+    match shape {
+        Circle(r) => Some(Shape.Circle(r * 2.0))
+        Rect(w, h) => Some(Shape.Rect(w * 2.0, h * 2.0))
+        Dot => None
+    }
+}
+
+fn or_origin(p: Point?) -> Point {
+    if let Some(q) = p { return q }
+    Point(0, 0)
+}
+
+fn show[T](v: T) -> str { "{v}" }
+
+fn main() ! io.Error {
+    let ps = [Point(-1, 2), Point(3, 4), Point(5, 6)]
+    let found = first_positive(ps)
+    io.print("{found} {first_positive([Point(0, 0)])}")?
+    if let Some(p) = found { io.print("{p.x + p.y}")? }
+    var keep: Point? = None
+    io.print("{keep == None} {or_origin(keep)}")?
+    keep = found
+    keep = Some(Point(or_origin(keep).x * 10, 7))
+    io.print("{keep} {keep == Some(Point(30, 7))} {show(keep)}")?
+    io.print("{middle(Some(Line(Point(0, 0), Point(10, 20))))} {middle(None)}")?
+    io.print("{halves(7)} {halves(-1)}")?
+    if let Some((a, b)) = halves(9) { io.print("{a} {b}")? }
+    io.print("{bigger(Some(Shape.Circle(1.5)))} {bigger(Some(Shape.Rect(1.0, 2.0)))} {bigger(Some(Shape.Dot))} {bigger(None)}")?
+    let all = [found, None, keep]
+    var count = 0
+    for o in all {
+        if let Some(p) = o { count += p.x }
+    }
+    io.print("{count} {all}")?
+    var total = 0
+    for i in 0..1000 {
+        match first_positive([Point(i - 500, 1), Point(i, i)]) {
+            Some(p) => { total += p.x }
+            None => {}
+        }
+    }
+    io.print("{total}")?
+}
