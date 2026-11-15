@@ -82,3 +82,86 @@ Mou, o mou-lang para buscarlo. El comando es `mou` y los archivos terminan en `.
 ## Licencia
 
 Mou se distribuye bajo dos licencias, a elección de quien lo use: [MIT](LICENSE-MIT) o [Apache 2.0](LICENSE-APACHE).
+
+
+
+Mou is a systems programming language under development. It aims to combine memory safety, effects inferred by the compiler and native binaries, with fewer annotations than Rust and without the traps of C and C++.
+
+Status: experimental. The language changes and is not ready for production.
+
+```mou
+import std.io
+
+struct Point { x: int, y: int }
+
+fn distance(a: Point, b: Point) -> int {
+    let dx = a.x - b.x
+    let dy = a.y - b.y
+    dx * dx + dy * dy
+}
+
+fn main() ! io.Error {
+    var total = 0
+    for p in [Point(1, 2), Point(4, 6)] {
+        total += distance(p, Point(0, 0))
+    }
+    io.print("total: {total}")?
+}
+```
+
+## What it has today
+
+- A type checker with generics, traits and `dyn`.
+- Ownership without lifetimes: references are never stored, so they need no annotations.
+- Inferred effects (`alloc`, `panic`, `io`, `unsafe`, `block`) and annotations that forbid them: `@noalloc`, `@nopanic`, `@noio`, `@nounsafe`, `@noblock`. For `@nopanic` the compiler proves index and arithmetic ranges.
+- Constants and `comptime` expressions computed at compile time, and `comptime` parameters for integers and types: `fn power(comptime n: int, x: int)` gives one copy of the function per value of `n`, and `fn empty(comptime T: type) -> [T]` is called as `empty(int)`.
+- Calls to C functions with numbers, `bool`, strings and opaque pointers (`ptr`). `import c "math.h" as m` reads the header at compile time, with nothing declared by hand.
+- Tasks on threads with structured concurrency: `scope s { let a = s.spawn(f(x)) ... a.wait() }`. A task reads the variables outside it and cannot modify them, so there are no data races.
+- Networking: `std.net` gives TCP (listen, connect, read and write), UDP and name lookup, written in Mou on top of C sockets, and `std.tls` gives encrypted connections on top of OpenSSL, with the certificate of the other side checked. A server handles each connection in a task. IPv4 and IPv6. Linux and compiled programs only.
+- A standard library written in Mou: lists, maps, hash tables, text with Unicode, math, files and directories (`std.fs`), and `std.pool` with `Pool[T]` and `Handle[T]` for graphs and cyclic structures.
+- Python inside the program: `import py "math" as m` and then `m.sqrt(2.0)?.as_float()?`. It is built on `std.py`, a library on top of the C interface of CPython; exceptions arrive as errors.
+- Integer conversions that never lose anything silently: `as` keeps the value or panics, and `u8.truncate(x)`, `u8.saturate(x)` and `u8.try_from(x)` say what to do when it does not fit.
+- Two ways to run: native binaries through C (`mou build`, and `mou run` which compiles and runs) and an interpreter written in Mou (`mou interp`), which needs no C compiler.
+- Tools: `mou test` (with a name filter and `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check`, `mou interp` and `mou bind` (writes the declarations of a C header).
+- The compiler written in Mou (`compiler/`): lexer, parser, module loader, type checker, lowering to MIR, ownership, effects, compile-time constants and C emitter. It is the only compiler and **it compiles itself**: the resulting compiler writes exactly the same C again.
+
+## What is missing
+
+The core of the language is complete and the compiler compiles itself. What follows is designed in [DESIGN.md](DESIGN.md) but not built; each item is a large job on its own:
+
+- Performance on par with C: today it matches C in loops, numeric code, and structs (nested ones too), tuples, optionals and enums of numbers, `bool` and `char`, which already live without a memory block. It is still several times slower with strings and with structs and enums that hold strings, arrays or optionals, because those still go in tagged memory blocks.
+- References stored in structs, and explicit regions.
+- TLS inside the event loop: today several connections at once are handled with one task (one thread) per connection, or from a single thread with `net.Server`, which hands over what happens as events (`Open`, `Data`, `Done`) and does not wait for a slow client when writing; Linux only. Cancellable tasks, channels with `Chan[T]` and shared state with `Mutex[T]` already work.
+- The rest of the context: an `io` with an implementation of your own. `with files = table` (text files in memory), `with alloc = arena`, `with io = lines` (captures what is printed), `with err = lines` (what goes to the error output), `with input = lines` (provides what is read), `with args = list` and `with env = pairs` are already there, and function types already carry written effects (`fn(int) -> int @nopanic`).
+- Types as real values and `comptime` blocks that generate code; functions that return a type are already there in their simple form (`fn Matrix(comptime T: type, comptime N: int) -> type { struct { ... } }`, used as `Matrix(int, 6)`), as are `comptime` parameters for integers and types (`empty(int)`), fixed-length arrays `[T; N]` and reflection with `meta.info(T)`.
+- An LLVM backend of its own, SIMD and `soa`: today LLVM is used through Clang (`CC=clang mou build`), which compiles the same C. `import cpp`. In the other direction, C can already call Mou functions marked `@abi`.
+
+The details, with the known limits of each part, are in [DESIGN.md](DESIGN.md). The grammar is in [GRAMMAR.md](GRAMMAR.md). Both documents are in Spanish.
+
+## Build and test
+
+All it takes is a C compiler (`cc`). The compiler is written in Mou and is built from a copy of itself already turned into C (`seed/mou.c.gz`):
+
+```sh
+./bootstrap.sh
+./mou run examples/tour.mou
+./mou interp examples/tour.mou
+./mou build examples/tour.mou -o tour && ./tour
+./mou check examples/tour.mou
+./mou test file.mou
+./mou fmt file.mou
+./mou repl
+tests/suite.sh
+```
+
+`mou` looks for the standard library and the runtime next to its own binary; `MOU_HOME` names another place. `run` compiles the program to a temporary file and runs it; `interp` runs it in the interpreter, without a C compiler (slower, and without channels, `Mutex` or C functions). `tests/suite.sh` runs the tests of the project: it compares what each program gives with what is kept in `tests/expected/`.
+
+The first compiler was written in Rust. It was removed once the one in Mou did everything; it is still in the git history, under the tag `ultimo-con-rust`.
+
+## Name
+
+Mou, or mou-lang when searching for it. The command is `mou` and files end in `.mou`.
+
+## License
+
+Mou is distributed under two licenses, at the user's choice: [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE).
