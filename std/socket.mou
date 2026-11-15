@@ -25,12 +25,18 @@ import c "sys/socket.h" as sys {
     @value fn SOL_SOCKET() -> i32
     @value fn SO_REUSEADDR() -> i32
     @value fn MSG_NOSIGNAL() -> i32
+    @value fn MSG_DONTWAIT() -> i32
     @value fn SHUT_WR() -> i32
 }
 import c "unistd.h" as unix { fn close(fd: i32) -> i32 }
 import c "poll.h" as pl {
     fn poll(fds: mut [u8], count: u64, ms: i32) -> i32
     @value fn POLLIN() -> i32
+    @value fn POLLOUT() -> i32
+}
+import c "errno.h" as en {
+    fn __errno_location() -> ptr
+    @value fn EAGAIN() -> i32
 }
 
 /// The family of addresses of IPv6, or of IPv4.
@@ -59,6 +65,17 @@ pub fn connect(fd: int, addr: [u8]) -> bool { unsafe { sys.connect(fd as i32, ad
 /// Writing to a connection the other side closed is an error, not a signal.
 pub fn send(fd: int, data: [u8], n: usize) -> int { unsafe { sys.send(fd as i32, data, n, sys.MSG_NOSIGNAL) as int } }
 
+/// Sends what can go out now of the first `n` bytes, without waiting: how
+/// many went, 0 when none can go yet, or a negative number when the
+/// connection is broken.
+pub fn send_now(fd: int, data: [u8], n: usize) -> int {
+    unsafe {
+        let sent = sys.send(fd as i32, data, n, sys.MSG_NOSIGNAL | sys.MSG_DONTWAIT) as int
+        if sent < 0 && i32.load(en.__errno_location()) == en.EAGAIN { return 0 }
+        sent
+    }
+}
+
 /// Waits for bytes and leaves them in `data`: how many came, 0 when the
 /// other side closed, or a negative number.
 pub fn recv(fd: int, data: mut [u8]) -> int { unsafe { sys.recv(fd as i32, mut data, data.len, 0) as int } }
@@ -73,6 +90,9 @@ pub fn close(fd: int) { unsafe { unix.close(fd as i32) } }
 
 /// What `poll` asks for when it waits for something to read.
 pub fn readable() -> int { unsafe { pl.POLLIN as int } }
+
+/// What `poll` asks for when it waits for room to write.
+pub fn writable() -> int { unsafe { pl.POLLOUT as int } }
 
 /// Waits until one of the sockets in `fds` has what it asks for, up to
 /// `ms` milliseconds (forever when negative): how many have, or a

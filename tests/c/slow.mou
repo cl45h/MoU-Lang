@@ -1,0 +1,104 @@
+import std.io
+import std.net
+import std.text
+
+// A server that sends much more than a connection takes at once does not
+// wait for it: what is left goes out while it waits for other things.
+
+// Asks, and only starts to read when it is told to: how many bytes came,
+// and whether they are the ones that were sent.
+fn slow(port: int, go: Chan[int]) -> (int, bool) ! net.Error {
+    let conn = net.connect("127.0.0.1", port)?
+    conn.send("all of it")?
+    let _ = go.recv()
+    var total = 0
+    var right = true
+    while true {
+        let piece = conn.read(65536)?
+        if piece.len == 0 { break }
+        for b in piece {
+            if b != ((total % 251) as u8) { right = false }
+            total += 1
+        }
+    }
+    conn.close()
+    (total, right)
+}
+
+fn reader(port: int, go: Chan[int]) -> (int, bool) { slow(port, go) catch e { (-1, false) } }
+
+// Someone who talks while the big answer is still going out.
+fn quick(port: int, ready: Chan[int]) -> str ! net.Error {
+    let _ = ready.recv()
+    let conn = net.connect("127.0.0.1", port)?
+    conn.send("hello")?
+    conn.finish()
+    let back = conn.read_all()?
+    conn.close()
+    match text.from_bytes(back) {
+        Some(t) => t
+        None => "?"
+    }
+}
+
+fn talker(port: int, ready: Chan[int]) -> str { quick(port, ready) catch e { "failed" } }
+
+fn serve(listener: net.Listener, go: Chan[int], ready: Chan[int], size: int) -> [str] ! net.Error {
+    var server = net.Server.on(listener)
+    var log: [str] = []
+    var big: [u8] = []
+    for k in 0..size { big.push((k % 251) as u8) }
+    var answered = 0
+    while answered < 2 {
+        let events = server.next(5000)?
+        for event in events {
+            match event {
+                Open(who) => {}
+                Data(who, bytes) => {
+                    // The one that asks for everything says so in nine bytes.
+                    if bytes.len == 9 {
+                        server.send(who, big)?
+                        // It came back with most of it still here.
+                        log.push("kept some: {server.waiting(who) > 0}")
+                        server.close(who)
+                        log.push("still open: {server.len()} waiting after close: {server.waiting(who)}")
+                        answered += 1
+                        // Now the other one may come.
+                        ready.send(1)
+                    } else {
+                        server.send(who, text.bytes("hello to you"))?
+                        log.push("the other one was answered with {server.len()} open")
+                        server.close(who)
+                        answered += 1
+                        // Now the slow one may read.
+                        go.send(1)
+                    }
+                }
+                Done(who) => {}
+            }
+        }
+    }
+    log.push("all out: {server.flush(5000)} open: {server.len()}")
+    server.stop()
+    log
+}
+
+fn main() ! io.Error {
+    let size = 48 * 1024 * 1024
+    let listener = net.listen("127.0.0.1", 0) catch e {
+        io.print("failed: {e}")?
+        return
+    }
+    let port = listener.port() catch e { 0 }
+    let go = Chan[int](1)
+    let ready = Chan[int](1)
+    scope s {
+        let a = s.spawn(reader(port, go))
+        let served = s.spawn(serve(listener, go, ready, size))
+        let b = s.spawn(talker(port, ready))
+        let (total, right) = a.wait()
+        io.print("{total == size} {right} {b.wait()}")?
+        let log = served.wait() catch e { ["failed: {e}"] }
+        for line in log { io.print(line)? }
+    }
+}
