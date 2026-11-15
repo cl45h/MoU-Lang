@@ -46,7 +46,7 @@ fn main() ! io.Error {
 
 The core of the language is complete and the compiler compiles itself. What follows is designed in [DESIGN.md](DESIGN.md) but not built; each item is a large job on its own:
 
-- Performance on par with C: today it matches C in loops, numeric code, and structs, tuples, optionals and enums of numbers, `bool` and `char`, which already live without a memory block. It is still several times slower with strings and with structs and enums that hold other values, because those still go in tagged memory blocks.
+- Performance on par with C: today it matches C in loops, numeric code, and structs (nested ones too), tuples, optionals and enums of numbers, `bool` and `char`, which already live without a memory block. It is still several times slower with strings and with structs and enums that hold strings, arrays or optionals, because those still go in tagged memory blocks.
 - References stored in structs, and explicit regions.
 - Input and output that does not wait when writing, IPv6 and TLS: today several connections at once are handled with one task (one thread) per connection, or from a single thread with `net.Server`, which hands over what happens as events (`Open`, `Data`, `Done`); Linux and IPv4 only. Cancellable tasks, channels with `Chan[T]` and shared state with `Mutex[T]` already work.
 - The rest of the context: replacing files, arguments and environment too. `with alloc = arena`, `with io = lines` (captures what is printed) and `with input = lines` (provides what is read) are already there, and function types already carry written effects (`fn(int) -> int @nopanic`).

@@ -444,6 +444,7 @@ fn field_rep(kind: int) -> Rep {
     if kind == 3 { return Rep.F64 }
     if kind == 4 { return Rep.Char }
     if kind == 5 { return Rep.Int("u64") }
+    if kind >= 16 { return Rep.Rec(kind - 16) }
     Rep.Int("i64")
 }
 
@@ -506,11 +507,10 @@ fn opt_of(r: Rep) -> int {
 
 // Whether a place is a part of a local kept as a struct of C: a field of
 // a struct, or what an optional holds.
-fn is_part(reps: [Rep], p: mir.Place) -> bool {
-    if p.proj.len != 1 { return false }
-    match p.proj[0] {
-        mir.Proj.Field(k) => rec_of(reps[p.local]) >= 0 || (opt_kind(reps[p.local]) > 0 && k == 0)
-        _ => false
+fn is_part(reps: [Rep], recs: [[int]], p: mir.Place) -> bool {
+    match piece(reps, recs, p) {
+        Some(_) => true
+        None => false
     }
 }
 
@@ -523,19 +523,66 @@ fn kinds_of(recs: [[int]], i: int) -> [int] {
 
 // How such a part is stored.
 fn part(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep {
-    match p.proj[0] {
-        mir.Proj.Field(k) => {
-            let i = rec_of(reps[p.local])
-            if i >= 0 {
-                let kinds = kinds_of(recs, i)
-                // The fields of an enum come after which variant it is.
-                if kinds[0] == 6 { return field_rep(kinds[k + 1]) }
-                return field_rep(kinds[k])
-            }
-            opt_inner(opt_kind(reps[p.local]))
-        }
-        _ => Rep.Boxed
+    match piece(reps, recs, p) {
+        Some(r) => r
+        None => Rep.Boxed
     }
+}
+
+// How a part of a local kept as a struct of C is stored, when the place
+// is one: what an optional holds, or a field of a struct, and of the
+// struct that field is.
+fn piece(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep? {
+    if p.proj.len == 0 { return None }
+    var r = reps[p.local]
+    let o = opt_kind(r)
+    if o > 0 {
+        if p.proj.len != 1 { return None }
+        match p.proj[0] {
+            mir.Proj.Field(k) => {
+                if k == 0 { return Some(opt_inner(o)) }
+                return None
+            }
+            _ => return None
+        }
+    }
+    for pr in p.proj {
+        let i = rec_of(r)
+        if i < 0 { return None }
+        match pr {
+            mir.Proj.Field(k) => {
+                let kinds = kinds_of(recs, i)
+                var at = k
+                // The fields of an enum come after which variant it is.
+                if kinds.len > 0 && kinds[0] == 6 { at = k + 1 }
+                if at >= (kinds.len as int) { return None }
+                r = field_rep(kinds[at])
+            }
+            _ => return None
+        }
+    }
+    Some(r)
+}
+
+// Whether an array keeps a struct with fields of those kinds in line:
+// one whose fields are all plain.
+fn in_line(kinds: [int]) -> bool {
+    for k in kinds {
+        if k >= 16 { return false }
+    }
+    kinds.len > 0
+}
+
+// Adds a struct kept as a struct of C to the ones to write, after the
+// structs its fields are.
+fn after(i: int, records: [[int]], order: mut [int]) {
+    for seen in order {
+        if seen == i { return }
+    }
+    for kind in records[i] {
+        if kind >= 16 { after(kind - 16, records, mut order) }
+    }
+    order.push(i)
 }
 
 // Whether a struct can be kept as a struct of C.
@@ -969,7 +1016,7 @@ fn rep_of(rv: mir.Rvalue, reps: [Rep], recs: [[int]]) -> Rep {
                 }
                 mir.Operand.At(p) => {
                     if p.proj.len == 0 { return reps[p.local] }
-                    if is_part(reps, p) { return part(reps, recs, p) }
+                    if is_part(reps, recs, p) { return part(reps, recs, p) }
                     Rep.Boxed
                 }
             }
@@ -1045,20 +1092,20 @@ fn rep_of(rv: mir.Rvalue, reps: [Rep], recs: [[int]]) -> Rep {
     }
 }
 
-fn mark_projected(reps: mut [Rep], op: mir.Operand) {
+fn mark_projected(reps: mut [Rep], recs: [[int]], op: mir.Operand) {
     match op {
-        mir.Operand.At(p) => mark_through(mut reps, p)
+        mir.Operand.At(p) => mark_through(mut reps, recs, p)
         _ => {}
     }
 }
 
 // A local with fields or items is a tagged value.
-fn mark_through(reps: mut [Rep], p: mir.Place) {
+fn mark_through(reps: mut [Rep], recs: [[int]], p: mir.Place) {
     // A field of a struct of C is read and written where it is.
-    if p.proj.len > 0 && !is_part(reps, p) { reps[p.local] = Rep.Boxed }
+    if p.proj.len > 0 && !is_part(reps, recs, p) { reps[p.local] = Rep.Boxed }
     for pr in p.proj {
         match pr {
-            mir.Proj.Index(i) => mark_projected(mut reps, i)
+            mir.Proj.Index(i) => mark_projected(mut reps, recs, i)
             // The steps are an array, read where it is kept.
             mir.Proj.Path(l) => {
                 reps[l] = Rep.Boxed
@@ -1095,8 +1142,8 @@ fn infer(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> [Rep] {
     }
     for b in f.blocks {
         for st in b.stmts {
-            mark_through(mut reps, st.place)
-            for op in operands_of(st.rv) { mark_projected(mut reps, op) }
+            mark_through(mut reps, recs, st.place)
+            for op in operands_of(st.rv) { mark_projected(mut reps, recs, op) }
             match st.rv {
                 mir.Rvalue.Push(p, _) => {
                     reps[p.local] = Rep.Boxed
@@ -1109,16 +1156,16 @@ fn infer(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> [Rep] {
         }
         match b.term {
             mir.Term.Call(_, args, writeback, dest, _) => {
-                for a in args { mark_projected(mut reps, a) }
-                mark_through(mut reps, dest)
+                for a in args { mark_projected(mut reps, recs, a) }
+                mark_through(mut reps, recs, dest)
                 for w in writeback {
                     // A whole struct of C goes to the call as a block
                     // made for it, and is read back from what the call leaves.
                     if !(w.place.proj.len == 0 && is_agg(reps[w.place.local])) { reps[w.place.local] = Rep.Boxed }
                 }
             }
-            mir.Term.Branch(op, _, _) => mark_projected(mut reps, op)
-            mir.Term.Return(op) => mark_projected(mut reps, op)
+            mir.Term.Branch(op, _, _) => mark_projected(mut reps, recs, op)
+            mir.Term.Return(op) => mark_projected(mut reps, recs, op)
             _ => {}
         }
     }
@@ -1226,27 +1273,37 @@ fn fits_64(i: i128) -> bool { i >= i64_min() && i <= i64_max() * 2 + 1 }
 impl Cx {
     fn rep(self, p: mir.Place) -> Rep {
         if p.proj.len == 0 { return self.reps[p.local] }
-        if is_part(self.reps, p) { return part(self.reps, self.recs, p) }
+        if is_part(self.reps, self.recs, p) { return part(self.reps, self.recs, p) }
         Rep.Boxed
     }
 
     // The C name of a place that holds a value of the machine: a local,
     // or a field of a struct of C.
     fn name(self, p: mir.Place) -> str {
-        if p.proj.len == 1 {
-            match p.proj[0] {
+        var name = "s{p.local}"
+        var r = self.reps[p.local]
+        for pr in p.proj {
+            match pr {
                 mir.Proj.Field(k) => {
-                    if opt_kind(self.reps[p.local]) > 0 { return "s{p.local}.v" }
-                    let i = rec_of(self.reps[p.local])
-                    if i >= 0 {
-                        if kinds_of(self.recs, i)[0] == 6 { return "s{p.local}.f{k + 1}" }
+                    let o = opt_kind(r)
+                    let i = rec_of(r)
+                    if o > 0 {
+                        name = "{name}.v"
+                        r = opt_inner(o)
+                    } else {
+                        if i < 0 { return "s{p.local}" }
+                        let kinds = kinds_of(self.recs, i)
+                        var at = k
+                        if kinds.len > 0 && kinds[0] == 6 { at = k + 1 }
+                        name = "{name}.f{at}"
+                        r = Rep.Boxed
+                        if at < (kinds.len as int) { r = field_rep(kinds[at]) }
                     }
-                    return "s{p.local}.f{k}"
                 }
-                _ => {}
+                _ => return "s{p.local}"
             }
         }
-        "s{p.local}"
+        name
     }
 
     // A C pointer to the tagged value a place holds.
@@ -1533,7 +1590,7 @@ impl Cx {
                     if !is_boxed(self.reps[p.local]) { return self.boxed(p.local) }
                     return "kretain(L[{self.at(p.local)}])"
                 }
-                if is_part(self.reps, p) { return tagged(self.rep(p), self.name(p)) }
+                if is_part(self.reps, self.recs, p) { return tagged(self.rep(p), self.name(p)) }
                 if let Some(it) = self.item(p, false)? { return "kitem({it.base}, {it.index})" }
                 if let Some(fi) = self.field_item(p, false)? { return "kitem_field({fi.base}, {fi.index}, {fi.field})" }
                 if let Some(ptr) = self.ptr(p.local, p.proj, false) { return "kretain(*{ptr})" }
@@ -1903,24 +1960,24 @@ impl Cx {
                 return "s{l} = {made}_take({self.rvalue(rv)?});"
             }
             Rep.Rec(i) => {
-                let l = place.local
+                let l = self.name(place)
                 match rv {
                     mir.Rvalue.Struct(j, ops) => {
                         if j == i && ops.len == self.recs[i].len {
                             var parts: [str] = []
                             for k in 0..ops.len { parts.push(self.machine(field_rep(self.recs[i][k]), ops[k])?) }
-                            return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
+                            return "{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
                         }
                     }
                     mir.Rvalue.Use(op) => {
                         match op {
                             mir.Operand.At(q) => {
-                                if rec_of(self.rep(q)) == i { return "s{l} = s{q.local};" }
+                                if rec_of(self.rep(q)) == i { return "{l} = {self.name(q)};" }
                             }
                             mir.Operand.Const(c) => {
                                 match c {
                                     mir.Value.Enum(_, v) => {
-                                        if kinds_of(self.recs, i)[0] == 6 { return "s{l} = (struct KS{i}){{{v}}};" }
+                                        if kinds_of(self.recs, i)[0] == 6 { return "{l} = (struct KS{i}){{{v}}};" }
                                     }
                                     _ => {}
                                 }
@@ -1935,7 +1992,7 @@ impl Cx {
                                 if k + 1 >= (kinds.len as int) { break }
                                 parts.push(self.machine(field_rep(kinds[k + 1]), ops[k])?)
                             }
-                            return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
+                            return "{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
                         }
                     }
                     mir.Rvalue.Tuple(ops) => {
@@ -1944,15 +2001,15 @@ impl Cx {
                             if ops.len == kinds.len {
                                 var parts: [str] = []
                                 for k in 0..ops.len { parts.push(self.machine(field_rep(kinds[k]), ops[k])?) }
-                                return "s{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
+                                return "{l} = (struct KS{i}){{{text.join(parts, ", ")}}};"
                             }
                         }
                     }
-                    mir.Rvalue.Uninit => return "s{l} = (struct KS{i}){{0}};"
-                    mir.Rvalue.Moved => return "s{l} = (struct KS{i}){{0}};"
+                    mir.Rvalue.Uninit => return "{l} = (struct KS{i}){{0}};"
+                    mir.Rvalue.Moved => return "{l} = (struct KS{i}){{0}};"
                     _ => {}
                 }
-                return "s{l} = KS{i}_take({self.rvalue(rv)?});"
+                return "{l} = KS{i}_take({self.rvalue(rv)?});"
             }
             _ => {}
         }
@@ -1983,7 +2040,7 @@ impl Cx {
             Rep.Bool => "{self.name(place)} = ktruth({value});"
             Rep.F64 => "{self.name(place)} = ({value}).u.f;"
             Rep.Char => "{self.name(place)} = ({value}).u.c;"
-            Rep.Rec(i) => "s{place.local} = KS{i}_take({value});"
+            Rep.Rec(i) => "{self.name(place)} = KS{i}_take({value});"
             Rep.Opt(k) => "s{place.local} = {agg(Rep.Opt(k))}_take({value});"
             _ => self.store(place, value)?
         }
@@ -2005,7 +2062,7 @@ impl Cx {
     fn machine_agg(self, r: Rep, op: mir.Operand) -> str ! Fail {
         match op {
             mir.Operand.At(p) => {
-                if same_rep(self.rep(p), r) { return "s{p.local}" }
+                if same_rep(self.rep(p), r) { return self.name(p) }
             }
             mir.Operand.Const(v) => {
                 match v {
@@ -2019,7 +2076,7 @@ impl Cx {
 
     // Keeps a value of the machine a direct call gave.
     fn take_machine(self, place: mir.Place, r: Rep, value: str) -> str ! Fail {
-        if is_agg(r) && same_rep(r, self.rep(place)) { return "s{place.local} = {value};" }
+        if is_agg(r) && same_rep(r, self.rep(place)) { return "{self.name(place)} = {value};" }
         match (self.rep(place), r) {
             (Rep.Int(k), Rep.Int(_)) => "{self.name(place)} = ({ctype(k)})({value});"
             (Rep.Bool, Rep.Bool) => "{self.name(place)} = {value};"
@@ -2622,7 +2679,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
     var rec_n: [str] = []
     for i in 0..p.records.len {
         let kinds = p.records[i]
-        if kinds.len > 0 {
+        if in_line(kinds) {
             var ks: [str] = []
             for k in kinds { ks.push("{k}") }
             line(mut out, "static const signed char KR{i}[] = {{{text.join(ks, ", ")}}};")
@@ -2630,7 +2687,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
         } else {
             rec_k.push("0")
         }
-        rec_n.push("{kinds.len}")
+        if in_line(kinds) { rec_n.push("{kinds.len}") } else { rec_n.push("0") }
     }
     line(mut out, "static const signed char *const KREC_K[] = {{{listed(rec_k)}0}};")
     line(mut out, "static const int KREC_N[] = {{{listed(rec_n)}0}};")
@@ -2712,7 +2769,7 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
     // value and made into one.
     var kept: [int] = []
     for i in 0..(p.records.len as int) {
-        if rec_ok(p.records, i) { kept.push(i) }
+        if rec_ok(p.records, i) { after(i, p.records, mut kept) }
     }
     // And the tuples kept that way, by their number.
     var tuples: [int] = []
@@ -2767,7 +2824,11 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
                     if k == 4 {
                         read.push("it[{f}].u.c")
                     } else {
-                        if k == 5 { read.push("(uint64_t)kwide(it[{f}])") } else { read.push("(int64_t)it[{f}].u.i") }
+                        if k == 5 {
+                            read.push("(uint64_t)kwide(it[{f}])")
+                        } else {
+                            if k >= 16 { read.push("KS{k - 16}_get(it[{f}])") } else { read.push("(int64_t)it[{f}].u.i") }
+                        }
                     }
                 }
             }

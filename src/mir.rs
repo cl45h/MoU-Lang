@@ -363,11 +363,11 @@ pub enum Scalar {
 pub const TUPLE_BASE: usize = 1_000_000;
 
 /// The kinds of the fields of such a tuple, by its number.
-pub fn tuple_kinds(i: usize) -> Vec<u8> {
+pub fn tuple_kinds(i: usize) -> Vec<u32> {
     let mut code = i.saturating_sub(TUPLE_BASE);
     let mut kinds = Vec::new();
     while code > 0 {
-        kinds.push((code % 6) as u8);
+        kinds.push((code % 6) as u32);
         code /= 6;
     }
     kinds
@@ -379,18 +379,18 @@ pub fn tuple_kinds(i: usize) -> Vec<u8> {
 /// field at the same position (so that a field is read without knowing
 /// the variant), and some variant has a field. Its number as a struct of
 /// C comes after the ones of the structs.
-fn sum_kinds(info: &Info, e: usize) -> Option<Vec<u8>> {
+fn sum_kinds(info: &Info, e: usize) -> Option<Vec<u32>> {
     let en = info.enums.get(e)?;
     if en.generic || !en.tparams.is_empty() {
         return None;
     }
-    let mut kinds: Vec<u8> = vec![6];
+    let mut kinds: Vec<u32> = vec![6];
     for v in &en.variants {
         for (k, (_, t)) in v.fields.iter().enumerate() {
             if !plain_field(t) {
                 return None;
             }
-            let kind = field_kind(t) as u8;
+            let kind = field_kind(t) as u32;
             match kinds.get(k + 1) {
                 Some(have) if *have != kind => return None,
                 Some(_) => {}
@@ -416,6 +416,33 @@ fn plain_field(t: &Ty) -> bool {
     matches!(t, Ty::Bool | Ty::Char | Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize") | Ty::Float("f64"))
 }
 
+/// How a struct is kept as a struct of C, when it can be: the kind of
+/// each field, where a field that is another such struct is 16 plus its
+/// number. Nothing when it has no fields, takes types, or a field is of
+/// another kind.
+fn struct_kinds(info: &Info, i: usize, seen: &mut Vec<usize>) -> Vec<u32> {
+    let s = &info.structs[i];
+    if s.fields.is_empty() || !s.tparams.is_empty() || s.generic || seen.contains(&i) {
+        return Vec::new();
+    }
+    seen.push(i);
+    let mut kinds = Vec::new();
+    for f in &s.fields {
+        let kind = match &f.ty {
+            t if plain_field(t) => field_kind(t) as u32,
+            Ty::Struct(j, args) if args.is_empty() && !struct_kinds(info, *j, seen).is_empty() => 16 + *j as u32,
+            _ => 0,
+        };
+        if kind == 0 {
+            kinds.clear();
+            break;
+        }
+        kinds.push(kind);
+    }
+    seen.pop();
+    kinds
+}
+
 fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
     match t {
         Ty::Int(k) => Some(Scalar::Int(k)),
@@ -435,8 +462,7 @@ fn scalar_of(info: &Info, t: &Ty) -> Option<Scalar> {
         }
         Ty::Enum(e, args) if args.is_empty() && sum_kinds(info, *e).is_some() => Some(Scalar::Rec(info.structs.len() + info.traits.len() + e)),
         Ty::Struct(i, args) if args.is_empty() => {
-            let s = &info.structs[*i];
-            let plain = !s.fields.is_empty() && s.tparams.is_empty() && !s.generic && s.fields.iter().all(|f| plain_field(&f.ty));
+            let plain = !struct_kinds(info, *i, &mut Vec::new()).is_empty();
             plain.then_some(Scalar::Rec(*i))
         }
         _ => None,
@@ -460,7 +486,7 @@ pub struct Program {
     /// For each struct: how each field is kept when an array holds the
     /// struct in line (1 bool, 2 integer, 3 `f64`, 4 char), or nothing
     /// when a field is of another kind.
-    pub records: Vec<Vec<u8>>,
+    pub records: Vec<Vec<u32>>,
     pub enums: Vec<(String, Vec<(String, Vec<Option<String>>)>)>,
     /// For each struct and for each enum, whether a value of it lives on
     /// the heap: it is `dyn`, or its type holds itself.
@@ -476,7 +502,7 @@ pub struct Program {
     pub demands: Vec<(usize, u8, Span)>,
     /// For each enum: how it is kept as a struct of C (see `sum_kinds`),
     /// or nothing when it is not.
-    pub sums: Vec<Vec<u8>>,
+    pub sums: Vec<Vec<u32>>,
 }
 
 /// Whether a value of type `t` holds, without an array in between, a value
@@ -1012,25 +1038,7 @@ pub fn lower(file: &File, info: &Info) -> Result<Program, Vec<Error>> {
     }
     let mut structs: Vec<(String, Vec<String>)> =
         info.structs.iter().map(|s| (s.name.clone(), s.fields.iter().map(|f| f.name.clone()).collect())).collect();
-    let mut records: Vec<Vec<u8>> = info
-        .structs
-        .iter()
-        .map(|s| {
-            let kinds: Option<Vec<u8>> = s
-                .fields
-                .iter()
-                .map(|f| match &f.ty {
-                    Ty::Bool => Some(1),
-                    Ty::Int("i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32") => Some(2),
-                    Ty::Int("u64" | "usize") => Some(5),
-                    Ty::Float("f64") => Some(3),
-                    Ty::Char => Some(4),
-                    _ => None,
-                })
-                .collect();
-            kinds.filter(|_| s.tparams.is_empty() && !s.generic).unwrap_or_default()
-        })
-        .collect();
+    let mut records: Vec<Vec<u32>> = (0..info.structs.len()).map(|i| struct_kinds(info, i, &mut Vec::new())).collect();
     records.resize(info.structs.len() + info.traits.len(), Vec::new());
     // A `dyn Trait` value is a struct of the value and its methods, which
     // is shown as the value alone.

@@ -1,0 +1,49 @@
+import std.io
+
+struct Point { x: int, y: int }
+struct Line { a: Point, b: Point, wide: bool }
+struct Box3 { edge: Line, depth: f64 }
+
+fn length2(l: Line) -> int {
+    let dx = l.b.x - l.a.x
+    let dy = l.b.y - l.a.y
+    dx * dx + dy * dy
+}
+
+fn shift(l: Line, by: int) -> Line {
+    var r = l
+    r.a.x += by
+    r.b.x += by
+    r.b = Point(r.b.x, r.b.y + by)
+    r
+}
+
+fn grow(l: mut Line) {
+    l.b.x *= 2
+    l.a = Point(0, 0)
+}
+
+fn show[T](v: T) -> str { "{v}" }
+
+fn main() ! io.Error {
+    var l = Line(Point(1, 2), Point(4, 6), true)
+    io.print("{length2(l)}")?
+    let m = shift(l, 10)
+    io.print("{m.a.x} {m.b.x} {m.b.y} {m.wide}")?
+    io.print("{m}")?
+    grow(mut l)
+    io.print("{l}")?
+    let p = l.b
+    io.print("{p.x} {show(l.a)} {show(l)}")?
+    var b = Box3(m, 1.5)
+    b.edge.a.y = 99
+    b.depth += 0.25
+    io.print("{b}")?
+    let lines = [l, m, b.edge]
+    var total = 0
+    for x in lines { total += length2(x) }
+    io.print("{total} {lines[2].a.y} {l == m} {m == shift(Line(Point(1, 2), Point(4, 6), true), 10)}")?
+    var e = b.edge
+    e.b = p
+    io.print("{e.b.x} {b.edge.b.x}")?
+}

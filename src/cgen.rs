@@ -351,39 +351,49 @@ fn opt_of(r: Rep) -> Option<u8> {
 
 /// How a part of a local kept as a struct of C is stored: a field of a
 /// struct, or what an optional holds.
-fn part(reps: &[Rep], recs: &[Vec<u8>], p: &Place) -> Option<Rep> {
+fn part(reps: &[Rep], recs: &[Vec<u32>], p: &Place) -> Option<Rep> {
     match (reps[p.local], p.proj.as_slice()) {
-        (Rep::Rec(i), [Proj::Field(k)]) => {
-            let kinds = kinds_of(recs, i);
-            // The fields of an enum come after which variant it is.
-            Some(field_rep(kinds[*k + (kinds[0] == 6) as usize]))
-        }
+        (_, []) => None,
         (Rep::Opt(k), [Proj::Field(0)]) => Some(opt_inner(k)),
+        (Rep::Rec(_), steps) => {
+            // A field of a struct, and of the struct that field is.
+            let mut r = reps[p.local];
+            for pr in steps {
+                let (Rep::Rec(i), Proj::Field(k)) = (r, pr) else {
+                    return None;
+                };
+                let kinds = kinds_of(recs, i);
+                // The fields of an enum come after which variant it is.
+                r = field_rep(*kinds.get(*k + (kinds.first() == Some(&6)) as usize)?);
+            }
+            Some(r)
+        }
         _ => None,
     }
 }
 
 /// The kinds of the fields of what is kept as a struct of C: a struct of
 /// the program, or a tuple.
-fn kinds_of(recs: &[Vec<u8>], i: usize) -> Vec<u8> {
+fn kinds_of(recs: &[Vec<u32>], i: usize) -> Vec<u32> {
     if i >= TUPLE_BASE { tuple_kinds(i) } else { recs[i].clone() }
 }
 
 /// How a field of a struct kept as a struct of C is stored, by the kind
 /// the program gives for it: 1 a boolean, 2 an integer, 3 an `f64`.
-fn field_rep(kind: u8) -> Rep {
+fn field_rep(kind: u32) -> Rep {
     match kind {
         1 => Rep::Bool,
         3 => Rep::F64,
         4 => Rep::Char,
         5 => Rep::Int("u64"),
+        k if k >= 16 => Rep::Rec(k as usize - 16),
         _ => Rep::Int("i64"),
     }
 }
 
 struct Cx<'a> {
     /// The kinds of the fields of each struct an array keeps in line.
-    recs: &'a [Vec<u8>],
+    recs: &'a [Vec<u32>],
     reps: Vec<Rep>,
     /// Temporaries a call takes as an argument and nothing else reads:
     /// the call takes the value itself, not a copy of it.
@@ -552,7 +562,7 @@ fn tagged(r: Rep, value: &str) -> String {
 /// The machine signature of a function, when all of its parameters and its
 /// result are integers or booleans and it never changes a parameter (so
 /// there is nothing to hand back to the caller).
-fn direct_sig(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Option<(Vec<Rep>, Rep)> {
+fn direct_sig(f: &Func, fns: &[Func], recs: &[Vec<u32>]) -> Option<(Vec<Rep>, Rep)> {
     // A function called with its arguments as they are, instead of through
     // an array of tagged values: one that leaves its parameters alone (so
     // that a tagged argument can be lent to it, without counting it) and
@@ -639,7 +649,7 @@ fn is_cmp(op: BinOp) -> bool {
 }
 
 /// What an rvalue produces, given what is known about the locals.
-fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
+fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u32>]) -> Rep {
     use Rep::*;
     let int = |n: &Num| match n {
         Num::Int(k) if machine(k) => Int(k),
@@ -674,7 +684,7 @@ fn rep_of(rv: &Rvalue, reps: &[Rep], recs: &[Vec<u8>]) -> Rep {
 }
 
 /// Decides how every local of a function is stored.
-fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
+fn infer(f: &Func, fns: &[Func], recs: &[Vec<u32>]) -> Vec<Rep> {
     let mut reps = vec![Rep::Top; f.locals];
     for l in 0..f.params.min(f.locals) {
         reps[l] = scalar_rep(f.scalars.get(l).copied().flatten());
@@ -690,20 +700,20 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
         }
     }
     // A local with fields or items is a tagged value.
-    fn projected(op: &Operand, reps: &mut [Rep]) {
+    fn projected(op: &Operand, reps: &mut [Rep], recs: &[Vec<u32>]) {
         if let Operand::Place(p) = op {
-            through(p, reps);
+            through(p, reps, recs);
         }
     }
-    fn through(p: &Place, reps: &mut [Rep]) {
+    fn through(p: &Place, reps: &mut [Rep], recs: &[Vec<u32>]) {
         // A part of a struct of C is read and written where it is.
-        let whole = matches!((reps[p.local], p.proj.as_slice()), (Rep::Rec(_), [Proj::Field(_)]) | (Rep::Opt(_), [Proj::Field(0)]));
+        let whole = part(reps, recs, p).is_some();
         if !p.proj.is_empty() && !whole {
             reps[p.local] = Rep::Boxed;
         }
         for pr in &p.proj {
             match pr {
-                Proj::Index(i) => projected(i, reps),
+                Proj::Index(i) => projected(i, reps, recs),
                 // The steps are an array, read where it is kept.
                 Proj::Path(l) => reps[*l] = Rep::Boxed,
                 Proj::Field(_) => {}
@@ -712,16 +722,16 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
     }
     for b in &f.blocks {
         for st in &b.stmts {
-            through(&st.place, &mut reps);
-            each_operand(&st.rv, &mut |op| projected(op, &mut reps));
+            through(&st.place, &mut reps, recs);
+            each_operand(&st.rv, &mut |op| projected(op, &mut reps, recs));
             if let Rvalue::Push(p, _) | Rvalue::Pop(p) = &st.rv {
                 reps[p.local] = Rep::Boxed;
             }
         }
         match &b.term {
             Term::Call { args, writeback, dest, .. } => {
-                args.iter().for_each(|a| projected(a, &mut reps));
-                through(dest, &mut reps);
+                args.iter().for_each(|a| projected(a, &mut reps, recs));
+                through(dest, &mut reps, recs);
                 for (_, place) in writeback {
                     // A whole struct of C goes to the call as a block
                     // made for it, and is read back from what the call leaves.
@@ -730,7 +740,7 @@ fn infer(f: &Func, fns: &[Func], recs: &[Vec<u8>]) -> Vec<Rep> {
                     }
                 }
             }
-            Term::Branch(op, _, _) | Term::Return(op) => projected(op, &mut reps),
+            Term::Branch(op, _, _) | Term::Return(op) => projected(op, &mut reps, recs),
             _ => {}
         }
     }
@@ -812,12 +822,24 @@ impl Cx<'_> {
     /// The C name of a place that holds a machine value: a local, or a
     /// field of a struct of C.
     fn name(&self, p: &Place) -> String {
-        match (self.reps[p.local], p.proj.as_slice()) {
-            (Rep::Opt(_), [Proj::Field(_)]) => format!("s{}.v", p.local),
-            (Rep::Rec(i), [Proj::Field(k)]) if kinds_of(self.recs, i)[0] == 6 => format!("s{}.f{}", p.local, k + 1),
-            (_, [Proj::Field(k)]) => format!("s{}.f{k}", p.local),
-            _ => format!("s{}", p.local),
+        let mut name = format!("s{}", p.local);
+        let mut r = self.reps[p.local];
+        for pr in &p.proj {
+            match (r, pr) {
+                (Rep::Opt(k), Proj::Field(_)) => {
+                    name.push_str(".v");
+                    r = opt_inner(k);
+                }
+                (Rep::Rec(i), Proj::Field(k)) => {
+                    let kinds = kinds_of(self.recs, i);
+                    let at = k + (kinds.first() == Some(&6)) as usize;
+                    name.push_str(&format!(".f{at}"));
+                    r = kinds.get(at).map_or(Rep::Boxed, |kind| field_rep(*kind));
+                }
+                _ => return format!("s{}", p.local),
+            }
         }
+        name
     }
 
     /// A C pointer to the tagged value a place holds.
@@ -1211,14 +1233,14 @@ impl Cx<'_> {
                 }
             }
             Rep::Rec(i) => {
-                let l = place.local;
+                let l = self.name(place);
                 match rv {
                     Rvalue::Struct(j, ops) if *j == i && ops.len() == self.recs[i].len() => {
                         let mut parts = Vec::new();
                         for (op, kind) in ops.iter().zip(&self.recs[i]) {
                             parts.push(self.machine(field_rep(*kind), op)?);
                         }
-                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                        Ok(format!("{l} = (struct KS{i}){{{}}};", parts.join(", ")))
                     }
                     Rvalue::Enum(_, v, ops) if kinds_of(self.recs, i)[0] == 6 => {
                         let kinds = kinds_of(self.recs, i);
@@ -1226,21 +1248,21 @@ impl Cx<'_> {
                         for (op, kind) in ops.iter().zip(&kinds[1..]) {
                             parts.push(self.machine(field_rep(*kind), op)?);
                         }
-                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                        Ok(format!("{l} = (struct KS{i}){{{}}};", parts.join(", ")))
                     }
                     Rvalue::Use(Operand::Const(Value::Enum(_, v, items))) if items.is_empty() && kinds_of(self.recs, i)[0] == 6 => {
-                        Ok(format!("s{l} = (struct KS{i}){{{v}}};"))
+                        Ok(format!("{l} = (struct KS{i}){{{v}}};"))
                     }
                     Rvalue::Tuple(ops) if i >= TUPLE_BASE && ops.len() == tuple_kinds(i).len() => {
                         let mut parts = Vec::new();
                         for (op, kind) in ops.iter().zip(&tuple_kinds(i)) {
                             parts.push(self.machine(field_rep(*kind), op)?);
                         }
-                        Ok(format!("s{l} = (struct KS{i}){{{}}};", parts.join(", ")))
+                        Ok(format!("{l} = (struct KS{i}){{{}}};", parts.join(", ")))
                     }
-                    Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Rec(i) => Ok(format!("s{l} = s{};", q.local)),
-                    Rvalue::Uninit | Rvalue::Moved => Ok(format!("s{l} = (struct KS{i}){{0}};")),
-                    _ => Ok(format!("s{l} = KS{i}_take({});", rvalue(self, rv)?)),
+                    Rvalue::Use(Operand::Place(q)) if self.rep(q) == Rep::Rec(i) => Ok(format!("{l} = {};", self.name(q))),
+                    Rvalue::Uninit | Rvalue::Moved => Ok(format!("{l} = (struct KS{i}){{0}};")),
+                    _ => Ok(format!("{l} = KS{i}_take({});", rvalue(self, rv)?)),
                 }
             }
             _ => {
@@ -1279,7 +1301,7 @@ impl Cx<'_> {
             Rep::Bool => Ok(format!("{} = ktruth({value});", self.name(place))),
             Rep::F64 => Ok(format!("{} = ({value}).u.f;", self.name(place))),
             Rep::Char => Ok(format!("{} = ({value}).u.c;", self.name(place))),
-            r @ (Rep::Rec(_) | Rep::Opt(_)) => Ok(format!("s{} = {}_take({value});", place.local, agg(r).unwrap_or_default())),
+            r @ (Rep::Rec(_) | Rep::Opt(_)) => Ok(format!("{} = {}_take({value});", self.name(place), agg(r).unwrap_or_default())),
             _ => store(self, place, value),
         }
     }
@@ -1291,7 +1313,7 @@ impl Cx<'_> {
             Rep::F64 => self.float(op),
             Rep::Char => self.chr(op),
             Rep::Rec(_) | Rep::Opt(_) => match op {
-                Operand::Place(p) if self.rep(p) == r => Ok(format!("s{}", p.local)),
+                Operand::Place(p) if self.rep(p) == r => Ok(self.name(p)),
                 Operand::Const(Value::None) => Ok(format!("(struct {}){{0}}", agg(r).unwrap_or_default())),
                 _ => Ok(format!("{}_take({})", agg(r).unwrap_or_default(), operand(self, op)?)),
             },
@@ -1304,7 +1326,7 @@ impl Cx<'_> {
         match (self.rep(place), r) {
             (Rep::Int(k), Rep::Int(_)) => Ok(format!("{} = ({})({value});", self.name(place), ctype(k))),
             (Rep::Bool, Rep::Bool) | (Rep::F64, Rep::F64) | (Rep::Char, Rep::Char) => Ok(format!("{} = {value};", self.name(place))),
-            (Rep::Rec(_) | Rep::Opt(_), got) if got == self.rep(place) => Ok(format!("s{} = {value};", place.local)),
+            (Rep::Rec(_) | Rep::Opt(_), got) if got == self.rep(place) => Ok(format!("{} = {value};", self.name(place))),
             _ => self.take(place, &tagged(r, value)),
         }
     }
@@ -1328,7 +1350,7 @@ fn direct_head(i: usize, params: &[Rep], ret: Rep) -> String {
     format!("static {} g{i}({})", rep_type(ret), if ps.is_empty() { "void".to_string() } else { ps.join(", ") })
 }
 
-fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>], recs: &[Vec<u8>]) -> Result<(), String> {
+fn function(out: &mut String, i: usize, f: &Func, fns: &[Func], externs: &[Extern], direct: &[Option<(Vec<Rep>, Rep)>], recs: &[Vec<u32>]) -> Result<(), String> {
     let reps = infer(f, fns, recs);
     let (slots, places) = slots(&reps);
     let cx = &Cx { recs, reps, spent: spent(f), slots };
@@ -1709,13 +1731,14 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     writeln!(out, "static const char *const KFUNCS[] = {{{funcs}}};").unwrap();
     writeln!(out, "enum {{ KFILE_COUNT = {}, KFILE_SHIFT = {} }};", paths.len(), crate::lexer::FILE_SHIFT).unwrap();
     // The structs an array keeps in line, and how it keeps each field.
-    for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
+    let in_line = |k: &Vec<u32>| !k.is_empty() && k.iter().all(|kind| *kind < 16);
+    for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| in_line(k)) {
         let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
         writeln!(out, "static const signed char KR{i}[] = {{{}}};", kinds.join(", ")).unwrap();
     }
-    let tables = |f: &dyn Fn(usize, &Vec<u8>) -> String| p.records.iter().enumerate().map(|(i, k)| f(i, k) + ", ").collect::<String>();
-    writeln!(out, "static const signed char *const KREC_K[] = {{{}0}};", tables(&|i, k| if k.is_empty() { "0".into() } else { format!("KR{i}") })).unwrap();
-    writeln!(out, "static const int KREC_N[] = {{{}0}};", tables(&|_, k| k.len().to_string())).unwrap();
+    let tables = |f: &dyn Fn(usize, &Vec<u32>) -> String| p.records.iter().enumerate().map(|(i, k)| f(i, k) + ", ").collect::<String>();
+    writeln!(out, "static const signed char *const KREC_K[] = {{{}0}};", tables(&|i, k| if in_line(k) { format!("KR{i}") } else { "0".into() })).unwrap();
+    writeln!(out, "static const int KREC_N[] = {{{}0}};", tables(&|_, k| if in_line(k) { k.len().to_string() } else { "0".into() })).unwrap();
     writeln!(out, "enum {{ KREC_COUNT = {} }};", p.records.len()).unwrap();
     for (i, (_, fields)) in p.structs.iter().enumerate() {
         writeln!(out, "static const char *const KSF{i}[] = {{{}0}};", names(&mut fields.iter().map(|f| quote(f)))).unwrap();
@@ -1749,7 +1772,23 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     writeln!(out, "static kv kdispatch(uint32_t id, kv *args, kv env) {{ return KFN[id](args, env); }}\n").unwrap();
     // The structs kept as structs of C: how each is read from a tagged
     // value and made into one.
-    let mut kept: Vec<(usize, Vec<u8>)> = p.records.iter().cloned().enumerate().filter(|(_, k)| !k.is_empty()).collect();
+    // A struct comes after the ones its fields are.
+    fn after(i: usize, records: &[Vec<u32>], order: &mut Vec<usize>) {
+        if order.contains(&i) {
+            return;
+        }
+        for kind in &records[i] {
+            if *kind >= 16 {
+                after(*kind as usize - 16, records, order);
+            }
+        }
+        order.push(i);
+    }
+    let mut order = Vec::new();
+    for i in (0..p.records.len()).filter(|i| !p.records[*i].is_empty()) {
+        after(i, &p.records, &mut order);
+    }
+    let mut kept: Vec<(usize, Vec<u32>)> = order.into_iter().map(|i| (i, p.records[i].clone())).collect();
     // And the tuples kept that way, by their number.
     let mut tuples: Vec<usize> = Vec::new();
     for f in &p.fns {
@@ -1766,7 +1805,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     for (i, kinds) in &kept {
         let (i, tag) = (*i, if *i >= TUPLE_BASE { "T_TUPLE".to_string() } else { "T_STRUCT".to_string() });
         let shown = if i >= TUPLE_BASE { 0 } else { i };
-        let member = |k: &u8| rep_type(field_rep(*k));
+        let member = |k: &u32| rep_type(field_rep(*k));
         let fields: Vec<String> = kinds.iter().enumerate().map(|(f, k)| format!("{} f{f};", member(k))).collect();
         writeln!(out, "struct KS{i} {{ {} }};", fields.join(" ")).unwrap();
         let read: Vec<String> = kinds
@@ -1777,6 +1816,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
                 3 => format!("it[{f}].u.f"),
                 4 => format!("it[{f}].u.c"),
                 5 => format!("(uint64_t)kwide(it[{f}])"),
+                k if *k >= 16 => format!("KS{}_get(it[{f}])", k - 16),
                 _ => format!("(int64_t)it[{f}].u.i"),
             })
             .collect();
@@ -1788,7 +1828,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     // The enums kept as structs of C: which variant, and a field for
     // each position. How many fields a variant has says how many are read
     // from a tagged value and put in one.
-    let recs_all: Vec<Vec<u8>> = p.records.iter().chain(&p.sums).cloned().collect();
+    let recs_all: Vec<Vec<u32>> = p.records.iter().chain(&p.sums).cloned().collect();
     for (e, kinds) in p.sums.iter().enumerate().filter(|(_, k)| !k.is_empty()) {
         let i = p.records.len() + e;
         let fields: Vec<String> = kinds.iter().enumerate().map(|(f, k)| format!("{} f{f};", rep_type(field_rep(*k)))).collect();
