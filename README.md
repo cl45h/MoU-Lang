@@ -38,9 +38,9 @@ fn main() ! io.Error {
 - Librería estándar escrita en Mou: listas, mapas, tablas hash, texto con Unicode, matemática, archivos y directorios (`std.fs`), y `std.pool` con `Pool[T]` y `Handle[T]` para grafos y estructuras cíclicas.
 - Python dentro del programa: `import py "math" as m` y después `m.sqrt(2.0)?.as_float()?`. Está hecho sobre `std.py`, una librería sobre la interfaz de C de CPython; las excepciones llegan como errores.
 - Conversiones de enteros que no pierden nada en silencio: `as` conserva el valor o hace panic, y `u8.truncate(x)`, `u8.saturate(x)` y `u8.try_from(x)` dicen qué hacer cuando no entra.
-- Dos formas de ejecutar: un intérprete (`mou run`) y binarios nativos a través de C (`mou build`).
-- Herramientas: `mou test` (con filtro por nombre, `--all` y `--native`), `mou fmt`, `mou repl`, `mou effects`, `mou fuzz` y `mou bind` (escribe las declaraciones de un header de C).
-- El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Da lo mismo que el de Rust en cada etapa y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
+- Binarios nativos a través de C: `mou build` los deja hechos y `mou run` compila y ejecuta.
+- Herramientas: `mou test` (con filtro por nombre y `--all`), `mou fmt`, `mou repl`, `mou effects`, `mou check` y `mou bind` (escribe las declaraciones de un header de C).
+- El compilador escrito en Mou (`compiler/`): lexer, parser, cargador de módulos, verificador de tipos, bajada a MIR, ownership, efectos, constantes al compilar y emisor de C. Es el único compilador y **se compila a sí mismo**: el compilador que resulta vuelve a escribir exactamente el mismo C.
 
 ## Qué le falta
 
@@ -57,31 +57,22 @@ El detalle, con los límites conocidos de cada parte, está en [DESIGN.md](DESIG
 
 ## Compilar y probar
 
-Hay dos caminos, y dan el mismo compilador.
-
-Solo con un compilador de C (`cc`), a partir del compilador escrito en Mou:
+Hace falta solo un compilador de C (`cc`). El compilador está escrito en Mou y se construye a partir de una copia suya ya pasada a C (`seed/mou.c.gz`):
 
 ```sh
 ./bootstrap.sh
-./mouc run examples/tour.mou
-./mouc build examples/tour.mou -o tour && ./tour
-./mouc check examples/tour.mou
-./mouc test archivo.mou
-./mouc fmt archivo.mou
-./mouc repl
+./mou run examples/tour.mou
+./mou build examples/tour.mou -o tour && ./tour
+./mou check examples/tour.mou
+./mou test archivo.mou
+./mou fmt archivo.mou
+./mou repl
 tests/suite.sh
 ```
 
-`mouc` busca la librería estándar y el runtime en el directorio desde el que se lo llama; desde otro lugar, `MOU_HOME` dice dónde está Mou. `run` compila el programa a un archivo temporal y lo ejecuta. `tests/suite.sh` corre los tests del proyecto con `mouc` y un compilador de C: compara lo que da cada programa con lo guardado en `tests/expected/`.
+`mou` busca la librería estándar y el runtime junto a su propio binario; `MOU_HOME` dice otro lugar. `run` compila el programa a un archivo temporal y lo ejecuta. `tests/suite.sh` corre los tests del proyecto: compara lo que da cada programa con lo guardado en `tests/expected/`.
 
-Con Rust, que además trae el intérprete, el fuzzer y la suite que compara los dos compiladores etapa por etapa:
-
-```sh
-cargo build --release
-./target/release/mou run examples/tour.mou
-./target/release/mou build examples/tour.mou -o tour && ./tour
-cargo test --release
-```
+El primer compilador estaba escrito en Rust. Se borró cuando el de Mou pasó a hacer todo; sigue en la historia de git.
 
 ## Nombre
 

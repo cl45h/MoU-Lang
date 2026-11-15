@@ -1,5 +1,5 @@
 // The types of Mou as the checker sees them, and the functions that
-// compare and combine them. It follows the first part of `src/check.rs`.
+// compare and combine them. It follows the first part of `check.rs` of the first compiler (written in Rust, no longer here).
 
 import std.text
 import parser

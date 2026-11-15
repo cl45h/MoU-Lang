@@ -1,5 +1,5 @@
 // Finds and parses the modules a program is made of. It follows
-// `src/load.rs`: a file is a module, `import a.b` loads `a/b.mou` from
+// `load.rs` of the first compiler (written in Rust, no longer here): a file is a module, `import a.b` loads `a/b.mou` from
 // next to the file of the program, and the declarations of all the
 // modules end up in one tree, each module keeping its own names.
 

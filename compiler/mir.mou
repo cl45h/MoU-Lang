@@ -1,6 +1,6 @@
 // The middle form of a program: for each function, blocks of simple
 // statements that end in a jump, and the lowering of the checked tree
-// into it. It follows `src/mir.rs`, and `mou lowered` prints what that
+// into it. It follows `mir.rs` of the first compiler (written in Rust, no longer here), and `mou lowered` prints what that
 // one gives in the form `dump` prints here.
 //
 // Every expression becomes assignments to locals. A `mut` argument goes

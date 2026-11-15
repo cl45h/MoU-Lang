@@ -1,5 +1,5 @@
 // The lexer of Mou, written in Mou: source text to tokens, with the rule
-// that says which ends of line end a statement. It follows `src/lexer.rs`
+// that says which ends of line end a statement. It follows `lexer.rs` of the first compiler (written in Rust, no longer here)
 // step by step, and `mou lex` prints what that one gives in the same form.
 
 import std.text

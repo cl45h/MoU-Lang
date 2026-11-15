@@ -18,14 +18,38 @@ import mir
 import moves
 
 // Where the standard library and the runtime are: the directory `MOU_HOME`
-// names, or the one the compiler is run from.
+// names, or the one the compiler itself is in, or the one it is run from.
 pub struct Home { std_dir: str, runtime: str }
 
 pub fn home() -> Home {
-    match io.env("MOU_HOME") {
-        Some(dir) => Home("{dir}/std", "{dir}/src/runtime.c")
-        None => Home("std", "src/runtime.c")
+    if let Some(dir) = io.env("MOU_HOME") { return Home("{dir}/std", "{dir}/runtime/runtime.c") }
+    let parts = text.split(io.exe(), '/')
+    if parts.len > 1 {
+        var kept: [str] = []
+        for i in 0..(parts.len - 1) { kept.push(parts[i]) }
+        let dir = text.join(kept, "/")
+        if fs.is_dir("{dir}/std") && fs.is_file("{dir}/runtime/runtime.c") { return Home("{dir}/std", "{dir}/runtime/runtime.c") }
     }
+    Home("std", "runtime/runtime.c")
+}
+
+// What a program that ran left: the status it ended with, what it
+// printed, and what it wrote to the error output.
+pub struct Ran { status: int, out: str, err: str }
+
+// Runs a program without input and keeps what it writes. `scratch` is a
+// name for the two files that hold it meanwhile.
+pub fn capture(program: str, args: [str], scratch: str) -> Ran ! io.Error {
+    let out_path = "{scratch}.out"
+    let err_path = "{scratch}.err"
+    var given = ["-c", "o=$1; e=$2; shift 2; \"$@\" > \"$o\" 2> \"$e\" < /dev/null", "sh", out_path, err_path, program]
+    for a in args { given.push(a) }
+    let status = io.exec("sh", given)?
+    let out = io.read_file(out_path) catch _ { "" }
+    let err = io.read_file(err_path) catch _ { "" }
+    let _ = fs.remove(out_path) catch _ {}
+    let _ = fs.remove(err_path) catch _ {}
+    Ran(status, out, err)
 }
 
 // A program that passed every check, ready to be written as C.
@@ -127,7 +151,7 @@ pub fn effects_file(path: str) -> int ! io.Error {
     0
 }
 
-fn env_or(name: str, otherwise: str) -> str {
+pub fn env_or(name: str, otherwise: str) -> str {
     match io.env(name) {
         Some(v) => v
         None => otherwise
@@ -351,24 +375,29 @@ pub fn test_file(path: str, filter: str?, all: bool) -> int ! io.Error {
         var name = f.name
         let file = f.at.line >> FILE_SHIFT
         if file > 0 && file < (b.paths.len as int) { name = "{f.name} ({b.paths[file]})" }
-        var problem: str? = None
-        let _ = io.run(exe, ["{k}"], "") catch e {
-            // What went wrong, without the name of the program that ran it.
-            var why = "{e}"
-            let lead = "`{exe}` failed: "
-            if text.starts_with(why, lead) { why = why[(lead.len as int)..] }
-            let said = "`main` returned an error: "
-            if let Some(i) = text.find(why, said) { why = "returned an error: {why[(i + (said.len as int))..]}" }
-            problem = Some(why)
-            ""
+        let ran = capture(exe, ["{k}"], "{exe}-{k}")?
+        if ran.status == 0 {
+            io.print("ok    {name}")?
+            continue
         }
-        match problem {
-            None => io.print("ok    {name}")?
-            Some(why) => {
-                failed += 1
-                io.print("FAIL  {name}\n      {why}")?
+        failed += 1
+        // Why: the first lines it wrote to the error output. The compiled
+        // program calls what it runs `main`.
+        var why: [str] = []
+        let said = "`main` returned an error: "
+        for l in text.lines(ran.err) {
+            if text.trim(l) == "" || why.len >= 3 { continue }
+            match text.find(l, said) {
+                Some(i) => why.push("returned an error: {l[(i + (said.len as int))..]}")
+                None => why.push(l)
             }
         }
+        if why.len == 0 { why.push("ended with status {ran.status}") }
+        io.print("FAIL  {name}\n      {text.join(why, "\n      ")}")?
+        // What a test prints is only shown when it fails.
+        var printed = text.lines(ran.out)
+        if printed.len > 0 && printed[printed.len - 1] == "" { let _ = printed.pop() }
+        for l in printed { io.print("      | {l}")? }
     }
     let _ = fs.remove(exe) catch _ {}
     let _ = fs.remove(c_path) catch _ {}

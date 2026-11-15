@@ -1,4 +1,4 @@
-// The checker of Mou, written in Mou. It follows `src/check.rs` pass by
+// The checker of Mou, written in Mou. It follows `check.rs` of the first compiler (written in Rust, no longer here) pass by
 // pass: the declarations first, then every body. `mou decls` and `mou
 // types` print what that one gives in the form `dump` and `dump_types`
 // print here.
@@ -5663,6 +5663,7 @@ fn native(module: str, name: str) -> Native? {
         if name == "read_file" { return Some(Native("io.read_file", types.Sig([param("path", types.Ty.Str)], fails_io(types.Ty.Str)))) }
         if name == "write_file" { return Some(Native("io.write_file", types.Sig([param("path", types.Ty.Str), param("text", types.Ty.Str)], fails_io(types.Ty.Unit)))) }
         if name == "args" { return Some(Native("io.args", types.Sig([], types.Ty.Slice(types.Ty.Str)))) }
+        if name == "exe" { return Some(Native("io.exe", types.Sig([], types.Ty.Str))) }
         if name == "env" { return Some(Native("io.env", types.Sig([param("name", types.Ty.Str)], types.Ty.Optional(types.Ty.Str)))) }
         if name == "exec" { return Some(Native("io.exec", types.Sig([param("program", types.Ty.Str), param("args", types.Ty.Slice(types.Ty.Str))], fails_io(types.Ty.Int("i64"))))) }
         if name == "run" { return Some(Native("io.run", types.Sig([param("program", types.Ty.Str), param("args", types.Ty.Slice(types.Ty.Str)), param("input", types.Ty.Str)], fails_io(types.Ty.Str)))) }

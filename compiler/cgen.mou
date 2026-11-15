@@ -1,5 +1,5 @@
 // Writes the middle form of a program as one C file that needs nothing
-// else. It follows `src/cgen.rs`, and gives the same text.
+// else. It follows `cgen.rs` of the first compiler (written in Rust, no longer here), and gives the same text.
 //
 // Values with parts keep the tagged form the interpreter uses, through
 // the runtime in `runtime.c`. Locals that only hold whole numbers of 64

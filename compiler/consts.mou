@@ -1,7 +1,7 @@
 // Works out, while the program is compiled, its constants and its
 // `comptime` expressions: it runs their middle form, and what is left in
-// the program is their value. It follows `src/comptime.rs` and
-// `src/interp.rs`.
+// the program is their value. It follows `comptime.rs` of the first compiler (written in Rust, no longer here) and
+// `interp.rs` of the first compiler (written in Rust, no longer here).
 //
 // What runs here has no input or output, so that compiling a program
 // twice gives the same program, and it has a limit of steps. A panic

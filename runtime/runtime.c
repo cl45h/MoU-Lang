@@ -2229,6 +2229,18 @@ static kv kio_exec(kv program, kv args) {
 #endif
 }
 
+/* The file of the program that is running, as the system knows it, or as
+   it was called when the system does not say. */
+static kv kio_exe(void) {
+#ifdef KPOSIX
+    char path[4096];
+    ssize_t n = readlink("/proc/self/exe", path, sizeof path);
+    if (n > 0 && (size_t)n < sizeof path && kutf8((const unsigned char *)path, (size_t)n)) return kstr(path, (size_t)n);
+#endif
+    const char *called = kargc > 0 && kargv ? kargv[0] : "";
+    return kstr(called, strlen(called));
+}
+
 static kv kio_args(void) {
     if (kgiven[0].depth) return kgiven_top(0);
     int n = kargc > 1 ? kargc - 1 : 0;

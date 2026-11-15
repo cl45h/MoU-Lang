@@ -1,5 +1,5 @@
 // Checks that every variable holds a value where it is read, going
-// forward over the middle form of each function. It follows `src/own.rs`.
+// forward over the middle form of each function. It follows `own.rs` of the first compiler (written in Rust, no longer here).
 //
 // For each variable of the program it follows whether, at each point, it
 // may hold a value, may never have been given one, or may have been moved

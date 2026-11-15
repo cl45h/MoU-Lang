@@ -14,7 +14,7 @@
 # The programs of tests/c call C, and what they print is next to them.
 set -u
 cd "$(dirname "$0")/.."
-MOUC="${MOUC:-$PWD/mouc}"
+MOUC="${MOUC:-$PWD/mou}"
 CC="${CC:-cc}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 export MOU_HOME="$PWD" MOUC CC
@@ -104,7 +104,7 @@ for stage in decls types lowered fx c; do
     # The C of a program without mistakes is not kept: it runs elsewhere.
     [ -f "$expected" ] || [ "$accept" = 1 ] || continue
     got="$work/stage-$name.$stage"
-    "$MOUC" "$stage" "$f" std src/runtime.c > "$got" 2> /dev/null
+    "$MOUC" "$stage" "$f" std runtime/runtime.c > "$got" 2> /dev/null
     if [ "$stage" = c ] && ! head -c 5 "$got" | grep -q '^error'; then
         continue
     fi
@@ -153,9 +153,9 @@ for part in $parts; do
             ;;
         self)
             # The compiler compiles itself, and what comes out does it again.
-            "$MOUC" c compiler/main.mou std src/runtime.c > "$work/one.c" 2> /dev/null &&
+            "$MOUC" c compiler/main.mou std runtime/runtime.c > "$work/one.c" 2> /dev/null &&
                 "$CC" $CFLAGS -w -o "$work/one" "$work/one.c" -lm &&
-                "$work/one" c compiler/main.mou std src/runtime.c > "$work/two.c" 2> /dev/null
+                "$work/one" c compiler/main.mou std runtime/runtime.c > "$work/two.c" 2> /dev/null
             if cmp -s "$work/one.c" "$work/two.c" && [ -s "$work/one.c" ]; then
                 echo "ok    self"
             else

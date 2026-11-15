@@ -1,4 +1,4 @@
-/* Calls the functions of lib.mou, built as a library by `mouc build`. */
+/* Calls the functions of lib.mou, built as a library by `mou build`. */
 #include <stdio.h>
 #include "lib.h"
 

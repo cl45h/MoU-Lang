@@ -1,5 +1,5 @@
 // The parser of Mou, written in Mou: tokens to a syntax tree. It follows
-// `src/parser.rs` step by step, and `mou tree` prints what that one
+// `parser.rs` of the first compiler (written in Rust, no longer here) step by step, and `mou tree` prints what that one
 // gives in the form `dump` prints here.
 
 import std.text

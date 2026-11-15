@@ -4,7 +4,7 @@
 // comes out is read here: the functions it declares, and the names it
 // gives to types. A function whose types Mou can pass is written as a
 // declaration; the others are left out, with the reason. It follows
-// `src/bind.rs` step by step, and gives the same text.
+// `bind.rs` of the first compiler (written in Rust, no longer here) step by step, and gives the same text.
 
 import std.hash
 import std.io

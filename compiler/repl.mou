@@ -12,6 +12,7 @@ import std.text
 import cgen
 import check
 import consts
+import driver
 import effects
 import lexer
 import load
@@ -149,24 +150,21 @@ fn attempt(s: Session, src: str) -> Ready? {
     Some(r)
 }
 
-fn env_or(name: str, otherwise: str) -> str {
-    match io.env(name) {
-        Some(v) => v
-        None => otherwise
-    }
-}
+// What a program of the session did: what it printed and, when it
+// stopped with a panic or an error, why.
+struct Outcome { out: str, stopped: str? }
 
-// Builds a program and runs it: what it printed, or why it stopped.
-fn run(s: mut Session, r: Ready) -> str ! Refused {
+// Builds a program and runs it.
+fn run(s: mut Session, r: Ready) -> Outcome ! Refused {
     let runtime = io.read_file(s.runtime) catch e { return Refused("cannot read the runtime {s.runtime}: {e} (set MOU_HOME to where Mou is)") }
     let c = cgen.emit(r.program, r.paths, runtime, r.values) catch e { return Refused(e.msg) }
     s.turn += 1
-    let exe = "{env_or("TMPDIR", "/tmp")}/mou-repl-{c.len}-{s.turn}"
+    let exe = "{driver.env_or("TMPDIR", "/tmp")}/mou-repl-{c.len}-{s.turn}"
     let c_path = "{exe}.c"
     io.write_file(c_path, "{c}\n") catch e { return Refused("cannot write {c_path}: {e}") }
-    var args = text.words(env_or("CFLAGS", "-O0"))
+    var args = text.words(driver.env_or("CFLAGS", "-O0"))
     for a in ["-w", "-pthread", "-o", exe, c_path, "-lm"] { args.push(a) }
-    let cc = env_or("CC", "cc")
+    let cc = driver.env_or("CC", "cc")
     var problem: str? = None
     let _ = io.run(cc, args, "") catch e {
         problem = Some("the C compiler `{cc}` failed: {e}")
@@ -174,20 +172,22 @@ fn run(s: mut Session, r: Ready) -> str ! Refused {
     }
     let _ = fs.remove(c_path) catch _ {}
     if let Some(why) = problem { return Refused(why) }
-    let out = io.run(exe, [], "") catch e {
-        // The first line the program left says why it stopped.
-        var why = "{e}"
-        if let Some(i) = text.find(why, "panic: ") {
-            why = why[i..]
-        } else if let Some(i) = text.find(why, "returned an error: ") {
-            why = why[(i + 9)..]
-        }
-        problem = Some(why)
-        ""
-    }
+    let ran = driver.capture(exe, [], exe) catch e { return Refused("cannot run the program: {e}") }
     let _ = fs.remove(exe) catch _ {}
-    if let Some(why) = problem { return Refused(why) }
-    out
+    if ran.status == 0 { return Outcome(ran.out, None) }
+    // The first line the program left says why it stopped.
+    var why = "ended with status {ran.status}"
+    for l in text.lines(ran.err) {
+        if text.trim(l) == "" { continue }
+        why = l
+        if let Some(i) = text.find(l, "panic: ") {
+            why = l[i..]
+        } else if let Some(i) = text.find(l, "returned an error: ") {
+            why = l[(i + 12)..]
+        }
+        break
+    }
+    Outcome(ran.out, Some(why))
 }
 
 // Whether the text leaves a bracket open, so that the input goes on.
@@ -276,10 +276,13 @@ pub fn feed(s: mut Session, input: str) -> Reply {
         Some(r) => r
         None => return Reply(false, "error")
     }
-    let out = run(mut s, r) catch e { return Reply(false, e.why) }
+    let done = run(mut s, r) catch e { return Reply(false, e.why) }
+    let out = done.out
     var from = s.printed
     if from > (out.len as int) { from = out.len as int }
     var fresh = out[from..]
+    // What it printed before it stopped is shown, and nothing is kept.
+    if let Some(why) = done.stopped { return Reply(false, "{fresh}{why}") }
     var printed = out.len as int
     if shown {
         // The value is the last thing printed: what is kept does not print it again.

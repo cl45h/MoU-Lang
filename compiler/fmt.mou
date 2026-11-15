@@ -4,7 +4,7 @@
 // they are. It fixes the indentation, the spaces inside a line and the
 // blank lines, and never moves anything to another line: where a line
 // ends is the choice of whoever wrote it, and in this language it has a
-// meaning. It follows `src/fmt.rs` step by step, and gives the same text.
+// meaning. It follows `fmt.rs` of the first compiler (written in Rust, no longer here) step by step, and gives the same text.
 
 import std.text
 import lexer
