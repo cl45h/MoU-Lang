@@ -1,0 +1,35 @@
+mou repl. :help for help, :quit to leave.
+mou> 3
+mou> mou> mou> [1, 2, 3]
+mou> Some(3)
+mou> 2
+mou> mou> mou> 4 P(x: 4)
+mou> mou> ["a", "b"]
+mou> 1
+2
+mou> panic: index 9 is out of range for length 2
+mou> undefined name `nope`
+mou> expected return type `i64`, found `str`
+mou> 4
+mou> ...    ...    mou> 15
+mou> import std.io
+import std.text
+fn double(n: int) -> int { n * 2 }
+struct P { x: int }
+fn triple(n: int) -> int {
+    n * 3
+}
+fn main() ! io.Error {
+let _ = 1 + 2
+var xs: [int] = [1, 2]
+xs.push(3)
+let _ = xs
+let _ = xs.pop()
+let _ = xs.len
+io.print("{double(xs[1])} {P(4)}")?
+let _ = text.words("a b")
+for x in xs { io.print("{x}")? }
+let _ = xs.len as int + double(1)
+let _ = triple(5)
+}
+mou> 

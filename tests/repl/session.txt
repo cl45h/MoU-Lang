@@ -1,0 +1,22 @@
+1 + 2
+var xs: [int] = [1, 2]
+xs.push(3)
+xs
+xs.pop()
+xs.len
+fn double(n: int) -> int { n * 2 }
+struct P { x: int }
+io.print("{double(xs[1])} {P(4)}")?
+import std.text
+text.words("a b")
+for x in xs { io.print("{x}")? }
+xs[9]
+nope + 1
+fn bad() -> int { "a" }
+xs.len as int + double(1)
+fn triple(n: int) -> int {
+    n * 3
+}
+triple(5)
+:show
+:quit

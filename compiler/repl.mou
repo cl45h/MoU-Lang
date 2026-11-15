@@ -1,0 +1,330 @@
+// The interactive session: `mou repl`.
+//
+// The session is a program that grows. A declaration is added to it; a
+// statement is added to its `main`. After each input the whole program is
+// checked, built and run again from the start, and only what it prints
+// beyond what it printed before is shown. That keeps the session exactly
+// as strict as a file, at the price of running earlier statements again.
+
+import std.fs
+import std.io
+import std.text
+import cgen
+import check
+import consts
+import effects
+import lexer
+import load
+import mir
+import moves
+import parser
+import types
+
+let HELP: str = "Type a declaration (fn, struct, enum, trait, impl, import), a statement or
+an expression. An expression shows its value. A line that leaves a bracket
+open goes on in the next one.
+
+  :help    this text
+  :show    the program of the session so far
+  :reset   start again
+  :quit    leave (also the end of the input)
+
+Each input runs the session again from the start: what earlier statements
+print is hidden, but what they read or write happens again."
+
+// What comes before a value that is shown, to find it in what was printed.
+let MARK: str = "<<mou-repl-value>>"
+
+pub struct Session {
+    imports: [str]
+    decls: [str]
+    stmts: [str]
+    // How much the statements so far print.
+    printed: int
+    std_dir: str
+    runtime: str
+    // How many programs it built: each has a file of its own.
+    turn: int
+}
+
+pub fn start(std_dir: str, runtime: str) -> Session { Session([], [], [], 0, std_dir, runtime, 0) }
+
+// What an input gives: what to show, or why it was not taken.
+pub struct Reply { fine: bool, said: str }
+
+// A program ready to be written as C, and whether the value of the last
+// `let` of its `main` is worth showing.
+struct Ready { program: mir.Program, values: [mir.Value], paths: [str], shows: bool }
+
+struct Refused { why: str }
+
+// The program of the session, with more statements at the end of `main`.
+fn program(s: Session, extra: [str]) -> str {
+    var out: [str] = ["import std.io\n"]
+    for i in s.imports {
+        out.push(i)
+        out.push("\n")
+    }
+    for d in s.decls {
+        out.push(d)
+        out.push("\n")
+    }
+    out.push("fn main() ! io.Error {{\n")
+    for st in s.stmts {
+        out.push(st)
+        out.push("\n")
+    }
+    for st in extra {
+        out.push(st)
+        out.push("\n")
+    }
+    out.push("}}\n")
+    text.concat(out)
+}
+
+fn first(errors: [lexer.Error]) -> Refused {
+    if errors.len > 0 { Refused(errors[0].msg) } else { Refused("error") }
+}
+
+// Whether the last `let` of `main` has a value that is not `()`.
+fn last_let_shows(file: parser.File, checked: check.Checker) -> bool {
+    var shows = false
+    for d in file.decls {
+        match d.kind {
+            parser.DeclKind.Fn(f) => {
+                if f.name != "main" { continue }
+                let body = match f.body {
+                    Some(b) => b
+                    None => continue
+                }
+                match body.kind {
+                    parser.Kind.Blk(b) => {
+                        for st in b.stmts {
+                            match st {
+                                parser.Stmt.Let(_, _, _, Some(v)) => {
+                                    shows = match check.type_of(checked, v) {
+                                        Some(types.Ty.Unit) => false
+                                        Some(types.Ty.Never) => false
+                                        Some(_) => true
+                                        None => false
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    shows
+}
+
+// Checks a program: the first mistake, or the program.
+fn compile(s: Session, src: str) -> Ready ! Refused {
+    let loaded = load.load("<repl>", src, s.std_dir)
+    if loaded.errors.len > 0 { return first(loaded.errors) }
+    let checked = check.check(loaded)
+    let mistakes = check.mistakes(checked)
+    if mistakes.len > 0 { return first(mistakes) }
+    let shows = last_let_shows(loaded.file, checked)
+    let lowered = mir.lower(loaded, checked)
+    if lowered.errors.len > 0 { return first(lowered.errors) }
+    let lost = moves.check(lowered)
+    if lost.len > 0 { return first(lost) }
+    let ruled = effects.check(lowered)
+    if ruled.len > 0 { return first(ruled) }
+    let worked = consts.eval(lowered)
+    if worked.errors.len > 0 { return first(worked.errors) }
+    var paths: [str] = []
+    for m in loaded.modules { paths.push(m.path) }
+    Ready(worked.program, worked.values, paths, shows)
+}
+
+// The program, when it has no mistakes.
+fn attempt(s: Session, src: str) -> Ready? {
+    let r = compile(s, src) catch _ { return None }
+    Some(r)
+}
+
+fn env_or(name: str, otherwise: str) -> str {
+    match io.env(name) {
+        Some(v) => v
+        None => otherwise
+    }
+}
+
+// Builds a program and runs it: what it printed, or why it stopped.
+fn run(s: mut Session, r: Ready) -> str ! Refused {
+    let runtime = io.read_file(s.runtime) catch e { return Refused("cannot read the runtime {s.runtime}: {e} (set MOU_HOME to where Mou is)") }
+    let c = cgen.emit(r.program, r.paths, runtime, r.values) catch e { return Refused(e.msg) }
+    s.turn += 1
+    let exe = "{env_or("TMPDIR", "/tmp")}/mou-repl-{c.len}-{s.turn}"
+    let c_path = "{exe}.c"
+    io.write_file(c_path, "{c}\n") catch e { return Refused("cannot write {c_path}: {e}") }
+    var args = text.words(env_or("CFLAGS", "-O0"))
+    for a in ["-w", "-pthread", "-o", exe, c_path, "-lm"] { args.push(a) }
+    let cc = env_or("CC", "cc")
+    var problem: str? = None
+    let _ = io.run(cc, args, "") catch e {
+        problem = Some("the C compiler `{cc}` failed: {e}")
+        ""
+    }
+    let _ = fs.remove(c_path) catch _ {}
+    if let Some(why) = problem { return Refused(why) }
+    let out = io.run(exe, [], "") catch e {
+        // The first line the program left says why it stopped.
+        var why = "{e}"
+        if let Some(i) = text.find(why, "panic: ") {
+            why = why[i..]
+        } else if let Some(i) = text.find(why, "returned an error: ") {
+            why = why[(i + 9)..]
+        }
+        problem = Some(why)
+        ""
+    }
+    let _ = fs.remove(exe) catch _ {}
+    if let Some(why) = problem { return Refused(why) }
+    out
+}
+
+// Whether the text leaves a bracket open, so that the input goes on.
+pub fn open(input: str) -> bool {
+    let cs = text.chars(input)
+    let n = cs.len as int
+    var depth = 0
+    var i = 0
+    while i < n {
+        let c = cs[i]
+        i += 1
+        if c == '"' {
+            // The text is skipped; what it holds between braces may have brackets.
+            while i < n && cs[i] != '"' {
+                if cs[i] == '\\' { i += 1 }
+                i += 1
+            }
+            i += 1
+        } else if c == '\'' {
+            if i < n && cs[i] == '\\' { i += 1 }
+            i += 2
+        } else if c == '/' && i < n && cs[i] == '/' {
+            while i < n && cs[i] != '\n' { i += 1 }
+        } else if c == '{' || c == '(' || c == '[' {
+            depth += 1
+        } else if c == '}' || c == ')' || c == ']' {
+            depth -= 1
+        }
+    }
+    depth > 0
+}
+
+fn first_word(input: str) -> str {
+    var out: [char] = []
+    for c in text.chars(input) {
+        if !(text.is_letter(c) || text.is_number(c) || c == '_') { break }
+        out.push(c)
+    }
+    text.from_chars(out)
+}
+
+fn declares(word: str) -> bool {
+    for w in ["fn", "struct", "enum", "trait", "impl", "type", "pub"] {
+        if w == word { return true }
+    }
+    false
+}
+
+// Takes one input into the session, and says what to show.
+pub fn feed(s: mut Session, input: str) -> Reply {
+    let word = first_word(input)
+    if word == "import" {
+        if input == "import std.io" { return Reply(true, "") }
+        for i in s.imports {
+            if i == input { return Reply(true, "") }
+        }
+        var next = s
+        next.imports.push(input)
+        let _ = compile(next, program(next, [])) catch e { return Reply(false, e.why) }
+        s = next
+        return Reply(true, "")
+    }
+    if declares(word) {
+        var next = s
+        next.decls.push(input)
+        let _ = compile(next, program(next, [])) catch e { return Reply(false, e.why) }
+        s = next
+        return Reply(true, "")
+    }
+    // An expression with a value is shown; anything else is a statement.
+    var keep = input
+    var shown = false
+    var ready: Ready? = None
+    if let Some(probe) = attempt(s, program(s, ["let it_ = {input}", "io.print(\"{MARK}{{it_}}\")?"])) {
+        if probe.shows {
+            ready = Some(probe)
+            keep = "let _ = {input}"
+            shown = true
+        }
+    }
+    if !shown {
+        let plain = compile(s, program(s, [input])) catch e { return Reply(false, e.why) }
+        ready = Some(plain)
+    }
+    let r = match ready {
+        Some(r) => r
+        None => return Reply(false, "error")
+    }
+    let out = run(mut s, r) catch e { return Reply(false, e.why) }
+    var from = s.printed
+    if from > (out.len as int) { from = out.len as int }
+    var fresh = out[from..]
+    var printed = out.len as int
+    if shown {
+        // The value is the last thing printed: what is kept does not print it again.
+        if let Some(i) = text.find(fresh, MARK) {
+            printed = from + i
+            fresh = "{fresh[..i]}{fresh[(i + (MARK.len as int))..]}"
+        }
+    }
+    s.stmts.push(keep)
+    s.printed = printed
+    Reply(true, fresh)
+}
+
+pub fn repl(std_dir: str, runtime: str) ! io.Error {
+    var s = start(std_dir, runtime)
+    io.print("mou repl. :help for help, :quit to leave.")?
+    loop {
+        var input = ""
+        loop {
+            io.write(if input == "" { "mou> " } else { "...    " })?
+            match io.read_line()? {
+                Some(line) => {
+                    input = "{input}{line}\n"
+                }
+                None => {
+                    io.print("")?
+                    return
+                }
+            }
+            if !open(input) { break }
+        }
+        let asked = text.trim(input)
+        if asked == "" { continue }
+        if asked == ":quit" || asked == ":q" { return }
+        if asked == ":help" {
+            io.print(HELP)?
+        } else if asked == ":reset" {
+            s = start(std_dir, runtime)
+        } else if asked == ":show" {
+            io.write(program(s, []))?
+        } else if text.starts_with(asked, ":") {
+            io.print("unknown command `{asked}`: see :help")?
+        } else {
+            let reply = feed(mut s, asked)
+            if reply.fine { io.write(reply.said)? } else { io.print(reply.said)? }
+        }
+    }
+}

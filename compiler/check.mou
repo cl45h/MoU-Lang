@@ -6752,6 +6752,10 @@ pub fn error_lines(c: Checker) -> [str] {
     out
 }
 
+// The type the checker found for an expression of a function that takes
+// no types, if it found one.
+pub fn type_of(c: Checker, e: parser.Expr) -> types.Ty? { c.types.get(c.total + e.id) }
+
 // The mistakes the checker found, in the order of the program and each once.
 pub fn mistakes(c: Checker) -> [lexer.Error] {
     var out: [lexer.Error] = []

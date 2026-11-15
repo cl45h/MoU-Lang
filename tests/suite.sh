@@ -4,7 +4,7 @@
 #
 #   ./bootstrap.sh && tests/suite.sh        runs everything
 #   tests/suite.sh native                   only the parts named: native,
-#                                           c, stages, abi, fmt, self
+#                                           c, stages, abi, repl, fmt, self
 #   tests/suite.sh --accept [parts]         writes what the programs give now
 #                                           as what is expected of them
 #
@@ -25,7 +25,7 @@ if [ "${1:-}" = "--accept" ]; then
     shift
 fi
 export accept
-parts="${*:-native c stages abi fmt self}"
+parts="${*:-native c stages abi repl fmt self}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 export work
@@ -134,6 +134,11 @@ for part in $parts; do
                 head -3 "$work/abi.log" > "$got"
             fi
             "$work/settle" "abi" "$got" tests/abi/expected.out
+            ;;
+        repl)
+            # A session: what it shows for each input.
+            "$MOUC" repl < tests/repl/session.txt > "$work/repl.out" 2>&1
+            "$work/settle" "repl" "$work/repl.out" tests/repl/expected.out
             ;;
         fmt)
             # Every file of the project has the standard layout.
