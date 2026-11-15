@@ -576,45 +576,84 @@ impl State {
         true
     }
 
-    fn join(self, o: State) -> State {
-        var out = State([], [], [], [], [], [], [], [])
+    // What is known on both sides, and whether that is all this side knew.
+    fn join(self, o: State) -> (State, bool) {
+        // Most locals are the same on both sides: what is there is kept,
+        // and only what differs is written.
+        var out = self
+        var same = true
+        out.below = []
+        out.min_len = []
         for l in 0..self.iv.len {
-            // Most locals are the same on both sides: what is there is kept.
             let mine = self.iv[l]
             let theirs = o.iv[l]
-            if same_range(mine, theirs) { out.iv.push(mine) } else { out.iv.push(Range(smaller(mine.lo, theirs.lo), larger(mine.hi, theirs.hi))) }
-            out.nz.push(self.nz[l] && o.nz[l])
-            if self.eq[l] == o.eq[l] { out.eq.push(self.eq[l]) } else { out.eq.push(-1) }
-            if same_opt_key(self.len_of[l], o.len_of[l]) { out.len_of.push(self.len_of[l]) } else { out.len_of.push(None) }
-            if same_opt_cmp(self.cmp[l], o.cmp[l]) { out.cmp.push(self.cmp[l]) } else { out.cmp.push(None) }
+            if theirs.lo < mine.lo || theirs.hi > mine.hi {
+                out.iv[l] = Range(smaller(mine.lo, theirs.lo), larger(mine.hi, theirs.hi))
+                same = false
+            }
+            if self.nz[l] && !o.nz[l] {
+                out.nz[l] = false
+                same = false
+            }
+            if self.eq[l] != -1 && self.eq[l] != o.eq[l] {
+                out.eq[l] = -1
+                same = false
+            }
+            if let Some(_) = self.len_of[l] {
+                if !same_opt_key(self.len_of[l], o.len_of[l]) {
+                    out.len_of[l] = None
+                    same = false
+                }
+            }
+            if let Some(_) = self.cmp[l] {
+                if !same_opt_cmp(self.cmp[l], o.cmp[l]) {
+                    out.cmp[l] = None
+                    same = false
+                }
+            }
             let held = self.items[l]
             let other = o.items[l]
-            if same_range(held, other) { out.items.push(held) } else { out.items.push(Range(smaller(held.lo, other.lo), larger(held.hi, other.hi))) }
+            if other.lo < held.lo || other.hi > held.hi {
+                out.items[l] = Range(smaller(held.lo, other.lo), larger(held.hi, other.hi))
+                same = false
+            }
         }
         for f in self.below {
-            if o.is_below(f.local, f.key) { out.below.push(f) }
+            if o.is_below(f.local, f.key) { out.below.push(f) } else { same = false }
         }
         for m in self.min_len {
             let n = smaller(m.n, o.least_len(m.key))
             if n > 0 { out.min_len.push(MinLen(m.key, n)) }
+            if n <= 0 || n != m.n { same = false }
         }
-        out
+        (out, same)
     }
 
-    // Gives up on what keeps changing around a loop.
-    fn widen(mut self, old: State) {
+    // Gives up on what keeps changing around a loop: whether it took
+    // anything away.
+    fn widen(mut self, old: State) -> bool {
+        var changed = false
         for l in 0..self.iv.len {
-            var r = self.iv[l]
-            if r.lo < old.iv[l].lo { r = Range(min_all(), r.hi) }
-            if r.hi > old.iv[l].hi { r = Range(r.lo, max_all()) }
-            self.iv[l] = r
-            if !same_range(self.items[l], old.items[l]) { self.items[l] = top_range() }
+            let r = self.iv[l]
+            let before = old.iv[l]
+            if r.lo < before.lo || r.hi > before.hi {
+                var wide = r
+                if r.lo < before.lo { wide = Range(min_all(), wide.hi) }
+                if r.hi > before.hi { wide = Range(wide.lo, max_all()) }
+                self.iv[l] = wide
+                changed = true
+            }
+            if !same_range(self.items[l], old.items[l]) {
+                self.items[l] = top_range()
+                changed = true
+            }
         }
         var lens: [MinLen] = []
         for m in self.min_len {
-            if m.n >= old.least_len(m.key) { lens.push(m) }
+            if m.n >= old.least_len(m.key) { lens.push(m) } else { changed = true }
         }
         self.min_len = lens
+        changed
     }
 }
 
@@ -1640,12 +1679,17 @@ impl Walk {
             for nx in self.step(b, at[b], false, mut quiet) {
                 let t = nx.block
                 var merged = nx.state
+                var same = false
                 if reached[t] {
-                    merged = at[t].join(nx.state)
+                    let (joined, kept) = at[t].join(nx.state)
+                    merged = joined
+                    same = kept
                     // Every loop goes through the block it jumps back to.
-                    if heads[t] && visits[t] > 3 { merged.widen(at[t]) }
+                    if heads[t] && visits[t] > 3 {
+                        if merged.widen(at[t]) { same = false }
+                    }
                 }
-                if !reached[t] || !same_state(at[t], merged) {
+                if !same {
                     visits[t] += 1
                     at[t] = merged
                     reached[t] = true
