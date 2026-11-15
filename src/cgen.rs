@@ -2000,7 +2000,11 @@ mod tests {
         assert!(own::check(&program).is_empty());
         // As in `mou build`: constants become values when they can be computed.
         let _ = crate::comptime::eval(&mut program);
-        let dir = std::env::temp_dir().join(format!("mou-test-{}", std::process::id()));
+        // A directory of its own: the tests run at the same time, and one
+        // that ends removes its directory.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let turn = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mou-test-{}-{turn}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let (c, exe) = (dir.join(format!("{name}.c")), dir.join(name));
         std::fs::write(&c, super::emit(&program, &["test.mou".to_string()]).unwrap()).unwrap();

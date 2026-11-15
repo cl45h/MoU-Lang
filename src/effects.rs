@@ -1040,6 +1040,9 @@ impl Walk<'_> {
                         if *name == "capture.close" {
                             notes.push((ALLOC, "the lines printed in a `with io` block are kept on the heap".into()));
                         }
+                        if *name == "errors.close" {
+                            notes.push((ALLOC, "the lines written in a `with err` block are kept on the heap".into()));
+                        }
                         if name.starts_with("io.") {
                             notes.push((IO, format!("`{name}` reaches outside the program")));
                         }

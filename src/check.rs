@@ -4418,11 +4418,12 @@ impl<'a> Checker<'a> {
                     _ => false,
                 };
                 match bindings.as_slice() {
-                    [(name, value)] if name == "io" => {
+                    [(name, value)] if name == "io" || name == "err" => {
                         let t = self.expr(value);
                         if !assignable(&Ty::Slice(Box::new(Ty::Str)), &t) {
                             let shown = self.show(&t);
-                            self.err(value.span, format!("`with io = ...` takes a variable of type `[str]`, where the lines the block prints are kept, and this is `{shown}`"));
+                            let what = if name == "io" { "prints" } else { "writes with `io.eprint`" };
+                            self.err(value.span, format!("`with {name} = ...` takes a variable of type `[str]`, where the lines the block {what} are kept, and this is `{shown}`"));
                         }
                         self.require_mut_place(value);
                     }
@@ -4433,7 +4434,22 @@ impl<'a> Checker<'a> {
                             self.err(value.span, format!("`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`"));
                         }
                     }
-                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }`, `with io = lines { }` and `with input = lines { }`"),
+                    [(name, value)] if name == "args" => {
+                        let t = self.expr(value);
+                        if !assignable(&Ty::Slice(Box::new(Ty::Str)), &t) {
+                            let shown = self.show(&t);
+                            self.err(value.span, format!("`with args = ...` takes what `io.args` gives inside the block, a `[str]`, and this is `{shown}`"));
+                        }
+                    }
+                    [(name, value)] if name == "env" => {
+                        let t = self.expr(value);
+                        let pairs = Ty::Slice(Box::new(Ty::Tuple(vec![Ty::Str, Ty::Str])));
+                        if !assignable(&pairs, &t) {
+                            let shown = self.show(&t);
+                            self.err(value.span, format!("`with env = ...` takes the names and values `io.env` finds inside the block, a `[(str, str)]`, and this is `{shown}`"));
+                        }
+                    }
+                    _ if !arena => self.err(e.span, "the contexts there are for now are `with alloc = arena { }`, `with io = lines { }`, `with err = lines { }`, `with input = lines { }`, `with args = list { }` and `with env = pairs { }`"),
                     _ => {}
                 }
                 self.scopes.push(HashMap::new());

@@ -35,8 +35,10 @@ const MAX_DEPTH: usize = 100_000;
 pub fn run(p: &Program, main: usize, out: &mut dyn Write) -> Result<Value, Panic> {
     // A run that stopped inside a `with io` block left it open.
     CAPTURE.with(|c| *c.borrow_mut() = (Vec::new(), Vec::new()));
+    ERRORS.with(|c| *c.borrow_mut() = (Vec::new(), Vec::new()));
     OPEN_LINE.set(false);
     INPUT.with(|c| c.borrow_mut().clear());
+    GIVEN.with(|c| *c.borrow_mut() = [Vec::new(), Vec::new()]);
     let mut consts = Vec::new();
     for (k, &f) in p.consts.iter().enumerate() {
         // A constant computed while compiling is not computed again.
@@ -63,6 +65,8 @@ thread_local! {
     /// The lines `io.read_line` gives inside `with input` blocks, and how
     /// many of each were read: the innermost block is the last.
     static INPUT: std::cell::RefCell<Vec<(Rc<Vec<Value>>, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// What the open `with args` and `with env` blocks gave.
+    static GIVEN: std::cell::RefCell<[Vec<Rc<Vec<Value>>>; 2]> = const { std::cell::RefCell::new([Vec::new(), Vec::new()]) };
     /// Whether what runs is a constant being computed, and not the program.
     pub static COMPILING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -71,6 +75,8 @@ thread_local! {
     /// Whether the last line kept by a `with io` block was left without its
     /// end by `io.write`: what is printed next goes on in it.
     static OPEN_LINE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// What `io.eprint` wrote inside `with err` blocks, and where the lines of each start.
+    static ERRORS: std::cell::RefCell<(Vec<String>, Vec<usize>)> = const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
 /// Keeps what is printed inside a `with io` block: a whole line, or a piece
@@ -256,6 +262,35 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             INPUT.with(|c| c.borrow_mut().pop());
             Value::Unit
         }
+        "args.open" | "env.open" => {
+            let Some(Value::Array(given)) = args.first() else { return Err(internal("`with` without an array")) };
+            GIVEN.with(|c| c.borrow_mut()[(name == "env.open") as usize].push(given.clone()));
+            Value::Unit
+        }
+        "args.close" | "env.close" => {
+            GIVEN.with(|c| c.borrow_mut()[(name == "env.close") as usize].pop());
+            Value::Unit
+        }
+        // Inside a `with args` block the arguments are the ones it was given.
+        "io.args" if GIVEN.with(|c| !c.borrow()[0].is_empty()) => {
+            GIVEN.with(|c| c.borrow()[0].last().map_or(Value::Unit, |given| Value::Array(given.clone())))
+        }
+        // Inside a `with env` block a name is looked up in its pairs.
+        "io.env" if GIVEN.with(|c| !c.borrow()[1].is_empty()) => {
+            let wanted = text(0)?;
+            GIVEN.with(|c| {
+                let c = c.borrow();
+                let pairs = c[1].last().map(|p| p.to_vec()).unwrap_or_default();
+                let found = pairs.iter().rev().find_map(|pair| match pair {
+                    Value::Tuple(kv) => match (kv.first(), kv.get(1)) {
+                        (Some(Value::Str(k)), Some(v)) if **k == *wanted => Some(v.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                found.map_or(Value::None, |v| Value::Some(Box::new(v)))
+            })
+        }
         "io.write" => {
             let piece = text(0)?;
             if CAPTURE.with(|c| !c.borrow().1.is_empty()) {
@@ -291,6 +326,28 @@ fn native(name: &str, args: &[Value], out: &mut dyn Write) -> Result<Value, Stri
             Some(v) => v.clone(),
             None => return Err(internal("`wait` without a task")),
         },
+        "errors.open" => ERRORS.with(|c| {
+            let mut c = c.borrow_mut();
+            let from = c.0.len();
+            c.1.push(from);
+            Value::Unit
+        }),
+        "errors.close" => {
+            let Some(Value::Array(old)) = args.first() else { return Err(internal("`with err` without an array")) };
+            let mut all: Vec<Value> = old.iter().cloned().collect();
+            ERRORS.with(|c| {
+                let mut c = c.borrow_mut();
+                let from = c.1.pop().unwrap_or(0).min(c.0.len());
+                all.extend(c.0.drain(from..).map(|line| Value::Str(line.into())));
+            });
+            Value::Array(Rc::new(all))
+        }
+        // Inside a `with err` block the line is kept.
+        "io.eprint" if ERRORS.with(|c| !c.borrow().1.is_empty()) => {
+            let line = text(0)?.to_string();
+            ERRORS.with(|c| c.borrow_mut().0.push(line));
+            Value::Ok(Box::new(Value::Unit))
+        }
         "io.eprint" => {
             let _ = out.flush();
             done(writeln!(std::io::stderr(), "{}", text(0)?).map(|()| Value::Unit))

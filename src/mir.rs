@@ -796,7 +796,9 @@ struct Scope<'a> {
     capture: Option<Place>,
     /// The scope of a `with input = lines` block: on the way out,
     /// `io.read_line` reads again from where it did before.
-    input: bool,
+    /// A `with input`, `with args` or `with env` block: 1, 2 or 3. And 4
+    /// when what `capture` keeps is what `io.eprint` writes (`with err`).
+    input: u8,
 }
 
 struct LoopCtx {
@@ -1503,12 +1505,14 @@ impl<'a> Lower<'a> {
             if let Some(lines) = self.scopes[k].capture.clone() {
                 // The lines go after the ones the variable already has.
                 let span = self.span;
-                let all = self.finish_call(Callee::Native("capture.close"), vec![Operand::Place(lines.clone())], Vec::new(), span);
+                let close = if self.scopes[k].input == 4 { "errors.close" } else { "capture.close" };
+                let all = self.finish_call(Callee::Native(close), vec![Operand::Place(lines.clone())], Vec::new(), span);
                 self.emit(lines, Rvalue::Use(all));
             }
-            if self.scopes[k].input {
+            if (1..=3).contains(&self.scopes[k].input) {
                 let span = self.span;
-                self.finish_call(Callee::Native("input.close"), Vec::new(), Vec::new(), span);
+                let close = ["input.close", "args.close", "env.close"][self.scopes[k].input as usize - 1];
+                self.finish_call(Callee::Native(close), Vec::new(), Vec::new(), span);
             }
             let defers = self.scopes[k].defers.clone();
             if defers.is_empty() {
@@ -2448,15 +2452,20 @@ impl<'a> Lower<'a> {
                 self.scopes.pop();
                 v
             }
-            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "input") => {
-                // What `io.read_line` gives is taken from these lines
-                // until the block is left.
+            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| matches!(b.0.as_str(), "input" | "args" | "env")) => {
+                // What `io.read_line`, `io.args` or `io.env` give is taken
+                // from this value until the block is left.
                 let lines = self.expr(&bindings[0].1);
                 self.span = span;
                 self.scopes.push(Scope::default());
-                self.finish_call(Callee::Native("input.open"), vec![lines], Vec::new(), span);
+                let (open, kind) = match bindings[0].0.as_str() {
+                    "args" => ("args.open", 2),
+                    "env" => ("env.open", 3),
+                    _ => ("input.open", 1),
+                };
+                self.finish_call(Callee::Native(open), vec![lines], Vec::new(), span);
                 if let Some(scope) = self.scopes.last_mut() {
-                    scope.input = true;
+                    scope.input = kind;
                 }
                 let v = self.block(body);
                 let kept = self.stash(v);
@@ -2465,13 +2474,15 @@ impl<'a> Lower<'a> {
                 self.scopes.pop();
                 Operand::Place(kept)
             }
-            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io") => {
+            ExprKind::With { bindings, body } if bindings.first().is_some_and(|b| b.0 == "io" || b.0 == "err") => {
                 // What is printed is kept until the block is left.
                 let lines = self.place(&bindings[0].1);
                 self.span = span;
                 self.scopes.push(Scope::default());
-                self.finish_call(Callee::Native("capture.open"), Vec::new(), Vec::new(), span);
+                let err = bindings[0].0 == "err";
+                self.finish_call(Callee::Native(if err { "errors.open" } else { "capture.open" }), Vec::new(), Vec::new(), span);
                 if let Some(scope) = self.scopes.last_mut() {
+                    scope.input = if err { 4 } else { 0 };
                     scope.capture = Some(lines);
                 }
                 let v = self.block(body);

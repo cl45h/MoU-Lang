@@ -1,0 +1,60 @@
+import std.io
+
+fn greeting() -> str {
+    var who = "nobody"
+    if let Some(name) = io.env("MOU_TEST_WHO") { who = name }
+    let args = io.args()
+    "{who} with {args.len} argument(s): {args}"
+}
+
+fn first() -> str? {
+    let args = io.args()
+    if args.len == 0 { return None }
+    Some(args[0])
+}
+
+fn main() ! io.Error {
+    io.print(greeting())?
+    with args = ["build", "main.mou"] {
+        io.print(greeting())?
+        with env = [("MOU_TEST_WHO", "ana"), ("OTHER", "x"), ("MOU_TEST_WHO", "luz")] {
+            io.print(greeting())?
+            io.print("{io.env("OTHER")} {io.env("PATH")}")?
+            with args = [] {
+                io.print("{first()}")?
+            }
+            io.print("{first()}")?
+            with env = [] {
+                io.print("{io.env("OTHER")}")?
+            }
+        }
+        io.print(greeting())?
+    }
+    io.print(greeting())?
+    for round in 0..3 {
+        with args = ["round {round}"] {
+            if round == 1 { continue }
+            io.print("{first()}")?
+        }
+    }
+    io.print("{first()}")?
+    var errors: [str] = ["before"]
+    var printed: [str] = []
+    with err = errors {
+        warn("one")?
+        with io = printed {
+            io.print("to the screen")?
+            warn("two")?
+            var inner: [str] = []
+            with err = inner {
+                warn("three")?
+            }
+            io.print("{inner}")?
+        }
+    }
+    io.print("{errors} {printed}")?
+}
+
+fn warn(what: str) ! io.Error {
+    io.eprint("warning: {what}")?
+}

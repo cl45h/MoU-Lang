@@ -1710,7 +1710,7 @@ static struct {
     /* Whether the last entry was left without its end by `io.write`: what
        is printed next goes on in it. */
     bool open;
-} kcap;
+} kcaps[2];
 #ifdef KTHREADS
 static pthread_mutex_t kcap_lock = PTHREAD_MUTEX_INITIALIZER;
 #define KCAP_LOCK() pthread_mutex_lock(&kcap_lock)
@@ -1720,56 +1720,56 @@ static pthread_mutex_t kcap_lock = PTHREAD_MUTEX_INITIALIZER;
 #define KCAP_UNLOCK() ((void)0)
 #endif
 
-static kv kcapture_open(void) {
+static kv kcapture_open_at(int ch) {
     KCAP_LOCK();
-    if (kcap.depth == KCAPTURE_MAX) kpanic("too many `with io` blocks, one inside another");
-    kcap.marks[kcap.depth++] = kcap.n;
-    kcap.open = false;
+    if (kcaps[ch].depth == KCAPTURE_MAX) kpanic(ch ? "too many `with err` blocks, one inside another" : "too many `with io` blocks, one inside another");
+    kcaps[ch].marks[kcaps[ch].depth++] = kcaps[ch].n;
+    kcaps[ch].open = false;
     KCAP_UNLOCK();
     return KUNIT;
 }
 
 /* Keeps a line when a block is open, or a piece of one when `whole` is
    false. Takes the text when it does. */
-static bool kcapture_line(char *text, size_t len, bool whole) {
-    if (!kcap.depth) return false;
+static bool kcapture_at(int ch, char *text, size_t len, bool whole) {
+    if (!kcaps[ch].depth) return false;
     KCAP_LOCK();
-    if (!kcap.depth) {
+    if (!kcaps[ch].depth) {
         KCAP_UNLOCK();
         return false;
     }
-    if (kcap.open) {
-        size_t had = kcap.lens[kcap.n - 1];
-        char *line = (char *)realloc(kcap.lines[kcap.n - 1], had + len + 1);
+    if (kcaps[ch].open) {
+        size_t had = kcaps[ch].lens[kcaps[ch].n - 1];
+        char *line = (char *)realloc(kcaps[ch].lines[kcaps[ch].n - 1], had + len + 1);
         if (!line) kpanic("out of memory");
         if (len) memcpy(line + had, text, len);
-        kcap.lines[kcap.n - 1] = line;
-        kcap.lens[kcap.n - 1] = had + len;
-        kcap.open = !whole;
+        kcaps[ch].lines[kcaps[ch].n - 1] = line;
+        kcaps[ch].lens[kcaps[ch].n - 1] = had + len;
+        kcaps[ch].open = !whole;
         KCAP_UNLOCK();
         free(text);
         return true;
     }
-    kcap.open = !whole;
-    if (kcap.n == kcap.cap) {
-        kcap.cap = kcap.cap ? kcap.cap * 2 : 16;
-        kcap.lines = (char **)realloc(kcap.lines, kcap.cap * sizeof(char *));
-        kcap.lens = (size_t *)realloc(kcap.lens, kcap.cap * sizeof(size_t));
-        if (!kcap.lines || !kcap.lens) kpanic("out of memory");
+    kcaps[ch].open = !whole;
+    if (kcaps[ch].n == kcaps[ch].cap) {
+        kcaps[ch].cap = kcaps[ch].cap ? kcaps[ch].cap * 2 : 16;
+        kcaps[ch].lines = (char **)realloc(kcaps[ch].lines, kcaps[ch].cap * sizeof(char *));
+        kcaps[ch].lens = (size_t *)realloc(kcaps[ch].lens, kcaps[ch].cap * sizeof(size_t));
+        if (!kcaps[ch].lines || !kcaps[ch].lens) kpanic("out of memory");
     }
-    kcap.lines[kcap.n] = text;
-    kcap.lens[kcap.n++] = len;
+    kcaps[ch].lines[kcaps[ch].n] = text;
+    kcaps[ch].lens[kcaps[ch].n++] = len;
     KCAP_UNLOCK();
     return true;
 }
 
 /* Ends the innermost block: its lines go after the ones `old` has. */
-static kv kcapture_close(kv old) {
+static kv kcapture_close_at(int ch, kv old) {
     KCAP_LOCK();
-    size_t from = kcap.depth ? kcap.marks[--kcap.depth] : kcap.n;
-    size_t to = kcap.n;
-    kcap.n = from;
-    kcap.open = false;
+    size_t from = kcaps[ch].depth ? kcaps[ch].marks[--kcaps[ch].depth] : kcaps[ch].n;
+    size_t to = kcaps[ch].n;
+    kcaps[ch].n = from;
+    kcaps[ch].open = false;
     char **lines = NULL;
     size_t *lens = NULL;
     if (to > from) {
@@ -1777,8 +1777,8 @@ static kv kcapture_close(kv old) {
         lines = (char **)malloc((to - from) * sizeof(char *));
         lens = (size_t *)malloc((to - from) * sizeof(size_t));
         if (!lines || !lens) kpanic("out of memory");
-        memcpy(lines, kcap.lines + from, (to - from) * sizeof(char *));
-        memcpy(lens, kcap.lens + from, (to - from) * sizeof(size_t));
+        memcpy(lines, kcaps[ch].lines + from, (to - from) * sizeof(char *));
+        memcpy(lens, kcaps[ch].lens + from, (to - from) * sizeof(size_t));
     }
     KCAP_UNLOCK();
     for (size_t i = 0; i < to - from; i++) {
@@ -1789,6 +1789,12 @@ static kv kcapture_close(kv old) {
     free(lens);
     return old;
 }
+
+static kv kcapture_open(void) { return kcapture_open_at(0); }
+static kv kcapture_close(kv old) { return kcapture_close_at(0, old); }
+static kv kerrors_open(void) { return kcapture_open_at(1); }
+static kv kerrors_close(kv old) { return kcapture_close_at(1, old); }
+static bool kcapture_line(char *text, size_t len, bool whole) { return kcapture_at(0, text, len, whole); }
 
 static kv kprint(kv v) {
     ksb sb = {0};
@@ -1844,6 +1850,11 @@ static kv kos_error(void) {
 static kv kio_eprint(kv v) {
     ksb sb = {0};
     kshow(&sb, v, true);
+    /* Inside a `with err` block the line is kept. */
+    if (kcapture_at(1, sb.p, sb.len, true)) {
+        krelease(v);
+        return kbox(T_OK, KUNIT);
+    }
     ksb_str(&sb, "\n");
     fflush(stdout);
     bool ok = fwrite(sb.p, 1, sb.len, stderr) == sb.len;
@@ -1975,7 +1986,59 @@ static kv kio_write_file(kv path, kv text) {
     return r;
 }
 
+/* What `io.args` gives and where `io.env` looks inside `with args = list`
+   and `with env = pairs` blocks: the innermost one is the last. */
+static struct {
+    kv vals[KINPUT_MAX];
+    int depth;
+} kgiven[2];
+
+static kv kgiven_open(int which, kv v) {
+    KCAP_LOCK();
+    if (kgiven[which].depth == KINPUT_MAX) kpanic(which ? "too many `with env` blocks, one inside another" : "too many `with args` blocks, one inside another");
+    kgiven[which].vals[kgiven[which].depth++] = v;
+    KCAP_UNLOCK();
+    return KUNIT;
+}
+
+static kv kgiven_close(int which) {
+    kv old = KUNIT;
+    KCAP_LOCK();
+    if (kgiven[which].depth) old = kgiven[which].vals[--kgiven[which].depth];
+    KCAP_UNLOCK();
+    krelease(old);
+    return KUNIT;
+}
+
+/* The innermost value of a kind, counted once more, or unit. */
+static kv kgiven_top(int which) {
+    kv v = KUNIT;
+    KCAP_LOCK();
+    if (kgiven[which].depth) v = kretain(kgiven[which].vals[kgiven[which].depth - 1]);
+    KCAP_UNLOCK();
+    return v;
+}
+
+static kv kargs_open(kv list) { return kgiven_open(0, list); }
+static kv kargs_close(void) { return kgiven_close(0); }
+static kv kenv_open(kv pairs) { return kgiven_open(1, pairs); }
+static kv kenv_close(void) { return kgiven_close(1); }
+
 static kv kio_env(kv name) {
+    if (kgiven[1].depth) {
+        kv pairs = kgiven_top(1), found = KNONE;
+        size_t len = (size_t)klen(name);
+        for (int64_t i = klen(pairs) - 1; i >= 0; i--) {
+            const kv *pair = ITEMS(kelem(pairs.u.o, i).u.o);
+            if ((size_t)klen(pair[0]) == len && !memcmp(kbytes(pair[0]), kbytes(name), len)) {
+                found = kbox(T_SOME, kretain(pair[1]));
+                break;
+            }
+        }
+        krelease(pairs);
+        krelease(name);
+        return found;
+    }
     const char *v = getenv(kbytes(name));
     krelease(name);
     return v ? kbox(T_SOME, kstr(v, strlen(v))) : KNONE;
@@ -2074,6 +2137,7 @@ done:
 }
 
 static kv kio_args(void) {
+    if (kgiven[0].depth) return kgiven_top(0);
     int n = kargc > 1 ? kargc - 1 : 0;
     kv v = karray_new(P_NONE, n);
     for (int i = 0; i < n; i++) ITEMS(v.u.o)[i] = kstr(kargv[i + 1], strlen(kargv[i + 1]));

@@ -4658,12 +4658,15 @@ impl Checker {
                         }
                     }
                 }
-                if bindings.len == 1 && bindings[0].name == "io" {
+                if bindings.len == 1 && (bindings[0].name == "io" || bindings[0].name == "err") {
                     let value = bindings[0].value
                     let t = self.expr(value)
                     if !types.assignable(types.Ty.Slice(types.Ty.Str), t) {
                         let shown = self.show(t)
-                        self.err(at_expr(value), "`with io = ...` takes a variable of type `[str]`, where the lines the block prints are kept, and this is `{shown}`")
+                        let name = bindings[0].name
+                        var what = "prints"
+                        if name == "err" { what = "writes with `io.eprint`" }
+                        self.err(at_expr(value), "`with {name} = ...` takes a variable of type `[str]`, where the lines the block {what} are kept, and this is `{shown}`")
                     }
                     self.require_mut_place(value)
                 } else if bindings.len == 1 && bindings[0].name == "input" {
@@ -4673,8 +4676,22 @@ impl Checker {
                         let shown = self.show(t)
                         self.err(at_expr(value), "`with input = ...` takes the lines `io.read_line` gives inside the block, a `[str]`, and this is `{shown}`")
                     }
+                } else if bindings.len == 1 && bindings[0].name == "args" {
+                    let value = bindings[0].value
+                    let t = self.expr(value)
+                    if !types.assignable(types.Ty.Slice(types.Ty.Str), t) {
+                        let shown = self.show(t)
+                        self.err(at_expr(value), "`with args = ...` takes what `io.args` gives inside the block, a `[str]`, and this is `{shown}`")
+                    }
+                } else if bindings.len == 1 && bindings[0].name == "env" {
+                    let value = bindings[0].value
+                    let t = self.expr(value)
+                    if !types.assignable(types.Ty.Slice(types.Ty.Tuple([types.Ty.Str, types.Ty.Str])), t) {
+                        let shown = self.show(t)
+                        self.err(at_expr(value), "`with env = ...` takes the names and values `io.env` finds inside the block, a `[(str, str)]`, and this is `{shown}`")
+                    }
                 } else {
-                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}`, `with io = lines {{ }}` and `with input = lines {{ }}`") }
+                    if !arena { self.err(at, "the contexts there are for now are `with alloc = arena {{ }}`, `with io = lines {{ }}`, `with err = lines {{ }}`, `with input = lines {{ }}`, `with args = list {{ }}` and `with env = pairs {{ }}`") }
                 }
                 self.scopes.push([])
                 let t = self.block(body)
