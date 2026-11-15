@@ -48,7 +48,8 @@ pub struct Pending { module: int, alias: str, header: str, decls: [parser.Decl] 
 
 pub struct CStruct { index: int, name: str }
 
-pub struct StructInfo { name: str, module: int, generic: bool, tparams: [str], fields: [FieldInfo] }
+// `values`: which of the parameters take a number instead of a type.
+pub struct StructInfo { name: str, module: int, generic: bool, tparams: [str], values: [bool], fields: [FieldInfo] }
 
 pub struct VariantField { label: str?, ty: types.Ty }
 
@@ -134,6 +135,8 @@ pub enum Res {
     Extern(int)
     Local
     NoneValue
+    // A value parameter of a type, in a copy made for a number.
+    Value(int)
     Fn(int)
     Const(int)
     // A variant without fields used as a value, or one being built.
@@ -209,6 +212,11 @@ pub struct Checker {
     modules: [load.Module]
     // The type parameters in sight, and the traits that bound each.
     tenv: [types.Binding]
+    // The names of the value parameters of the structs of the program.
+    vnames: [str]
+    // Whether the generics being read may have value parameters: the
+    // ones of an `impl`.
+    allow_values: bool
     bounds: [TParam]
     traits: [TraitInfo]
     trait_impls: [ImplsEntry]
@@ -297,6 +305,13 @@ fn has_type(o: parser.Type?) -> bool {
         Some(_) => true
         None => false
     }
+}
+
+fn has_name(names: [str], name: str) -> bool {
+    for n in names {
+        if n == name { return true }
+    }
+    false
 }
 
 // The names of the type parameters, or nothing when there are region or
@@ -867,6 +882,12 @@ impl Checker {
                         added.push(name)
                     }
                 }
+                parser.GenParam.Value(name, _) => {
+                    if !self.in_tenv(name) {
+                        types.define(mut self.tenv, name, types.Ty.Param(name))
+                        added.push(name)
+                    }
+                }
                 _ => {}
             }
         }
@@ -889,10 +910,29 @@ impl Checker {
                     }
                     out.push(TParam(name, traits))
                 }
+                // An `impl` for a type that takes numbers names them too.
+                parser.GenParam.Value(name, ty) => {
+                    if !self.allow_values { return None }
+                    self.value_param(name, ty, at)
+                    if !has_name(self.vnames, name) { self.vnames.push(name) }
+                    out.push(TParam(name, []))
+                }
                 _ => return None
             }
         }
         Some(out)
+    }
+
+    // A value parameter of a type has to be an `int`, for now.
+    fn value_param(mut self, name: str, ty: parser.Type, at: Span) {
+        var ok = false
+        match ty {
+            parser.Type.Path(path, args) => {
+                ok = path.len == 1 && path[0] == "int" && args.len == 0
+            }
+            _ => {}
+        }
+        if !ok { self.err(at, "`{name}` is a value parameter of a type, and for now it has to be an `int`") }
     }
 
     fn enter_definition(mut self, tparams: [TParam]) {
@@ -912,6 +952,10 @@ impl Checker {
             match g {
                 parser.GenParam.OfType(name, bounds) => {
                     if bounds.len > 0 { self.err(at, "bounds on the type parameter `{name}` of a type are not supported: put them on the `impl`") }
+                    types.define(mut self.tenv, name, types.Ty.Param(name))
+                }
+                parser.GenParam.Value(name, ty) => {
+                    self.value_param(name, ty, at)
                     types.define(mut self.tenv, name, types.Ty.Param(name))
                 }
                 _ => {}
@@ -992,10 +1036,85 @@ impl Checker {
             return types.Ty.Unknown
         }
         match found {
-            Some(Global.Struct(i)) => types.Ty.Struct(i, args)
-            Some(Global.Enum(i)) => types.Ty.Enum(i, args)
+            Some(Global.Struct(i)) => {
+                // A number goes where the struct takes one, and only there.
+                for k in 0..(args.len as int) {
+                    var value = false
+                    if k < (self.structs[i].values.len as int) { value = self.structs[i].values[k] }
+                    var number = false
+                    var open = false
+                    match args[k] {
+                        types.Ty.Value(_) => {
+                            number = true
+                        }
+                        types.Ty.Unknown => {
+                            open = true
+                        }
+                        types.Ty.Param(p) => {
+                            open = has_name(self.vnames, p) == value
+                        }
+                        _ => {}
+                    }
+                    if value != number && !open {
+                        let p = self.structs[i].tparams[k]
+                        var what = "a type"
+                        if value { what = "a number known when compiling" }
+                        self.err(at, "`{p}`, a parameter of `{name}`, takes {what}")
+                        return types.Ty.Unknown
+                    }
+                }
+                types.Ty.Struct(i, args)
+            }
+            Some(Global.Enum(i)) => {
+                for a in args {
+                    match a {
+                        types.Ty.Value(_) => {
+                            self.err(at, "`{name}` takes types, not numbers")
+                            return types.Ty.Unknown
+                        }
+                        _ => {}
+                    }
+                }
+                types.Ty.Enum(i, args)
+            }
             _ => types.Ty.Unknown
         }
+    }
+
+    // A number written where a type takes one: `Grid[int, 3]`.
+    fn value_arg(mut self, e: parser.Expr) -> types.Ty {
+        match self.const_int(e, 0) {
+            Some(v) => types.Ty.Value(v)
+            None => {
+                self.err(at_expr(e), "a number given to a type has to be known when compiling: a number, a constant or a value parameter")
+                types.Ty.Unknown
+            }
+        }
+    }
+
+    // What is written between the brackets of a type: a type, or the
+    // name of a constant that is a number (`Grid[int, SIDE]`).
+    fn type_arg(mut self, t: parser.Type, at: Span) -> types.Ty {
+        match t {
+            parser.Type.Path(path, args) => {
+                if path.len == 1 && args.len == 0 && !self.in_tenv(path[0]) {
+                    match self.global(path[0]) {
+                        Some(Global.Const(i)) => {
+                            match self.const_int(self.const_exprs[i], 1) {
+                                Some(v) => return types.Ty.Value(v)
+                                None => {
+                                    self.err(at, "`{path[0]}` is not a number known when compiling")
+                                    return types.Ty.Unknown
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        self.resolve(t, at)
     }
 
     fn alias_index(self, name: str) -> int {
@@ -1091,8 +1210,8 @@ impl Checker {
         var targs: [types.Ty] = []
         for a in args {
             match a {
-                parser.GenArg.OfType(x) => targs.push(self.resolve(x, at))
-                parser.GenArg.OfExpr(_) => return None
+                parser.GenArg.OfType(x) => targs.push(self.type_arg(x, at))
+                parser.GenArg.OfExpr(e) => targs.push(self.value_arg(e))
             }
         }
         Some(targs)
@@ -1382,13 +1501,29 @@ impl Checker {
             var what = Global.Alias
             match d.kind {
                 parser.DeclKind.Struct(s) => {
-                    var generic = true
+                    // A struct may take numbers too: `[T, comptime N: int]`.
+                    var generic = false
                     var tparams: [str] = []
-                    if let Some(ns) = param_names(s.generics) {
-                        generic = false
-                        tparams = ns
+                    var values: [bool] = []
+                    for g in s.generics {
+                        match g {
+                            parser.GenParam.OfType(n, _) => {
+                                tparams.push(n)
+                                values.push(false)
+                            }
+                            parser.GenParam.Value(n, _) => {
+                                tparams.push(n)
+                                values.push(true)
+                                if !has_name(self.vnames, n) { self.vnames.push(n) }
+                            }
+                            parser.GenParam.Region(_) => {
+                                generic = true
+                                values.push(false)
+                            }
+                        }
                     }
-                    self.structs.push(StructInfo(s.name, self.module, generic, tparams, []))
+                    if generic { tparams = [] }
+                    self.structs.push(StructInfo(s.name, self.module, generic, tparams, values, []))
                     name = s.name
                     what = Global.Struct(self.structs.len as int - 1)
                 }
@@ -1725,7 +1860,10 @@ impl Checker {
     fn impl_decl(mut self, di: int, im: parser.ImplDecl, at: Span) -> [Required] {
         var required: [Required] = []
         var tparams: [TParam] = []
-        match self.type_params(im.generics, at) {
+        self.allow_values = true
+        let given = self.type_params(im.generics, at)
+        self.allow_values = false
+        match given {
             Some(ps) => {
                 tparams = ps
             }
@@ -1985,6 +2123,8 @@ fn start(p: load.Program, decls_only: bool) -> Checker {
         decls: p.file.decls,
         modules: p.modules,
         tenv: [],
+        vnames: [],
+        allow_values: false,
         bounds: [],
         traits: [],
         trait_impls: [],
@@ -5019,6 +5159,18 @@ impl Checker {
             self.set_res(e, Res.NoneValue)
             return types.Ty.Optional(types.Ty.Never)
         }
+        // A value parameter of the type a method is for: a number in each
+        // copy, and an `int` where the method is defined.
+        match types.lookup(self.tenv, name) {
+            Some(types.Ty.Value(v)) => {
+                self.set_res(e, Res.Value(v))
+                return types.Ty.Int("i64")
+            }
+            Some(types.Ty.Param(p)) => {
+                if has_name(self.vnames, p) { return types.Ty.Int("i64") }
+            }
+            _ => {}
+        }
         self.global_value(e, self.module, name, at)
     }
 
@@ -6568,6 +6720,7 @@ fn res_text(r: Res) -> str {
         Res.Extern(i) => "extern {i}"
         Res.Local => "local"
         Res.NoneValue => "none"
+        Res.Value(v) => "value {v}"
         Res.Fn(i) => "fn {i}"
         Res.Const(i) => "const {i}"
         Res.Variant(i, v) => "variant {i}.{v}"

@@ -1,0 +1,59 @@
+import std.io
+
+// Functions that return a type, and types that take numbers.
+
+fn Pair(comptime T: type) -> type {
+    struct { a: T, b: T }
+}
+
+fn Matrix(comptime T: type, comptime N: int) -> type {
+    struct { data: [T; N], rows: int }
+}
+
+struct Grid[T, comptime N: int] { cells: [T; N], name: str }
+
+let SIDE = 4
+
+impl[T] Pair[T] {
+    fn swap(self) -> Pair(T) { Pair(self.b, self.a) }
+}
+
+impl[T, comptime N: int] Matrix[T, N] {
+    fn size(self) -> int { N }
+    fn cols(self) -> int { N / self.rows }
+    fn at(self, r: int, c: int) -> T? {
+        let k = r * self.cols() + c
+        if r < 0 || c < 0 || k >= N { return None }
+        Some(self.data[k])
+    }
+}
+
+impl[T, comptime N: int] Grid[T, N] {
+    fn size(self) -> int { N }
+    fn double(self) -> int { N * 2 }
+    fn last(self) -> T { self.cells[N - 1] }
+    fn renamed(self, name: str) -> Grid[T, N] { Grid(self.cells, name) }
+}
+
+fn total(m: Matrix(int, 6)) -> int {
+    var sum = 0
+    for x in m.data { sum += x }
+    sum
+}
+
+fn first[T](p: Pair(T)) -> T { p.a }
+
+fn main() ! io.Error {
+    let p: Pair(int) = Pair(1, 2)
+    let q = Pair("x", "y").swap()
+    io.print("{p} {p.swap()} {q.a} {first(q)} {first(p)}")?
+    let m: Matrix(int, 6) = Matrix([1, 2, 3, 4, 5, 6], 2)
+    io.print("{m.size()} {m.cols()} {m.at(1, 2)} {m.at(2, 0)} {total(m)}")?
+    let names: Matrix(str, 2) = Matrix(["a", "b"], 1)
+    io.print("{names.size()} {names.at(0, 1)} {names}")?
+    let g: Grid[int, 3] = Grid([1, 2, 3], "three")
+    let h: Grid(str, SIDE) = Grid(["a", "b", "c", "d"], "four")
+    io.print("{g.size()} {g.double()} {h.size()} {g.last()} {h.last()} {h.renamed("again").name}")?
+    let pairs: [Pair(int)] = [p, p.swap()]
+    io.print("{pairs.len} {pairs[1].a}")?
+}

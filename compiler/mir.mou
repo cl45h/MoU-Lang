@@ -2515,6 +2515,7 @@ impl Lower {
                         }
                     }
                     Some(check.Res.NoneValue) => Operand.Const(Value.None)
+                    Some(check.Res.Value(v)) => Operand.Const(Value.Int(v))
                     Some(check.Res.Fn(i)) => {
                         let f = find_id(self.fn_ids, i)
                         if f < 0 { return self.unsupported(at, "generic functions") }

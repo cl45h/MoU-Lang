@@ -108,6 +108,8 @@ pub enum Res {
     Extern(usize),
     Local,
     NoneValue,
+    /// A value parameter of a type, in a copy made for a number.
+    Value(i128),
     Fn(usize),
     Const(usize),
     /// A unit variant used as a value, or a variant constructor call.
@@ -291,6 +293,8 @@ fn checker(file: &File) -> Checker<'_> {
         res: HashMap::new(),
         inst: 0,
         tenv: HashMap::new(),
+        vnames: std::collections::HashSet::new(),
+        allow_values: false,
         bounds: HashMap::new(),
         traits: Vec::new(),
         trait_impls: HashMap::new(),
@@ -695,6 +699,7 @@ pub fn info_dump(file: &File) -> String {
         Res::Extern(i) => format!("extern {i}"),
         Res::Local => "local".to_string(),
         Res::NoneValue => "none".to_string(),
+        Res::Value(v) => format!("value {v}"),
         Res::Fn(i) => format!("fn {i}"),
         Res::Const(i) => format!("const {i}"),
         Res::Variant(i, v) => format!("variant {i}.{v}"),
@@ -1260,6 +1265,8 @@ pub struct StructInfo {
     /// Has parameters the checker does not handle (regions, values).
     pub generic: bool,
     pub tparams: Vec<String>,
+    /// Which of the parameters take a number instead of a type.
+    pub values: Vec<bool>,
     pub fields: Vec<FieldInfo>,
 }
 
@@ -1410,6 +1417,11 @@ struct Checker<'a> {
     /// Type parameters in scope: a `Ty::Param` in a definition, the actual
     /// type in an instance.
     tenv: HashMap<String, Ty>,
+    /// The names of the value parameters of the structs of the program.
+    vnames: std::collections::HashSet<String>,
+    /// Whether the generics being read may have value parameters: the
+    /// ones of an `impl`.
+    allow_values: bool,
     /// Traits each type parameter in scope is bound by.
     bounds: HashMap<String, Vec<Bound>>,
     traits: Vec<TraitInfo>,
@@ -1929,6 +1941,17 @@ impl<'a> Checker<'a> {
                 }
                 self.tenv.insert(name.clone(), Ty::Param(name.clone()));
             }
+            if let GenParam::Comptime { name, ty } = g {
+                self.value_param(name, ty, span);
+                self.tenv.insert(name.clone(), Ty::Param(name.clone()));
+            }
+        }
+    }
+
+    /// A value parameter of a type has to be an `int`, for now.
+    fn value_param(&mut self, name: &str, ty: &Type, span: Span) {
+        if !matches!(ty, Type::Path { path, args } if path.len() == 1 && path[0] == "int" && args.is_empty()) {
+            self.err(span, format!("`{name}` is a value parameter of a type, and for now it has to be an `int`"));
         }
     }
 
@@ -1980,9 +2003,19 @@ impl<'a> Checker<'a> {
             self.at_decl(i);
             let (name, global) = match &d.kind {
                 DeclKind::Struct(s) => {
-                    let tparams = Self::param_names(&s.generics);
+                    // A struct may take numbers too: `[T, comptime N: int]`.
+                    let tparams: Option<Vec<String>> = s.generics.iter().map(|g| match g {
+                        GenParam::Type { name, .. } | GenParam::Comptime { name, .. } => Some(name.clone()),
+                        GenParam::Region(_) => None,
+                    }).collect();
+                    let values: Vec<bool> = s.generics.iter().map(|g| matches!(g, GenParam::Comptime { .. })).collect();
+                    for g in &s.generics {
+                        if let GenParam::Comptime { name, .. } = g {
+                            self.vnames.insert(name.clone());
+                        }
+                    }
                     let generic = tparams.is_none();
-                    self.structs.push(StructInfo { name: s.name.clone(), module: self.module, generic, tparams: tparams.unwrap_or_default(), fields: Vec::new() });
+                    self.structs.push(StructInfo { name: s.name.clone(), module: self.module, generic, tparams: tparams.unwrap_or_default(), values, fields: Vec::new() });
                     (&s.name, Global::Struct(self.structs.len() - 1))
                 }
                 DeclKind::Enum(e) => {
@@ -2207,7 +2240,10 @@ impl<'a> Checker<'a> {
                     }
                 }
                 DeclKind::Impl(im) => {
-                    let Some(tparams) = self.type_params(&im.generics, d.span) else {
+                    self.allow_values = true;
+                    let tparams = self.type_params(&im.generics, d.span);
+                    self.allow_values = false;
+                    let Some(tparams) = tparams else {
                         self.report.skipped_decls.push("generic impl".to_string());
                         continue;
                     };
@@ -2418,7 +2454,7 @@ impl<'a> Checker<'a> {
         // A bound may name the other parameters: `[T: Into[U], U]`.
         let mut added = Vec::new();
         for g in generics {
-            if let GenParam::Type { name, .. } = g {
+            if let GenParam::Type { name, .. } | GenParam::Comptime { name, .. } = g {
                 if !self.tenv.contains_key(name) {
                     self.tenv.insert(name.clone(), Ty::Param(name.clone()));
                     added.push(name.clone());
@@ -2435,6 +2471,13 @@ impl<'a> Checker<'a> {
     fn type_params_in(&mut self, generics: &[GenParam], span: Span) -> Option<TParams> {
         let mut out = Vec::new();
         for g in generics {
+            // An `impl` for a type that takes numbers names them too.
+            if let (GenParam::Comptime { name, ty }, true) = (g, self.allow_values) {
+                self.value_param(name, ty, span);
+                self.vnames.insert(name.clone());
+                out.push((name.clone(), Vec::new()));
+                continue;
+            }
             let GenParam::Type { name, bounds } = g else { return None };
             let mut traits = Vec::new();
             for b in bounds {
@@ -3242,9 +3285,57 @@ impl<'a> Checker<'a> {
             return Ty::Unknown;
         }
         match self.global(name) {
-            Some(Global::Struct(i)) => Ty::Struct(i, args),
+            Some(Global::Struct(i)) => {
+                // A number goes where the struct takes one, and only there.
+                for (k, a) in args.iter().enumerate() {
+                    let value = self.structs[i].values.get(k).copied().unwrap_or(false);
+                    let given = matches!(a, Ty::Value(_));
+                    let open = matches!(a, Ty::Unknown) || matches!(a, Ty::Param(p) if self.vnames.contains(p) == value);
+                    if value != given && !open {
+                        let p = self.structs[i].tparams[k].clone();
+                        let what = if value { "a number known when compiling" } else { "a type" };
+                        self.err(span, format!("`{p}`, a parameter of `{name}`, takes {what}"));
+                        return Ty::Unknown;
+                    }
+                }
+                Ty::Struct(i, args)
+            }
+            Some(Global::Enum(_)) if args.iter().any(|a| matches!(a, Ty::Value(_))) => {
+                self.err(span, format!("`{name}` takes types, not numbers"));
+                Ty::Unknown
+            }
             Some(Global::Enum(i)) => Ty::Enum(i, args),
             _ => Ty::Unknown,
+        }
+    }
+
+    /// What is written between the brackets of a type: a type, or the
+    /// name of a constant that is a number (`Grid[int, SIDE]`).
+    fn type_arg(&mut self, t: &Type, span: Span) -> Ty {
+        if let Type::Path { path, args } = t {
+            if path.len() == 1 && args.is_empty() && !self.tenv.contains_key(&path[0]) {
+                if let Some(Global::Const(i)) = self.global(&path[0]) {
+                    return match self.const_int(self.const_exprs[i], 1) {
+                        Some(v) => Ty::Value(v),
+                        None => {
+                            self.err(span, format!("`{}` is not a number known when compiling", path[0]));
+                            Ty::Unknown
+                        }
+                    };
+                }
+            }
+        }
+        self.resolve(t, span)
+    }
+
+    /// A number written where a type takes one: `Grid[int, 3]`.
+    fn value_arg(&mut self, e: &Expr) -> Ty {
+        match self.const_int(e, 0) {
+            Some(v) => Ty::Value(v),
+            None => {
+                self.err(e.span, "a number given to a type has to be known when compiling: a number, a constant or a value parameter");
+                Ty::Unknown
+            }
         }
     }
 
@@ -3315,8 +3406,8 @@ impl<'a> Checker<'a> {
                         let mut targs = Vec::new();
                         for a in args {
                             match a {
-                                GenArg::Type(t) => targs.push(self.resolve(t, span)),
-                                GenArg::Expr(_) => return self.skip(),
+                                GenArg::Type(t) => targs.push(self.type_arg(t, span)),
+                                GenArg::Expr(e) => targs.push(self.value_arg(e)),
                             }
                         }
                         return self.named_in(m, &path[1], targs, span);
@@ -3335,8 +3426,8 @@ impl<'a> Checker<'a> {
                 let mut targs = Vec::new();
                 for a in args {
                     match a {
-                        GenArg::Type(t) => targs.push(self.resolve(t, span)),
-                        GenArg::Expr(_) => return self.skip(),
+                        GenArg::Type(t) => targs.push(self.type_arg(t, span)),
+                        GenArg::Expr(e) => targs.push(self.value_arg(e)),
                     }
                 }
                 self.named(name, targs, span)
@@ -4686,6 +4777,16 @@ impl<'a> Checker<'a> {
         if name == "None" {
             self.res.insert((self.inst, id(e)), Res::NoneValue);
             return Ty::Optional(Box::new(Ty::Never));
+        }
+        // A value parameter of the type a method is for: a number in each
+        // copy, and an `int` where the method is defined.
+        match self.tenv.get(name) {
+            Some(Ty::Value(v)) => {
+                self.res.insert((self.inst, id(e)), Res::Value(*v));
+                return Ty::Int("i64");
+            }
+            Some(Ty::Param(p)) if self.vnames.contains(p) => return Ty::Int("i64"),
+            _ => {}
         }
         self.global_value(e, self.module, name, span)
     }

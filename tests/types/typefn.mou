@@ -1,0 +1,12 @@
+struct Grid[T, comptime N: int] { cells: [T; N] }
+struct Wrong[comptime S: str] { x: int }
+enum Maybe[T] { Yes(T), No }
+let SIDE = 2
+let NAME = "x"
+fn f(a: Grid[int, str], b: Grid[3, 3], c: Grid[int], d: Grid[int, 2], e: Maybe[3]) -> int { 0 }
+fn g(x: int) -> Grid[int, 2] { Grid([1, 2, 3]) }
+fn h(x: int) { let y: Grid[int, x] = Grid([1]) }
+fn i(a: Grid(int, SIDE), b: Grid(int, NAME)) -> int { a.cells.len as int }
+impl[T, comptime N: u8] Grid[T, N] {
+    fn size(self) -> int { N }
+}

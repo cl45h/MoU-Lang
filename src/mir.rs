@@ -2157,6 +2157,7 @@ impl<'a> Lower<'a> {
                     None => self.unsupported(span, "this name"),
                 },
                 Some(Res::NoneValue) => Operand::Const(Value::None),
+                Some(Res::Value(v)) => Operand::Const(Value::Int(*v)),
                 Some(Res::Fn(i)) => match self.fn_ids.get(i) {
                     Some(f) => Operand::Const(Value::Fn(*f)),
                     None => self.unsupported(span, "generic functions"),

@@ -261,6 +261,7 @@ impl Parser {
         }
         let public = self.eat_kw("pub");
         let kind = match self.peek() {
+            Tok::Kw("fn") if self.returns_type() => DeclKind::Struct(self.type_fn()?),
             Tok::Kw("fn") => DeclKind::Fn(self.fn_decl()?),
             Tok::Kw("struct") => DeclKind::Struct(self.struct_decl()?),
             Tok::Kw("enum") => DeclKind::Enum(self.enum_decl()?),
@@ -392,15 +393,70 @@ impl Parser {
         self.expect_kw("struct")?;
         let name = self.ident()?;
         let generics = self.generics()?;
+        let fields = self.fields()?;
+        Ok(StructDecl { name, generics, fields })
+    }
+
+    /// The fields of a struct, with their braces.
+    fn fields(&mut self) -> PResult<Vec<Field>> {
         self.expect_p("{")?;
-        let fields = self.list("}", |p| {
+        self.list("}", |p| {
             let public = p.eat_kw("pub");
             let name = p.ident()?;
             p.expect_p(":")?;
             let ty = p.ty()?;
             let default = if p.eat_p("=") { Some(p.expr()?) } else { None };
             Ok(Field { public, name, ty, default })
-        })?;
+        })
+    }
+
+    /// Whether what starts here is a function that returns a type:
+    /// `fn Name(...) -> type`.
+    fn returns_type(&self) -> bool {
+        if !matches!(self.peek_at(1), Tok::Ident(_)) || *self.peek_at(2) != Tok::P("(") {
+            return false;
+        }
+        let (mut k, mut depth) = (3, 1);
+        while depth > 0 {
+            match self.peek_at(k) {
+                Tok::P("(") => depth += 1,
+                Tok::P(")") => depth -= 1,
+                Tok::Eof => return false,
+                _ => {}
+            }
+            k += 1;
+        }
+        *self.peek_at(k) == Tok::P("->") && *self.peek_at(k + 1) == Tok::Kw("type")
+    }
+
+    /// A function that returns a type is a struct that takes its
+    /// parameters: `fn Pair(comptime T: type) -> type { struct { a: T, b: T } }`
+    /// is `struct Pair[T] { a: T, b: T }`.
+    fn type_fn(&mut self) -> PResult<StructDecl> {
+        self.expect_kw("fn")?;
+        let name = self.ident()?;
+        self.expect_p("(")?;
+        let params = self.list(")", |p| p.param())?;
+        self.expect_p("->")?;
+        self.expect_kw("type")?;
+        let mut generics = Vec::new();
+        for p in params {
+            match (p.comptime, p.ty) {
+                (true, Some(Type::TypeType)) => generics.push(GenParam::Type { name: p.name, bounds: Vec::new() }),
+                (true, Some(ty)) => generics.push(GenParam::Comptime { name: p.name, ty }),
+                _ => return self.err(format!("`{}` has to be `comptime`: a function that returns a type is called when compiling", p.name)),
+            }
+        }
+        self.skip_nl();
+        self.expect_p("{")?;
+        self.skip_nl();
+        if !self.is_kw("struct") {
+            return self.err("a function that returns a type has, for now, a `struct { ... }` as its whole body");
+        }
+        self.bump();
+        let fields = self.fields()?;
+        self.skip_nl();
+        self.expect_p("}")?;
         Ok(StructDecl { name, generics, fields })
     }
 
@@ -549,8 +605,12 @@ impl Parser {
                     self.bump();
                     path.push(self.ident()?);
                 }
-                let args = if self.eat_p("[") {
-                    self.list("]", |p| {
+                // `Pair[int]`, or `Pair(int)` as the call of a function
+                // that returns a type; a type named with a capital, so
+                // that `x as int (...)` stays what it was.
+                let called = self.is_p("(") && path.last().is_some_and(|n| n.starts_with(|c: char| c.is_uppercase()));
+                let args = if self.eat_p("[") || (called && self.eat_p("(")) {
+                    self.list(if called { ")" } else { "]" }, |p| {
                         if matches!(p.peek(), Tok::Int(_)) {
                             Ok(GenArg::Expr(p.expr()?))
                         } else {

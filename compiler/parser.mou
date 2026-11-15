@@ -451,7 +451,9 @@ impl Parser {
         let public = self.eat_kw("pub")
         let k = self.peek_kw()
         var kind = DeclKind.Const("", None, self.mk(Kind.Continue, line, col))
-        if k == "fn" {
+        if k == "fn" && self.returns_type() {
+            kind = DeclKind.Struct(self.type_fn()?)
+        } else if k == "fn" {
             kind = DeclKind.Fn(self.fn_decl()?)
         } else if k == "struct" {
             kind = DeclKind.Struct(self.struct_decl()?)
@@ -597,6 +599,12 @@ impl Parser {
         self.expect_kw("struct")?
         let name = self.ident()?
         let generics = self.generics()?
+        let fields = self.fields()?
+        StructDecl(name, generics, fields)
+    }
+
+    // The fields of a struct, with their braces.
+    fn fields(mut self) -> [Field] ! lexer.Error {
         self.expect_p("{{")?
         var fields: [Field] = []
         loop {
@@ -610,6 +618,65 @@ impl Parser {
             fields.push(Field(public, field, ty, default))
             if self.list_end("}}")? { break }
         }
+        fields
+    }
+
+    // Whether what starts here is a function that returns a type:
+    // `fn Name(...) -> type`.
+    fn returns_type(self) -> bool {
+        if !self.ident_at(1) || !self.p_at(2, "(") { return false }
+        var k = 3
+        var depth = 1
+        while depth > 0 {
+            match self.tok_at(k) {
+                lexer.Tok.P(p) => {
+                    if p == "(" { depth += 1 }
+                    if p == ")" { depth -= 1 }
+                }
+                lexer.Tok.Eof => return false
+                _ => {}
+            }
+            k += 1
+        }
+        self.p_at(k, "->") && self.kw_at(k + 1, "type")
+    }
+
+    // A function that returns a type is a struct that takes its
+    // parameters: `fn Pair(comptime T: type) -> type {{ struct {{ a: T, b: T }} }}`
+    // is `struct Pair[T] {{ a: T, b: T }}`.
+    fn type_fn(mut self) -> StructDecl ! lexer.Error {
+        self.expect_kw("fn")?
+        let name = self.ident()?
+        self.expect_p("(")?
+        let params = self.params()?
+        self.expect_p("->")?
+        self.expect_kw("type")?
+        var generics: [GenParam] = []
+        for p in params {
+            var done = false
+            if p.ct {
+                match p.ty {
+                    Some(Type.TypeType) => {
+                        generics.push(GenParam.OfType(p.name, []))
+                        done = true
+                    }
+                    Some(ty) => {
+                        generics.push(GenParam.Value(p.name, ty))
+                        done = true
+                    }
+                    None => {}
+                }
+            }
+            if !done { return self.err("`{p.name}` has to be `comptime`: a function that returns a type is called when compiling") }
+        }
+        let _ = self.skip_nl()
+        self.expect_p("{{")?
+        let _ = self.skip_nl()
+        if !self.is_kw("struct") { return self.err("a function that returns a type has, for now, a `struct {{ ... }}` as its whole body") }
+        self.bump()
+        let fields = self.fields()?
+        let _ = self.skip_nl()
+        self.expect_p("}}")?
         StructDecl(name, generics, fields)
     }
 
@@ -768,15 +835,27 @@ impl Parser {
             path.push(self.ident()?)
         }
         var args: [GenArg] = []
-        if self.eat_p("[") {
+        // `Pair[int]`, or `Pair(int)` as the call of a function that
+        // returns a type; a type named with a capital, so that
+        // `x as int (...)` stays what it was.
+        var called = false
+        if self.is_p("(") {
+            for c in path[path.len - 1] {
+                called = text.is_upper(c)
+                break
+            }
+        }
+        var close = "]"
+        if called { close = ")" }
+        if self.eat_p("[") || (called && self.eat_p("(")) {
             loop {
-                if self.list_done("]") { break }
+                if self.list_done(close) { break }
                 if self.int_at(0) {
                     args.push(GenArg.OfExpr(self.expr()?))
                 } else {
                     args.push(GenArg.OfType(self.ty()?))
                 }
-                if self.list_end("]")? { break }
+                if self.list_end(close)? { break }
             }
         }
         Type.Path(path, args)

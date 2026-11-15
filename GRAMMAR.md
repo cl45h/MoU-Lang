@@ -57,7 +57,8 @@ genericos   = "[" lista(gen_param) "]" ;
 gen_param   = ident (":" cota)? | "region" ident | "comptime" ident ":" tipo ;
 cota        = tipo ("+" tipo)* ;
 
-struct_decl = "struct" ident genericos? "{" lista(campo) "}" ;
+struct_decl = "struct" ident genericos? "{" lista(campo) "}"
+            | "fn" ident "(" lista(param) ")" "->" "type" "{" "struct" "{" lista(campo) "}" "}" ;   (* función que devuelve un tipo *)
 campo       = "pub"? ident ":" tipo ("=" expr)? ;
 
 enum_decl   = "enum" ident genericos? "{" lista(variante) "}" ;
@@ -77,7 +78,7 @@ type_decl   = "type" ident genericos? "=" tipo nl ;
 
 ```ebnf
 tipo        = tipo_base ("?")* ;
-tipo_base   = ruta ("[" lista(arg_gen) "]")?
+tipo_base   = ruta ("[" lista(arg_gen) "]" | "(" lista(arg_gen) ")")?   (* con paréntesis solo si el nombre empieza con mayúscula *)
             | "[" tipo (";" expr)? "]"                 (* slice o array *)
             | "soa" "[" tipo (";" expr)? "]"
             | "(" lista(tipo) ")"                      (* tupla; () es unidad *)
