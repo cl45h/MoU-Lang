@@ -1753,6 +1753,10 @@ pub fn header_flags(p: &Program) -> (Vec<String>, Vec<String>) {
         compile = ask(&["--includes"]);
         link = ask(&["--ldflags", "--embed"]);
     }
+    // And OpenSSL, the two libraries it is made of.
+    if p.externs.iter().any(|x| x.header.starts_with("openssl/")) {
+        link.extend(["-lssl".to_string(), "-lcrypto".to_string()]);
+    }
     (compile, link)
 }
 

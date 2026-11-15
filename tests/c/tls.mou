@@ -1,0 +1,68 @@
+import std.fs
+import std.io
+import std.text
+import std.tls
+
+// An encrypted connection on this machine: a server with a certificate
+// made for the test, a client that trusts it, and one that does not.
+
+fn echo(server: tls.Listener) -> int ! tls.Error {
+    let conn = server.accept()?
+    let got = conn.read(1000)?
+    conn.write(got)?
+    conn.send(" and back")?
+    conn.close()
+    got.len as int
+}
+
+// Someone connects and is refused: the server sees that it did not agree.
+fn refuse(server: tls.Listener) -> str {
+    let conn = server.accept() catch e { return "nobody got in" }
+    conn.close()
+    "someone got in"
+}
+
+fn talk(cert: str, key: str) ! tls.Error {
+    let server = tls.listen("127.0.0.1", 0, cert, key)?
+    let port = server.port()?
+    scope s {
+        let served = s.spawn(echo(server))
+        let conn = tls.connect_trusting("localhost", port, cert)?
+        conn.send("secret ñ")?
+        let back = conn.read_all()?
+        conn.close()
+        io.print("{text.from_bytes(back)} {served.wait()?}") catch e {}
+    }
+    scope s {
+        let served = s.spawn(refuse(server))
+        // The system does not know this certificate.
+        let failed = tls.connect("localhost", port) catch e {
+            match e {
+                Untrusted(_) => io.print("untrusted") catch e2 {}
+                other => io.print("another error: {other}") catch e2 {}
+            }
+            io.print(served.wait()) catch e2 {}
+            server.close()
+            return
+        }
+        failed.close()
+        io.print("it should not have connected") catch e {}
+    }
+    server.close()
+}
+
+fn main() ! io.Error {
+    let dir = "/tmp/mou-tls-test"
+    fs.make_dir(dir) catch e {}
+    let (cert, key) = ("{dir}/cert.pem", "{dir}/key.pem")
+    let made = io.run("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-subj", "/CN=localhost", "-days", "2", "-addext", "subjectAltName=DNS:localhost"], "") catch e {
+        io.print("no certificate: {e}")?
+        return
+    }
+    talk(cert, key) catch e { io.print("failed: {e}")? }
+    let nothing = tls.listen("127.0.0.1", 0, "{dir}/missing.pem", key) catch e {
+        io.print("no listener without a certificate")?
+        return
+    }
+    nothing.close()
+}

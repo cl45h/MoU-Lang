@@ -23,10 +23,12 @@ const STD: &[(&str, &str)] = &[
     ("std.math", include_str!("../std/math.mou")),
     ("std.meta", include_str!("../std/meta.mou")),
     ("std.net", include_str!("../std/net.mou")),
+    ("std.openssl", include_str!("../std/openssl.mou")),
     ("std.pool", include_str!("../std/pool.mou")),
     ("std.py", include_str!("../std/py.mou")),
     ("std.socket", include_str!("../std/socket.mou")),
     ("std.text", include_str!("../std/text.mou")),
+    ("std.tls", include_str!("../std/tls.mou")),
 ];
 
 /// Modules the compiler provides directly.

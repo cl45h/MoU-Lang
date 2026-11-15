@@ -1,0 +1,150 @@
+// The functions of OpenSSL that `std.tls` is made of. A context and a
+// session are addresses here, and nothing in this module creates a value
+// of Mou.
+@profile(system)
+
+import c "openssl/ssl.h" as ssl {
+    fn TLS_client_method() -> ptr?
+    fn TLS_server_method() -> ptr?
+    fn SSL_CTX_new(method: ptr) -> ptr?
+    fn SSL_CTX_free(ctx: ptr)
+    fn SSL_CTX_set_default_verify_paths(ctx: ptr) -> i32
+    fn SSL_CTX_load_verify_locations(ctx: ptr, file: str, path: ptr?) -> i32
+    fn SSL_CTX_set_verify(ctx: ptr, mode: i32, callback: ptr?)
+    fn SSL_CTX_use_certificate_chain_file(ctx: ptr, file: str) -> i32
+    fn SSL_CTX_use_PrivateKey_file(ctx: ptr, file: str, kind: i32) -> i32
+    fn SSL_new(ctx: ptr) -> ptr?
+    fn SSL_free(s: ptr)
+    fn SSL_set_fd(s: ptr, fd: i32) -> i32
+    fn SSL_set1_host(s: ptr, name: str) -> i32
+    fn SSL_set_tlsext_host_name(s: ptr, name: str) -> i64
+    fn SSL_connect(s: ptr) -> i32
+    fn SSL_accept(s: ptr) -> i32
+    fn SSL_read(s: ptr, data: mut [u8], n: i32) -> i32
+    fn SSL_write(s: ptr, data: [u8], n: i32) -> i32
+    fn SSL_shutdown(s: ptr) -> i32
+    fn SSL_get_error(s: ptr, code: i32) -> i32
+    @value fn SSL_VERIFY_PEER() -> i32
+    @value fn SSL_FILETYPE_PEM() -> i32
+    @value fn SSL_ERROR_ZERO_RETURN() -> i32
+    @value fn SSL_ERROR_SYSCALL() -> i32
+}
+import c "openssl/err.h" as err {
+    fn ERR_get_error() -> u64
+    fn ERR_error_string_n(e: u64, buf: mut [u8], len: usize)
+    fn ERR_clear_error()
+}
+
+/// A context for connecting, which checks the certificate of the other
+/// side: against the ones this system trusts, or against the ones of a
+/// file when `roots` names one.
+pub fn client(roots: str) -> ptr? {
+    unsafe {
+        err.ERR_clear_error()
+        match ssl.TLS_client_method() {
+            Some(method) => {
+                match ssl.SSL_CTX_new(method) {
+                    Some(ctx) => {
+                        var ok = false
+                        if roots == "" {
+                            ok = ssl.SSL_CTX_set_default_verify_paths(ctx) == 1
+                        } else {
+                            ok = ssl.SSL_CTX_load_verify_locations(ctx, roots, None) == 1
+                        }
+                        if !ok {
+                            ssl.SSL_CTX_free(ctx)
+                            return None
+                        }
+                        ssl.SSL_CTX_set_verify(ctx, ssl.SSL_VERIFY_PEER, None)
+                        Some(ctx)
+                    }
+                    None => None
+                }
+            }
+            None => None
+        }
+    }
+}
+
+/// A context for answering, with the certificate it shows and its key,
+/// each a file in PEM.
+pub fn server(cert: str, key: str) -> ptr? {
+    unsafe {
+        err.ERR_clear_error()
+        match ssl.TLS_server_method() {
+            Some(method) => {
+                match ssl.SSL_CTX_new(method) {
+                    Some(ctx) => {
+                        if ssl.SSL_CTX_use_certificate_chain_file(ctx, cert) != 1 || ssl.SSL_CTX_use_PrivateKey_file(ctx, key, ssl.SSL_FILETYPE_PEM) != 1 {
+                            ssl.SSL_CTX_free(ctx)
+                            return None
+                        }
+                        Some(ctx)
+                    }
+                    None => None
+                }
+            }
+            None => None
+        }
+    }
+}
+
+/// A session over a socket that is already connected, once both sides
+/// agreed: `host` is who the other side has to be when `connecting`.
+pub fn session(ctx: ptr, fd: int, host: str, connecting: bool) -> ptr? {
+    unsafe {
+        err.ERR_clear_error()
+        match ssl.SSL_new(ctx) {
+            Some(s) => {
+                var ok = ssl.SSL_set_fd(s, fd as i32) == 1
+                if ok && connecting {
+                    ok = ssl.SSL_set1_host(s, host) == 1 && ssl.SSL_set_tlsext_host_name(s, host) == 1
+                    if ok { ok = ssl.SSL_connect(s) == 1 }
+                } else if ok {
+                    ok = ssl.SSL_accept(s) == 1
+                }
+                if ok { return Some(s) }
+                ssl.SSL_free(s)
+                None
+            }
+            None => None
+        }
+    }
+}
+
+/// Waits for bytes and leaves them in `data`: how many came, 0 when the
+/// other side ended, or a negative number.
+pub fn read(s: ptr, data: mut [u8]) -> int {
+    unsafe {
+        err.ERR_clear_error()
+        let n = ssl.SSL_read(s, mut data, data.len as i32)
+        if n > 0 { return n as int }
+        let why = ssl.SSL_get_error(s, n)
+        if why == ssl.SSL_ERROR_ZERO_RETURN || why == ssl.SSL_ERROR_SYSCALL { return 0 }
+        -1
+    }
+}
+
+/// Sends the first `n` bytes: how many went out, or a number that is not
+/// positive.
+pub fn write(s: ptr, data: [u8], n: int) -> int {
+    unsafe {
+        err.ERR_clear_error()
+        ssl.SSL_write(s, data, n as i32) as int
+    }
+}
+
+/// Says that nothing more will be sent.
+pub fn finish(s: ptr) { unsafe { ssl.SSL_shutdown(s) } }
+
+pub fn free(s: ptr) { unsafe { ssl.SSL_free(s) } }
+
+pub fn free_context(ctx: ptr) { unsafe { ssl.SSL_CTX_free(ctx) } }
+
+/// Writes what went wrong last in `buf`, as text that ends in a zero.
+pub fn why(buf: mut [u8]) {
+    unsafe {
+        let e = err.ERR_get_error()
+        err.ERR_error_string_n(e, mut buf, buf.len)
+    }
+}

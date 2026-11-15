@@ -1,0 +1,162 @@
+// Connections that are encrypted and whose other side is checked: TLS
+// over the TCP of `std.net`.
+//
+// It is made of OpenSSL, so a program that uses it runs compiled
+// (`mou build`), not with `mou run`, on a machine that has its headers.
+
+import std.net
+import std.openssl
+import std.text
+
+pub enum Error {
+    /// The address is not one, nor a name that anyone answers for.
+    BadAddress(str)
+    /// Something went wrong: what was being done, and what was said.
+    Failed(str)
+    /// The other side could not show it is who was asked for.
+    Untrusted(str)
+    /// The other side closed the connection.
+    Closed
+}
+
+/// An encrypted connection: bytes go in both directions.
+pub struct Conn { conn: net.Conn, session: ptr, context: ptr, single: bool }
+
+/// A port of this machine that waits for encrypted connections.
+pub struct Listener { listener: net.Listener, context: ptr }
+
+fn plain(e: net.Error) -> Error {
+    match e {
+        BadAddress(a) => Error.BadAddress(a)
+        Failed(what) => Error.Failed(what)
+        Closed => Error.Closed
+    }
+}
+
+/// What OpenSSL said went wrong last.
+fn why() -> str {
+    var buf: [u8] = [0; 256]
+    openssl.why(mut buf)
+    var n = 0
+    while n < 256 && buf[n] != 0 { n += 1 }
+    match text.from_bytes(buf[..(n as usize)]) {
+        Some(t) => t
+        None => "?"
+    }
+}
+
+fn dial(host: str, port: int, roots: str) -> Conn ! Error {
+    let conn = net.connect(host, port) catch e { return plain(e) }
+    let context = match openssl.client(roots) {
+        Some(c) => c
+        None => {
+            conn.close()
+            return Error.Failed("read the certificates to trust: {why()}")
+        }
+    }
+    match openssl.session(context, conn.fd, host, true) {
+        Some(session) => Conn(conn, session, context, true)
+        None => {
+            let said = why()
+            openssl.free_context(context)
+            conn.close()
+            if text.contains(said, "certificate verify failed") { return Error.Untrusted("{host}: {said}") }
+            return Error.Failed("agree with {host}:{port}: {said}")
+        }
+    }
+}
+
+/// Connects to a port of a name, and checks that the other side is that
+/// name with a certificate this system trusts.
+pub fn connect(host: str, port: int) -> Conn ! Error { dial(host, port, "")? }
+
+/// The same, trusting the certificates of a file in PEM instead of the
+/// ones of the system: for a server with a certificate of its own.
+pub fn connect_trusting(host: str, port: int, roots: str) -> Conn ! Error where roots != "" { dial(host, port, roots)? }
+
+/// Starts to wait for encrypted connections on a port of an address of
+/// this machine, with the certificate it shows and its key, each a file
+/// in PEM. With port 0 the system picks a free one.
+pub fn listen(host: str, port: int, cert: str, key: str) -> Listener ! Error {
+    let context = match openssl.server(cert, key) {
+        Some(c) => c
+        None => return Error.Failed("read the certificate {cert} and its key {key}: {why()}")
+    }
+    let listener = net.listen(host, port) catch e {
+        openssl.free_context(context)
+        return plain(e)
+    }
+    Listener(listener, context)
+}
+
+impl Listener {
+    /// The port it waits on: the one the system picked when it was 0.
+    pub fn port(self) -> int ! Error {
+        let p = self.listener.port() catch e { return plain(e) }
+        p
+    }
+
+    /// Waits until someone connects and both sides agree.
+    pub fn accept(self) -> Conn ! Error {
+        let conn = self.listener.accept() catch e { return plain(e) }
+        match openssl.session(self.context, conn.fd, "", false) {
+            Some(session) => Conn(conn, session, self.context, false)
+            None => {
+                let said = why()
+                conn.close()
+                return Error.Failed("agree with who connected: {said}")
+            }
+        }
+    }
+
+    pub fn close(self) {
+        self.listener.close()
+        openssl.free_context(self.context)
+    }
+}
+
+impl Conn {
+    /// Sends all the bytes.
+    pub fn write(self, data: [u8]) ! Error {
+        var left = data
+        while left.len > 0 {
+            let n = openssl.write(self.session, left, left.len as int)
+            if n <= 0 { return Error.Closed }
+            left = left[(n as usize)..]
+        }
+    }
+
+    /// Sends a text, as its bytes.
+    pub fn send(self, message: str) ! Error { self.write(text.bytes(message))? }
+
+    /// Waits for bytes: at most `max`, and none when the other side will
+    /// send nothing more.
+    pub fn read(self, max: int) -> [u8] ! Error where max > 0 {
+        var data: [u8] = [0; max as usize]
+        let n = openssl.read(self.session, mut data)
+        if n < 0 { return Error.Failed("read: {why()}") }
+        data[..(n as usize)]
+    }
+
+    /// Everything the other side sends until it ends.
+    pub fn read_all(self) -> [u8] ! Error {
+        var all: [u8] = []
+        while true {
+            let piece = self.read(65536)?
+            if piece.len == 0 { break }
+            for b in piece { all.push(b) }
+        }
+        all
+    }
+
+    /// Says that nothing more will be sent. What the other side sends can
+    /// still be read.
+    pub fn finish(self) { openssl.finish(self.session) }
+
+    pub fn close(self) {
+        openssl.finish(self.session)
+        openssl.free(self.session)
+        if self.single { openssl.free_context(self.context) }
+        self.conn.close()
+    }
+}
