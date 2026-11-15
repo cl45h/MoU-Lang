@@ -4,7 +4,7 @@
 #
 #   ./bootstrap.sh && tests/suite.sh        runs everything
 #   tests/suite.sh native                   only the parts named: native,
-#                                           c, stages, abi, repl, fmt, self
+#                                           interp, c, stages, abi, repl, fmt, self
 #   tests/suite.sh --accept [parts]         writes what the programs give now
 #                                           as what is expected of them
 #
@@ -25,7 +25,7 @@ if [ "${1:-}" = "--accept" ]; then
     shift
 fi
 export accept
-parts="${*:-native c stages abi repl fmt self}"
+parts="${*:-native interp c stages abi repl fmt self}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 export work
@@ -64,6 +64,27 @@ else
     echo "status 1" >> "$got"
 fi
 "$work/settle" "native $name" "$got" "tests/expected/native/$name.out"
+END
+
+# The same programs in the interpreter: it must give what the compiled
+# program gives. The ones it does not run yet, or runs too slowly, are named.
+cat > "$work/interp" <<'END'
+#!/bin/sh
+f=$1
+name=$(basename "$f" .mou)
+case $f in examples/*) name=example-$name ;; esac
+case $name in
+    channels|mutex)
+        echo "skip  interp $name (channels and Mutex are not in the interpreter)"
+        exit 0 ;;
+    arrays|records)
+        echo "skip  interp $name (too slow in the interpreter)"
+        exit 0 ;;
+esac
+got="$work/interp-$name.out"
+timeout 120 "$MOUC" interp "$f" < /dev/null > "$got" 2> /dev/null
+echo "status $?" >> "$got"
+"$work/settle" "interp $name" "$got" "tests/expected/native/$name.out"
 END
 
 # A program of tests/c: it must print what is next to it and end well.
@@ -111,7 +132,7 @@ for stage in decls types lowered fx c; do
     "$work/settle" "$stage $name" "$got" "$expected"
 done
 END
-chmod +x "$work/settle" "$work/native" "$work/c" "$work/stages"
+chmod +x "$work/settle" "$work/native" "$work/interp" "$work/c" "$work/stages"
 
 each() { # each <script> <files...>: runs the script on every file, several at a time
     script=$1
@@ -122,6 +143,7 @@ each() { # each <script> <files...>: runs the script on every file, several at a
 for part in $parts; do
     case $part in
         native) each native tests/native/*.mou examples/*.mou ;;
+        interp) each interp tests/native/*.mou examples/*.mou ;;
         c) each c tests/c/*.out ;;
         stages) each stages tests/decls/*.mou tests/types/*.mou tests/lower/*.mou tests/own/*.mou tests/fx/*.mou tests/consts/*.mou ;;
         abi)

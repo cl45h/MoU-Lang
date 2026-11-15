@@ -11,6 +11,7 @@
 // worked with as the `f64` it is: one operation in `f64` rounded once
 // gives the result of the same operation in `f32`.
 
+import std.io
 import std.raw
 import std.text
 import effects
@@ -54,9 +55,28 @@ fn kind_bits(k: str) -> int {
     64
 }
 
+// The powers of two the limits of the kinds are made of, worked out once.
+let P7: i128 = pow2(7)
+let P8: i128 = pow2(8)
+let P15: i128 = pow2(15)
+let P16: i128 = pow2(16)
+let P31: i128 = pow2(31)
+let P32: i128 = pow2(32)
+let P62: i128 = pow2(62)
+let P63: i128 = pow2(63)
+let P64: i128 = pow2(64)
+
 fn bounds(kind: str) -> Bounds {
+    if kind == "i64" || kind == "isize" { return Bounds(0 - P63, P63 - 1) }
     if kind == "lit" || kind == "i128" { return Bounds(MIN_ALL, MAX_ALL) }
+    if kind == "u8" { return Bounds(0, P8 - 1) }
+    if kind == "u64" || kind == "usize" { return Bounds(0, P64 - 1) }
+    if kind == "i32" { return Bounds(0 - P31, P31 - 1) }
+    if kind == "u32" { return Bounds(0, P32 - 1) }
     if kind == "u128" { return Bounds(0, MAX_ALL) }
+    if kind == "i8" { return Bounds(0 - P7, P7 - 1) }
+    if kind == "i16" { return Bounds(0 - P15, P15 - 1) }
+    if kind == "u16" { return Bounds(0, P16 - 1) }
     let bits = kind_bits(kind)
     if text.starts_with(kind, "i") { return Bounds(0 - pow2(bits - 1), pow2(bits - 1) - 1) }
     Bounds(0, pow2(bits) - 1)
@@ -731,7 +751,124 @@ fn fits(range: Bounds, kind: str, i: i128, shown: str) -> mir.Value ! Oops {
     panic_of("`as`: the value {shown} does not fit in `{kind}`")
 }
 
+// The operations on two whole numbers that are far from every limit, done
+// without the checks of the general case: nothing here can leave 128 bits.
+fn quick_binary(op: str, n: mir.Num, a: mir.Value, b: mir.Value) -> mir.Value ! Oops {
+    match (n, a, b) {
+        (mir.Num.Int(kind), mir.Value.Int(x), mir.Value.Int(y)) => {
+            if x > 0 - P62 && x < P62 && y > 0 - P62 && y < P62 {
+                if op == "<" { return mir.Value.Bool(x < y) }
+                if op == "==" { return mir.Value.Bool(x == y) }
+                if op == "!=" { return mir.Value.Bool(x != y) }
+                if op == "<=" { return mir.Value.Bool(x <= y) }
+                if op == ">" { return mir.Value.Bool(x > y) }
+                if op == ">=" { return mir.Value.Bool(x >= y) }
+                var r: i128 = 0
+                var known = true
+                if op == "+" {
+                    r = x + y
+                } else if op == "-" {
+                    r = x - y
+                } else if op == "*" {
+                    r = x * y
+                } else if op == "/" && y != 0 {
+                    r = x / y
+                } else if op == "%" && y != 0 {
+                    r = x % y
+                } else {
+                    known = false
+                }
+                if known {
+                    let range = bounds(kind)
+                    if range.lo <= r && r <= range.hi { return mir.Value.Int(r) }
+                }
+            }
+        }
+        _ => {}
+    }
+    binary(op, n, a, b)?
+}
+
+// The test of which variant a value is.
+fn is_variant(v: mir.Value, tag: int) -> mir.Value ! Oops {
+    match v {
+        mir.Value.Enum(_, variant) => mir.Value.Bool(variant == tag)
+        mir.Value.Variant(_, variant, _) => mir.Value.Bool(variant == tag)
+        mir.Value.None => mir.Value.Bool(tag == 0)
+        mir.Value.Ok(_) => mir.Value.Bool(tag == 0)
+        mir.Value.Some(_) => mir.Value.Bool(tag == 1)
+        mir.Value.Err(_) => mir.Value.Bool(tag == 1)
+        _ => return internal("a variant test on a value without variants")
+    }
+}
+
+fn length_of(v: mir.Value) -> mir.Value ! Oops {
+    match v {
+        mir.Value.Array(xs) => mir.Value.Int(xs.len as i128)
+        mir.Value.Str(s) => mir.Value.Int(byte_len(s) as i128)
+        _ => return internal("the length of a value that has none")
+    }
+}
+
+// Whether a range still has the value `i`.
+fn range_has(r: mir.Value, i: mir.Value) -> mir.Value ! Oops {
+    let parts = range_parts(r)?
+    if !parts.has_hi { return mir.Value.Bool(true) }
+    let ord = compare(i, parts.hi)?
+    mir.Value.Bool(ord == -1 || (ord == 0 && parts.inclusive))
+}
+
+// What a statement computes. The ones a program runs most are done
+// here, each in a small function: the rest has a function with every case,
+// which is slow to enter.
 fn rvalue(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir.Value ! Oops {
+    match rv {
+        mir.Rvalue.Use(op) => operand(fr, op)?
+        mir.Rvalue.Binary(op, n, a, b) => quick_binary(op, n, operand(fr, a)?, operand(fr, b)?)?
+        _ => rvalue_common(p, consts, fr, rv)?
+    }
+}
+
+// The successor of a value, which a `for` over a range asks for at each turn.
+fn successor(v: mir.Value, n: mir.Num) -> mir.Value ! Oops {
+    match (v, n) {
+        (mir.Value.Int(i), mir.Num.Int(kind)) => {
+            if i > 0 - P62 && i < P62 {
+                let range = bounds(kind)
+                if i + 1 <= range.hi { return mir.Value.Int(i + 1) }
+            }
+            mir.Value.Int(int_op("+", kind, i, 1)?)
+        }
+        (mir.Value.Char(ch), _) => {
+            // The codes from D800 to DFFF are not characters.
+            var code = ch as int + 1
+            if code == 55296 { code = 57344 }
+            if code > 1114111 { return panic_of("there is no character after the last one") }
+            mir.Value.Char(code as char)
+        }
+        _ => return internal("the successor of a value that has none")
+    }
+}
+
+fn rvalue_common(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir.Value ! Oops {
+    match rv {
+        mir.Rvalue.Succ(v, n) => successor(operand(fr, v)?, n)?
+        mir.Rvalue.Is(v, tag) => is_variant(operand(fr, v)?, tag)?
+        mir.Rvalue.Len(v) => length_of(operand(fr, v)?)?
+        mir.Rvalue.RangeHas(r, i) => range_has(operand(fr, r)?, operand(fr, i)?)?
+        mir.Rvalue.Tuple(ops) => mir.Value.Tuple(all_of(fr, ops)?)
+        mir.Rvalue.Struct(i, ops) => mir.Value.Struct(i, all_of(fr, ops)?)
+        mir.Rvalue.Array(ops) => mir.Value.Array(all_of(fr, ops)?)
+        mir.Rvalue.Some(v) => mir.Value.Some(operand(fr, v)?)
+        mir.Rvalue.Ok(v) => mir.Value.Ok(operand(fr, v)?)
+        mir.Rvalue.Err(v) => mir.Value.Err(operand(fr, v)?)
+        mir.Rvalue.Uninit => mir.Value.Unit
+        mir.Rvalue.Moved => mir.Value.Unit
+        _ => rvalue_rest(p, consts, fr, rv)?
+    }
+}
+
+fn rvalue_rest(p: mir.Program, consts: [mir.Value], fr: Frame, rv: mir.Rvalue) -> mir.Value ! Oops {
     match rv {
         mir.Rvalue.Use(op) => operand(fr, op)?
         mir.Rvalue.Unary(op, n, v) => unary(op, n, operand(fr, v)?)?
@@ -1072,7 +1209,7 @@ fn find_back(writeback: [mir.Writeback], k: int) -> int {
 
 // Runs a function without parameters to its end. `fuel` is how many
 // blocks may still run, in all.
-fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
+fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int, w: mut World) -> Ran {
     var stack: [Frame] = []
     stack.push(new_frame(p, func, [], []))
     loop {
@@ -1087,7 +1224,7 @@ fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
         }
         let bb = p.fns[fr.func].blocks[fr.block]
         if fuel == 0 { return Ran(false, false, mir.Value.Unit, "it runs for too long to be computed while compiling", bb.at.line, bb.at.col) }
-        fuel -= 1
+        if fuel > 0 { fuel -= 1 }
         for st in bb.stmts {
             var failed: Oops? = None
             match st.rv {
@@ -1181,7 +1318,7 @@ fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
                     }
                     mir.Callee.Native(name) => {
                         if name != "task.spawn" {
-                            let result = native(name, vals) catch e { return stopped(e, line, col) }
+                            let result = call_native(mut w, name, vals) catch e { return stopped(e, line, col) }
                             let _ = write(mut fr, dest, result) catch e { return stopped(e, line, col) }
                             fr.block = next
                             stack.push(fr)
@@ -1205,8 +1342,15 @@ fn exec(p: mir.Program, consts: [mir.Value], func: int, fuel: mut int) -> Ran {
                         return stopped(panic_of(shown), line, col)
                     }
                     mir.Callee.Extern(x) => return stopped(panic_of("the C function `{p.externs[x].name}` can only be called in a compiled program: use `mou build`"), line, col)
-                    // Input and output are ruled out before anything runs.
-                    mir.Callee.Print => return stopped(quit(), line, col)
+                    // For a constant, input and output are ruled out before anything runs.
+                    mir.Callee.Print => {
+                        if !w.live { return stopped(quit(), line, col) }
+                        let result = call_native(mut w, "io.print", vals) catch e { return stopped(e, line, col) }
+                        let _ = write(mut fr, dest, result) catch e { return stopped(e, line, col) }
+                        fr.block = next
+                        stack.push(fr)
+                        continue
+                    }
                 }
                 if (stack.len as int) + 1 >= MAX_DEPTH { return stopped(panic_of("stack overflow: more than {MAX_DEPTH} nested calls"), line, col) }
                 stack.push(fr)
@@ -1314,8 +1458,9 @@ pub fn eval(p: mir.Program) -> Result {
     if errors.len > 0 { return Result(p, [], false, errors) }
     var values: [mir.Value] = []
     var fuel = LIMIT
+    var world = still()
     for f in p.consts {
-        let ran = exec(p, values, f, mut fuel)
+        let ran = exec(p, values, f, mut fuel, mut world)
         if ran.ok {
             values.push(ran.value)
             continue
@@ -1348,4 +1493,431 @@ pub fn eval(p: mir.Program) -> Result {
     var q = p
     q.fns = fns
     Result(q, values, true, [])
+}
+
+// ---- running a program for real ----
+//
+// The same middle form, run with what a program has around it: it prints
+// and reads, and the blocks `with io`, `with err`, `with input`, `with
+// args`, `with env` and `with files` put their own things in place of
+// that. A task runs where it is started. Channels, `Mutex` and the
+// functions of C are not here: a program that uses them is built.
+
+// The lines a `with input` block gives, and how many were read.
+struct Input { lines: [mir.Value], next: int }
+
+struct World {
+    // Without it, this is a constant being worked out: nothing outside exists.
+    live: bool
+    args: [str]
+    // What `with io` blocks keep, and where the lines of each one start.
+    lines: [str]
+    line_marks: [int]
+    // Whether the last line kept was left without its end by `io.write`.
+    open_line: bool
+    errs: [str]
+    err_marks: [int]
+    inputs: [Input]
+    given_args: [mir.Value]
+    given_env: [mir.Value]
+    files: [mir.Value]
+}
+
+fn still() -> World { World(false, [], [], [], false, [], [], [], [], [], []) }
+
+fn done(v: mir.Value) -> mir.Value { mir.Value.Ok(v) }
+
+fn failed(why: str) -> mir.Value { mir.Value.Err(mir.Value.Str(why)) }
+
+fn str_arg(args: [mir.Value], k: int) -> str ! Oops {
+    if k < (args.len as int) {
+        match args[k] {
+            mir.Value.Str(s) => return s
+            _ => {}
+        }
+    }
+    internal("a built-in function given a value that is not a string")
+}
+
+fn arr_arg(args: [mir.Value], k: int) -> [mir.Value] ! Oops {
+    if k < (args.len as int) {
+        match args[k] {
+            mir.Value.Array(xs) => return xs
+            _ => {}
+        }
+    }
+    internal("a built-in function given a value that is not an array")
+}
+
+fn int_arg(args: [mir.Value], k: int) -> int ! Oops {
+    if k < (args.len as int) {
+        match args[k] {
+            mir.Value.Int(i) => return i as int
+            _ => {}
+        }
+    }
+    internal("a built-in function given a value that is not an integer")
+}
+
+fn strs_arg(args: [mir.Value], k: int) -> [str] ! Oops {
+    var out: [str] = []
+    for v in arr_arg(args, k)? {
+        match v {
+            mir.Value.Str(s) => out.push(s)
+            _ => return internal("a built-in function given a value that is not a string")
+        }
+    }
+    out
+}
+
+fn bytes_arg(args: [mir.Value], k: int) -> [u8] ! Oops {
+    var out: [u8] = []
+    for v in arr_arg(args, k)? {
+        match v {
+            mir.Value.Int(i) => out.push(i as u8)
+            _ => return internal("a built-in function given a value that is not a byte")
+        }
+    }
+    out
+}
+
+fn bytes_value(data: [u8]) -> mir.Value {
+    var out: [mir.Value] = []
+    for b in data { out.push(mir.Value.Int(b as i128)) }
+    mir.Value.Array(out)
+}
+
+fn strs_value(items: [str]) -> mir.Value {
+    var out: [mir.Value] = []
+    for s in items { out.push(mir.Value.Str(s)) }
+    mir.Value.Array(out)
+}
+
+// The value the last pair with that name holds, in an array of pairs.
+fn lookup(pairs: [mir.Value], key: str) -> mir.Value? {
+    var found: mir.Value? = None
+    for pair in pairs {
+        match pair {
+            mir.Value.Tuple(kv) => {
+                if kv.len < 2 { continue }
+                match kv[0] {
+                    mir.Value.Str(k) => {
+                        if k == key { found = Some(kv[1]) }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+// Keeps a piece of what a `with io` block prints. `ends` says whether the
+// line ends with it.
+fn keep(w: mut World, piece: str, ends: bool) {
+    if w.open_line && w.lines.len > 0 {
+        var last = ""
+        if let Some(l) = w.lines.pop() { last = l }
+        w.lines.push("{last}{piece}")
+    } else {
+        w.lines.push(piece)
+    }
+    w.open_line = !ends
+}
+
+// The lines kept since a mark, taken out, after the ones of `old`.
+fn taken(kept: mut [str], from: int, old: [mir.Value]) -> mir.Value {
+    var out = old
+    var start = from
+    if start > (kept.len as int) { start = kept.len as int }
+    var left: [str] = []
+    for k in 0..(kept.len as int) {
+        if k < start { left.push(kept[k]) } else { out.push(mir.Value.Str(kept[k])) }
+    }
+    kept = left
+    mir.Value.Array(out)
+}
+
+fn call_native(w: mut World, name: str, args: [mir.Value]) -> mir.Value ! Oops {
+    if !w.live { return native(name, args)? }
+    if let Some(v) = live(mut w, name, args)? { return v }
+    if text.starts_with(name, "chan.") { return panic_of("channels are not in the interpreter: build the program with `mou build`") }
+    if text.starts_with(name, "mutex.") { return panic_of("`Mutex` is not in the interpreter: build the program with `mou build`") }
+    let v = native(name, args) catch e {
+        if e.quit { return panic_of("`{name}` is not in the interpreter: build the program with `mou build`") }
+        return e
+    }
+    v
+}
+
+// What a function that reaches outside the program does when the program
+// runs for real. Nothing when it is not one of those.
+fn live(w: mut World, name: str, args: [mir.Value]) -> mir.Value? ! Oops {
+    if name == "io.print" || name == "io.write" {
+        let piece = str_arg(args, 0)?
+        if w.line_marks.len > 0 {
+            keep(mut w, piece, name == "io.print")
+            return Some(done(mir.Value.Unit))
+        }
+        if name == "io.print" {
+            io.print(piece) catch e { return Some(failed("{e}")) }
+        } else {
+            io.write(piece) catch e { return Some(failed("{e}")) }
+        }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "capture.open" {
+        w.open_line = false
+        w.line_marks.push(w.lines.len as int)
+        return Some(mir.Value.Unit)
+    }
+    if name == "capture.close" {
+        w.open_line = false
+        var from = 0
+        if let Some(m) = w.line_marks.pop() { from = m }
+        return Some(taken(mut w.lines, from, arr_arg(args, 0)?))
+    }
+    if name == "errors.open" {
+        w.err_marks.push(w.errs.len as int)
+        return Some(mir.Value.Unit)
+    }
+    if name == "errors.close" {
+        var from = 0
+        if let Some(m) = w.err_marks.pop() { from = m }
+        return Some(taken(mut w.errs, from, arr_arg(args, 0)?))
+    }
+    if name == "io.eprint" {
+        let line = str_arg(args, 0)?
+        if w.err_marks.len > 0 {
+            w.errs.push(line)
+            return Some(done(mir.Value.Unit))
+        }
+        io.eprint(line) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "input.open" {
+        w.inputs.push(Input(arr_arg(args, 0)?, 0))
+        return Some(mir.Value.Unit)
+    }
+    if name == "input.close" {
+        let _ = w.inputs.pop()
+        return Some(mir.Value.Unit)
+    }
+    if name == "io.read_line" {
+        match w.inputs.pop() {
+            Some(given) => {
+                var line = mir.Value.None
+                if given.next < (given.lines.len as int) { line = mir.Value.Some(given.lines[given.next]) }
+                w.inputs.push(Input(given.lines, given.next + 1))
+                return Some(done(line))
+            }
+            None => {}
+        }
+        let got = io.read_line() catch e { return Some(failed("{e}")) }
+        match got {
+            Some(l) => return Some(done(mir.Value.Some(mir.Value.Str(l))))
+            None => return Some(done(mir.Value.None))
+        }
+    }
+    if name == "args.open" {
+        w.given_args.push(mir.Value.Array(arr_arg(args, 0)?))
+        return Some(mir.Value.Unit)
+    }
+    if name == "args.close" {
+        let _ = w.given_args.pop()
+        return Some(mir.Value.Unit)
+    }
+    if name == "env.open" {
+        w.given_env.push(mir.Value.Array(arr_arg(args, 0)?))
+        return Some(mir.Value.Unit)
+    }
+    if name == "env.close" {
+        let _ = w.given_env.pop()
+        return Some(mir.Value.Unit)
+    }
+    if name == "io.args" {
+        if w.given_args.len > 0 { return Some(w.given_args[w.given_args.len - 1]) }
+        return Some(strs_value(w.args))
+    }
+    if name == "io.env" {
+        let wanted = str_arg(args, 0)?
+        if w.given_env.len > 0 {
+            match w.given_env[w.given_env.len - 1] {
+                mir.Value.Array(pairs) => {
+                    match lookup(pairs, wanted) {
+                        Some(v) => return Some(mir.Value.Some(v))
+                        None => return Some(mir.Value.None)
+                    }
+                }
+                _ => return Some(mir.Value.None)
+            }
+        }
+        match io.env(wanted) {
+            Some(v) => return Some(mir.Value.Some(mir.Value.Str(v)))
+            None => return Some(mir.Value.None)
+        }
+    }
+    if name == "io.exe" { return Some(mir.Value.Str(io.exe())) }
+    if name == "vfs.open" {
+        w.files.push(mir.Value.Array(arr_arg(args, 0)?))
+        return Some(mir.Value.Unit)
+    }
+    if name == "vfs.close" {
+        match w.files.pop() {
+            Some(v) => return Some(v)
+            None => return Some(mir.Value.Array([]))
+        }
+    }
+    if name == "io.read_file" {
+        let path = str_arg(args, 0)?
+        if w.files.len > 0 {
+            match w.files[w.files.len - 1] {
+                mir.Value.Array(pairs) => {
+                    match lookup(pairs, path) {
+                        Some(v) => return Some(done(v))
+                        None => return Some(failed("No such file or directory (os error 2)"))
+                    }
+                }
+                _ => return Some(failed("No such file or directory (os error 2)"))
+            }
+        }
+        let body = io.read_file(path) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Str(body)))
+    }
+    if name == "io.write_file" {
+        let path = str_arg(args, 0)?
+        let body = str_arg(args, 1)?
+        match w.files.pop() {
+            Some(mir.Value.Array(pairs)) => {
+                // The pair of that file is replaced, or one is added.
+                let made = mir.Value.Tuple([mir.Value.Str(path), mir.Value.Str(body)])
+                var out: [mir.Value] = []
+                var placed = false
+                for pair in pairs {
+                    var same = false
+                    match pair {
+                        mir.Value.Tuple(kv) => {
+                            if kv.len > 0 {
+                                match kv[0] {
+                                    mir.Value.Str(k) => {
+                                        same = k == path
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    if same && !placed {
+                        out.push(made)
+                        placed = true
+                    } else {
+                        out.push(pair)
+                    }
+                }
+                if !placed { out.push(made) }
+                w.files.push(mir.Value.Array(out))
+                return Some(done(mir.Value.Unit))
+            }
+            Some(other) => w.files.push(other)
+            None => {}
+        }
+        io.write_file(path, body) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.run" {
+        let out = io.run(str_arg(args, 0)?, strs_arg(args, 1)?, str_arg(args, 2)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Str(out)))
+    }
+    if name == "io.exec" {
+        let status = io.exec(str_arg(args, 0)?, strs_arg(args, 1)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Int(status as i128)))
+    }
+    if name == "io.read_bytes" {
+        let data = raw.read_bytes(str_arg(args, 0)?) catch e { return Some(failed("{e}")) }
+        return Some(done(bytes_value(data)))
+    }
+    if name == "io.write_bytes" {
+        var append = false
+        if args.len > 2 {
+            match args[2] {
+                mir.Value.Bool(b) => {
+                    append = b
+                }
+                _ => {}
+            }
+        }
+        raw.write_bytes(str_arg(args, 0)?, bytes_arg(args, 1)?, append) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.list_dir" {
+        let names = raw.list_dir(str_arg(args, 0)?) catch e { return Some(failed("{e}")) }
+        return Some(done(strs_value(names)))
+    }
+    if name == "io.file_kind" { return Some(mir.Value.Int(raw.file_kind(str_arg(args, 0)?) as i128)) }
+    if name == "io.make_dir" {
+        raw.make_dir(str_arg(args, 0)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.remove" {
+        raw.remove(str_arg(args, 0)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.rename" {
+        raw.rename(str_arg(args, 0)?, str_arg(args, 1)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.fopen" {
+        let handle = raw.fopen(str_arg(args, 0)?, int_arg(args, 1)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Int(handle as i128)))
+    }
+    if name == "io.fread" {
+        let data = raw.fread(int_arg(args, 0)?, int_arg(args, 1)?) catch e { return Some(failed("{e}")) }
+        return Some(done(bytes_value(data)))
+    }
+    if name == "io.fwrite" {
+        raw.fwrite(int_arg(args, 0)?, bytes_arg(args, 1)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    if name == "io.fclose" {
+        raw.fclose(int_arg(args, 0)?) catch e { return Some(failed("{e}")) }
+        return Some(done(mir.Value.Unit))
+    }
+    None
+}
+
+// How a program that ran ended: the status of the process, and when it
+// stopped by itself, why and where.
+pub struct Outcome { status: int, panicked: bool, msg: str, line: int, col: int }
+
+// Runs a program from its `main`, with the arguments it is given.
+// `values` are its constants when the compiler worked them out.
+pub fn run(p: mir.Program, values: [mir.Value], args: [str]) -> Outcome {
+    var world = still()
+    world.live = true
+    world.args = args
+    var fuel = -1
+    // The constants the compiler left for when the program starts.
+    var consts = values
+    if consts.len < p.consts.len {
+        consts = []
+        for f in p.consts {
+            let ran = exec(p, consts, f, mut fuel, mut world)
+            if !ran.ok { return Outcome(101, true, ran.msg, ran.line, ran.col) }
+            consts.push(ran.value)
+        }
+    }
+    var main = -1
+    if let Some(m) = p.main { main = m }
+    if main < 0 || p.fns[main].params != 0 { return Outcome(1, false, "there is no `main` function without parameters", 0, 0) }
+    let ran = exec(p, consts, main, mut fuel, mut world)
+    if !ran.ok { return Outcome(101, true, ran.msg, ran.line, ran.col) }
+    match ran.value {
+        // An integer `main` returns is the status of the process.
+        mir.Value.Int(i) => Outcome((i & 255) as int, false, "", 0, 0)
+        mir.Value.Ok(mir.Value.Int(i)) => Outcome((i & 255) as int, false, "", 0, 0)
+        mir.Value.Err(e) => Outcome(1, false, "`main` returned an error: {show(p, e, false)}", 0, 0)
+        _ => Outcome(0, false, "", 0, 0)
+    }
 }

@@ -475,3 +475,24 @@ pub fn fmt_file(path: str, only_check: bool) -> int ! io.Error {
     io.print("formatted {path}")?
     0
 }
+
+// `mou interp file.mou [arguments]`: runs the program in the interpreter,
+// without a compiler of C, and ends with the status it ended with.
+pub fn interp_file(path: str, given: [str]) -> int ! io.Error {
+    let src = io.read_file(path) catch e {
+        io.eprint("mou: cannot read {path}: {e}")?
+        return 2
+    }
+    let loaded = load.load(path, src, home().std_dir)
+    let b = match compile(path, home())? {
+        Some(b) => b
+        None => return 1
+    }
+    let done = consts.run(b.program, b.values, given)
+    if done.panicked {
+        report(loaded.modules, lexer.Error("panic: {done.msg}", done.line, done.col))?
+    } else if done.msg != "" {
+        io.eprint("{path}: {done.msg}")?
+    }
+    done.status
+}

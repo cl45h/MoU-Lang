@@ -62,6 +62,7 @@ All it takes is a C compiler (`cc`). The compiler is written in Mou and is built
 ```sh
 ./bootstrap.sh
 ./mou run examples/tour.mou
+./mou interp examples/tour.mou
 ./mou build examples/tour.mou -o tour && ./tour
 ./mou check examples/tour.mou
 ./mou test file.mou
@@ -70,9 +71,9 @@ All it takes is a C compiler (`cc`). The compiler is written in Mou and is built
 tests/suite.sh
 ```
 
-`mou` looks for the standard library and the runtime next to its own binary; `MOU_HOME` names another place. `run` compiles the program to a temporary file and runs it. `tests/suite.sh` runs the tests of the project: it compares what each program gives with what is kept in `tests/expected/`.
+`mou` looks for the standard library and the runtime next to its own binary; `MOU_HOME` names another place. `run` compiles the program to a temporary file and runs it; `interp` runs it in the interpreter, without a C compiler (slower, and without channels, `Mutex` or C functions). `tests/suite.sh` runs the tests of the project: it compares what each program gives with what is kept in `tests/expected/`.
 
-The first compiler was written in Rust. It was removed once the one in Mou did everything; it is still in the git history.
+The first compiler was written in Rust. It was removed once the one in Mou did everything; it is still in the git history, under the tag `ultimo-con-rust`.
 
 ## Name
 

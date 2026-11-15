@@ -4,6 +4,7 @@
 //
 //     ./mou check file.mou       says the mistakes of the program
 //     ./mou run file.mou         builds it and runs it
+//     ./mou interp file.mou      runs it in the interpreter, without a C compiler
 //     ./mou build file.mou       builds it: `-o output`, `-l library`
 //     ./mou test file.mou        runs its tests
 //     ./mou effects file.mou     prints what each function can do
@@ -69,6 +70,11 @@ fn main() -> int ! io.Error {
         return driver.run_file(args[1], given)?
     }
     if args.len >= 2 && args[0] == "fmt" { return driver.fmt_file(args[1], args.len > 2 && args[2] == "--check")? }
+    if args.len >= 2 && args[0] == "interp" {
+        var given: [str] = []
+        for k in 2..(args.len as int) { given.push(args[k]) }
+        return driver.interp_file(args[1], given)?
+    }
     if args.len >= 2 && args[0] == "effects" { return driver.effects_file(args[1])? }
     if args.len >= 2 && args[0] == "build" {
         // `-o output`, and `-l name` for each library of C to link.

@@ -62,6 +62,7 @@ Hace falta solo un compilador de C (`cc`). El compilador está escrito en Mou y 
 ```sh
 ./bootstrap.sh
 ./mou run examples/tour.mou
+./mou interp examples/tour.mou
 ./mou build examples/tour.mou -o tour && ./tour
 ./mou check examples/tour.mou
 ./mou test archivo.mou
@@ -70,9 +71,9 @@ Hace falta solo un compilador de C (`cc`). El compilador está escrito en Mou y 
 tests/suite.sh
 ```
 
-`mou` busca la librería estándar y el runtime junto a su propio binario; `MOU_HOME` dice otro lugar. `run` compila el programa a un archivo temporal y lo ejecuta. `tests/suite.sh` corre los tests del proyecto: compara lo que da cada programa con lo guardado en `tests/expected/`.
+`mou` busca la librería estándar y el runtime junto a su propio binario; `MOU_HOME` dice otro lugar. `run` compila el programa a un archivo temporal y lo ejecuta; `interp` lo corre en el intérprete, sin compilador de C (más lento, y sin canales, `Mutex` ni funciones de C). `tests/suite.sh` corre los tests del proyecto: compara lo que da cada programa con lo guardado en `tests/expected/`.
 
-El primer compilador estaba escrito en Rust. Se borró cuando el de Mou pasó a hacer todo; sigue en la historia de git.
+El primer compilador estaba escrito en Rust. Se borró cuando el de Mou pasó a hacer todo; sigue en la historia de git, en la etiqueta `ultimo-con-rust`.
 
 ## Nombre
 
