@@ -431,6 +431,8 @@ fn struct_kinds(info: &Info, i: usize, seen: &mut Vec<usize>) -> Vec<u32> {
     for f in &s.fields {
         let kind = match &f.ty {
             t if plain_field(t) => field_kind(t) as u32,
+            // An integer of 128 bits with sign.
+            Ty::Int("i128") => 7,
             Ty::Struct(j, args) if args.is_empty() && !struct_kinds(info, *j, seen).is_empty() => 16 + *j as u32,
             _ => 0,
         };

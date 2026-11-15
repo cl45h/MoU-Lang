@@ -347,6 +347,10 @@ fn struct_kinds(structs: [check.StructInfo], i: int, seen: mut [int]) -> [int] {
                 types.Ty.Struct(j, args) => {
                     if args.len == 0 && struct_kinds(structs, j, mut seen).len > 0 { kind = 16 + j }
                 }
+                // An integer of 128 bits with sign.
+                types.Ty.Int(k) => {
+                    if k == "i128" { kind = 7 }
+                }
                 _ => {}
             }
         }

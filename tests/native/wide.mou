@@ -1,24 +1,58 @@
 import std.io
 
-struct Span { lo: usize, hi: usize, id: u64, off: isize }
+struct Range { lo: i128, hi: i128 }
+struct Span { r: Range, open: bool }
 
-fn wider(s: Span, by: usize) -> Span { Span(s.lo, s.hi + by, s.id, s.off - 1) }
-fn size(s: Span) -> usize { s.hi - s.lo }
-fn shift(s: mut Span) { s.off = s.off * 2 }
+fn pow2(bits: int) -> i128 {
+    var out: i128 = 1
+    for k in 0..bits { out = out * 2 }
+    out
+}
+
+let TOP: i128 = pow2(126) - 1 + pow2(126)
+let BOTTOM: i128 = (0 - pow2(126)) * 2
+
+fn hull(a: Range, b: Range) -> Range {
+    Range(if a.lo < b.lo { a.lo } else { b.lo }, if a.hi > b.hi { a.hi } else { b.hi })
+}
+
+fn width(r: Range) -> i128 { r.hi - r.lo }
+
+fn grow(r: mut Range, by: i128) {
+    r.lo -= by
+    r.hi += by
+}
+
+fn mixed(a: i128, b: int, c: u64) -> i128 { a * 3 + b as i128 - c as i128 / 2 }
+
+fn overflow(a: i128) -> i128 { a + 1 }
 
 fn main() ! io.Error {
-    let big: u64 = 18446744073709551615
-    var s = Span(3, 10, big, 0 - 5)
-    s = wider(s, 4)
-    shift(mut s)
-    io.print("{size(s)} {s.id} {s.off} {s.id / 2} {s.id > 9223372036854775807}")?
-    var all: [Span] = []
-    for i in 0..5 { all.push(Span(i as usize, (i * 3) as usize, big - (i as u64), 0 - i as isize)) }
-    all[2].id = all[2].id - 10
-    all[3].off -= 7
-    var sum: u64 = 0
-    for a in all { sum = sum +% a.id }
-    io.print("{all[2].id} {all[4].id} {all[3].off} {sum} {all[1].id > 9223372036854775807} {size(all[4])}")?
-    let t = all[0]
-    io.print("{t.id} {wider(all[1], 1).hi} {t == all[0]}")?
+    let all = Range(BOTTOM, TOP)
+    let small = Range(-5, 9)
+    io.print("{all.lo} {all.hi}")?
+    io.print("{hull(small, Range(0, 100))} {width(small)} {hull(all, small) == all}")?
+    var r = small
+    grow(mut r, pow2(70))
+    io.print("{r} {width(r)}")?
+    let s = Span(r, true)
+    io.print("{s.r.hi - s.r.lo} {s}")?
+    io.print("{mixed(pow2(100), -7, 18446744073709551615)} {mixed(-1, 2, 3)}")?
+    var x: i128 = pow2(60)
+    x = x * x / 3 % 1000003
+    x -= pow2(90)
+    io.print("{x} {x / -7} {x % 10} {-x} {x < 0} {x as f64}")?
+    var ranges: [Range] = []
+    for k in 0..5 { ranges.push(Range(BOTTOM / 8 * k as i128, pow2(k * 20))) }
+    var acc = Range(0, 0)
+    for it in ranges { acc = hull(acc, it) }
+    io.print("{acc} {ranges[4].hi} {ranges.len}")?
+    var i: i128 = TOP - 3
+    var steps = 0
+    while i < TOP {
+        i += 1
+        steps += 1
+    }
+    io.print("{steps} {i == TOP} {(TOP as i128) > 0}")?
+    io.print("{overflow(TOP)}")?
 }

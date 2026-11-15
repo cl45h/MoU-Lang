@@ -444,6 +444,7 @@ fn field_rep(kind: int) -> Rep {
     if kind == 3 { return Rep.F64 }
     if kind == 4 { return Rep.Char }
     if kind == 5 { return Rep.Int("u64") }
+    if kind == 7 { return Rep.Int("i128") }
     if kind >= 16 { return Rep.Rec(kind - 16) }
     Rep.Int("i64")
 }
@@ -501,6 +502,7 @@ fn opt_of(r: Rep) -> int {
         Rep.F64 => 3
         Rep.Char => 5
         Rep.Int(k) => {
+            if k == "i128" { return 0 }
             if text.starts_with(k, "u") { return 4 }
             2
         }
@@ -567,7 +569,7 @@ fn piece(reps: [Rep], recs: [[int]], p: mir.Place) -> Rep? {
 // one whose fields are all plain.
 fn in_line(kinds: [int]) -> bool {
     for k in kinds {
-        if k >= 16 { return false }
+        if k >= 7 { return false }
     }
     kinds.len > 0
 }
@@ -917,9 +919,10 @@ fn direct_sig(f: mir.Func, fns: [mir.Func], recs: [[int]]) -> Direct? {
     Some(Direct(params, ret))
 }
 
-fn machine(k: str) -> bool { k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" || k == "u64" || k == "usize" }
+fn machine(k: str) -> bool { k == "i8" || k == "i16" || k == "i32" || k == "i64" || k == "isize" || k == "u8" || k == "u16" || k == "u32" || k == "u64" || k == "usize" || k == "i128" }
 
 fn ctype(k: str) -> str {
+    if k == "i128" { return "i128" }
     if text.starts_with(k, "i") { return "int64_t" }
     "uint64_t"
 }
@@ -1804,10 +1807,12 @@ impl Cx {
                     var builtin = ""
                     if op == "+" { builtin = "add" }
                     if op == "-" { builtin = "sub" }
-                    if op == "*" { builtin = "mul" }
+                    // The product of two numbers of 128 bits is left to
+                    // the runtime: not every C compiler checks it in line.
+                    if op == "*" && k != "i128" { builtin = "mul" }
                     if builtin != "" { return "({{ {head} (__builtin_{builtin}_overflow(x_, y_, &r_){narrow(k, "r_")}) ? {again} : r_; }})" }
                     if op == "/" || op == "%" {
-                        let risky = if t == "int64_t" { "y_ == 0 || y_ == -1" } else { "y_ == 0" }
+                        let risky = if t == "uint64_t" { "y_ == 0" } else { "y_ == 0 || y_ == -1" }
                         return "({{ {head} ({risky}) ? {again} : (r_ = x_ {op} y_, r_); }})"
                     }
                     return "({{ {head} (void)r_; {again}; }})"
@@ -1827,6 +1832,8 @@ impl Cx {
             mir.Rvalue.CastInt(a, given) => {
                 if given == k {
                     if let Some(x) = self.known_int(a) {
+                        // Every number of the machine fits in 128 bits.
+                        if k == "i128" { return "(i128)({x})" }
                         let again = "({t})ktakei(kcast_int(kint(v_), {kind(k)}))"
                         return "({{ i128 v_ = (i128)({x}); (v_ < {wide(low_of(k))} || v_ > {wide(high_of(k))}) ? {again} : ({t})v_; }})"
                     }
@@ -2848,7 +2855,11 @@ pub fn emit(p: mir.Program, paths: [str], runtime: str, values: [mir.Value]) -> 
                         if k == 5 {
                             read.push("(uint64_t)kwide(it[{f}])")
                         } else {
-                            if k >= 16 { read.push("KS{k - 16}_get(it[{f}])") } else { read.push("(int64_t)it[{f}].u.i") }
+                            if k >= 16 {
+                                read.push("KS{k - 16}_get(it[{f}])")
+                            } else {
+                                if k == 7 { read.push("kwide(it[{f}])") } else { read.push("(int64_t)it[{f}].u.i") }
+                            }
                         }
                     }
                 }

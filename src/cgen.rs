@@ -348,6 +348,7 @@ fn opt_of(r: Rep) -> Option<u32> {
         Rep::Bool => Some(1),
         Rep::F64 => Some(3),
         Rep::Char => Some(5),
+        Rep::Int("i128") => None,
         Rep::Int(k) => Some(if k.starts_with('u') { 4 } else { 2 }),
         _ => None,
     }
@@ -393,6 +394,7 @@ fn field_rep(kind: u32) -> Rep {
         3 => Rep::F64,
         4 => Rep::Char,
         5 => Rep::Int("u64"),
+        7 => Rep::Int("i128"),
         k if k >= 16 => Rep::Rec(k as usize - 16),
         _ => Rep::Int("i64"),
     }
@@ -594,11 +596,13 @@ fn direct_sig(f: &Func, fns: &[Func], recs: &[Vec<u32>]) -> Option<(Vec<Rep>, Re
 }
 
 fn machine(k: &str) -> bool {
-    matches!(k, "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize")
+    matches!(k, "i8" | "i16" | "i32" | "i64" | "isize" | "u8" | "u16" | "u32" | "u64" | "usize" | "i128")
 }
 
 fn ctype(k: &str) -> &'static str {
-    if k.starts_with('i') {
+    if k == "i128" {
+        "i128"
+    } else if k.starts_with('i') {
         "int64_t"
     } else {
         "uint64_t"
@@ -618,6 +622,9 @@ fn wide(v: i128) -> String {
 
 /// The check that a result left the range of a kind narrower than its C type.
 fn narrow(k: &str, r: &str) -> String {
+    if k == "i128" {
+        return String::new();
+    }
     let (lo, hi) = bounds(k);
     if lo == i64::MIN as i128 || hi == u64::MAX as i128 {
         return String::new();
@@ -1082,7 +1089,9 @@ impl Cx<'_> {
                 let builtin = match op {
                     BinOp::Add => Some("add"),
                     BinOp::Sub => Some("sub"),
-                    BinOp::Mul => Some("mul"),
+                    // The product of two numbers of 128 bits is left to
+                    // the runtime: not every C compiler checks it in line.
+                    BinOp::Mul if k != "i128" => Some("mul"),
                     _ => None,
                 };
                 let head = format!("{t} x_ = ({t})({x}), y_ = ({t})({y}), r_;");
@@ -1092,7 +1101,7 @@ impl Cx<'_> {
                     }
                     (None, BinOp::Div | BinOp::Rem) => {
                         let c = if *op == BinOp::Div { "/" } else { "%" };
-                        let risky = if t == "int64_t" { "y_ == 0 || y_ == -1" } else { "y_ == 0" };
+                        let risky = if t == "uint64_t" { "y_ == 0" } else { "y_ == 0 || y_ == -1" };
                         format!("({{ {head} ({risky}) ? {again} : (r_ = x_ {c} y_, r_); }})")
                     }
                     _ => format!("({{ {head} (void)r_; {again}; }})"),
@@ -1104,6 +1113,8 @@ impl Cx<'_> {
                 format!("({{ {t} x_ = ({t})({x}), r_; (__builtin_add_overflow(x_, 1, &r_){}) ? {again} : r_; }})", narrow(k, "r_"))
             }
             Rvalue::CastInt(a, kind) if *kind == k => match self.known_int(a) {
+                // Every number of the machine fits in 128 bits.
+                Some(x) if k == "i128" => format!("(i128)({x})"),
                 Some(x) => {
                     let (lo, hi) = bounds(k);
                     let again = unboxed(format!("kcast_int(kint(v_), {})", self::kind(k)));
@@ -1749,7 +1760,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
     writeln!(out, "static const char *const KFUNCS[] = {{{funcs}}};").unwrap();
     writeln!(out, "enum {{ KFILE_COUNT = {}, KFILE_SHIFT = {} }};", paths.len(), crate::lexer::FILE_SHIFT).unwrap();
     // The structs an array keeps in line, and how it keeps each field.
-    let in_line = |k: &Vec<u32>| !k.is_empty() && k.iter().all(|kind| *kind < 16);
+    let in_line = |k: &Vec<u32>| !k.is_empty() && k.iter().all(|kind| *kind < 7);
     for (i, kinds) in p.records.iter().enumerate().filter(|(_, k)| in_line(k)) {
         let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
         writeln!(out, "static const signed char KR{i}[] = {{{}}};", kinds.join(", ")).unwrap();
@@ -1838,6 +1849,7 @@ pub fn emit(p: &Program, paths: &[String]) -> Result<String, String> {
                 3 => format!("it[{f}].u.f"),
                 4 => format!("it[{f}].u.c"),
                 5 => format!("(uint64_t)kwide(it[{f}])"),
+                7 => format!("kwide(it[{f}])"),
                 k if *k >= 16 => format!("KS{}_get(it[{f}])", k - 16),
                 _ => format!("(int64_t)it[{f}].u.i"),
             })
